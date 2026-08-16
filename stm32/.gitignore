@@ -1,0 +1,5 @@
+# STM32CubeIDE / Eclipse build artifacts
+Debug/
+Release/
+.metadata/
+*.launch
