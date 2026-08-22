@@ -4,6 +4,9 @@ Goal: by the Week 2 lab session, an Android button press moves the
 physical robot via RPi → STM32, with status feedback flowing back. This is
 **not** the full autonomous run (CV/algorithm come later) — it's proving
 every communication link works, since hardware/movement is already done.
+CV is tracked separately below since it doesn't block or get blocked by
+the comms work — it just needs to *start* today, since training runs for
+hours.
 
 Everything below assumes nothing is set up yet. Protocol draft is in
 [`docs/protocol.md`](protocol.md) — read that first, it's what makes the
@@ -16,6 +19,7 @@ four tracks below independent of each other.
 | 1 | Read & sanity-check `docs/protocol.md` as a group (15 min sync) — agree or amend before anyone starts coding against it | Everyone | — |
 | 2 | Confirm STM32 board flashes and the existing move-test code still runs (you said hardware/movement already works — just confirm from a clean flash) | STM32 owner | — |
 | 3 | Pair up RPi + STM32 owners for today — the RPi↔STM32 link is the critical path, get it working before anything else | RPi + STM32 owners | #1 |
+| 4 | Kick off the A100 training job (`raspberry-pi/cv/scripts/train_edge.sh` and/or `train_server.sh`, after `pull_dataset.sh`) — start this in parallel today, don't wait for comms to be done first, it just needs to be running | RPi/CV owner | — |
 
 ## STM32 — robot & hardware
 
@@ -47,6 +51,21 @@ four tracks below independent of each other.
 |---|---|---|
 | Scaffold the arena representation (pick option 1 or 2 from the Algorithms briefing, §7–10) | Today | Can print/plot a 200×200cm grid with a hardcoded obstacle list |
 | Stub TCP server: on `path_request`, reply with a hardcoded 2-point path (real pathfinding comes later — this just unblocks RPi integration) | By Fri | RPi's TCP client stub (above) connects and receives the dummy path |
+
+## CV — image recognition
+
+Not on the critical path for Friday's loop-test demo, but training takes
+real wall-clock time, so start it today rather than after comms is done.
+Full pipeline, dataset, and reasoning already written up in
+[`raspberry-pi/cv/README.md`](../raspberry-pi/cv/README.md) — this is just
+the "make sure it's actually running" checklist.
+
+| Task | Target | Acceptance check |
+|---|---|---|
+| `hf auth login`, then `scripts/pull_dataset.sh` on the A100 (NSCC) | Today | `./data/data.yaml` present, paths fixed (no `../`) |
+| Kick off `scripts/train_edge.sh` (and/or `train_server.sh`) — let it run in the background this week | Today | Job running on NSCC; don't wait on it to finish before moving on to other tasks |
+| Once training finishes: `scripts/export_edge.sh` (Pi) and `export_server_onnx.sh` + `build_engine_4060.sh` (server) | Later this week | Weights pulled down via `hf download` on the Pi/4060, confirmed loadable |
+| `pi_infer.py` wired to the real camera + model (currently a skeleton with `TODO`s) | Later this week | Not required for Friday's demo — full autonomous run comes after the comms loop is proven |
 
 ## Friday: full loop test
 
