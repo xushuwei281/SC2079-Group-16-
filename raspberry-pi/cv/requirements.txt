@@ -1,0 +1,3 @@
+ultralytics>=8.3
+huggingface_hub>=0.25
+roboflow>=1.1
