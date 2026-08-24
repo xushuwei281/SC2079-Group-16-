@@ -1,4 +1,13 @@
-# STM32CubeIDE / Eclipse build artifacts
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch
+
+# STM32CubeIDE / Eclipse build artifacts (kept in case anyone opens this in CubeIDE)
 Debug/
 Release/
 .metadata/
