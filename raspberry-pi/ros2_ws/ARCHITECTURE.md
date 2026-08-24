@@ -25,14 +25,10 @@ why that "just works" on competition day but not necessarily elsewhere.
 ```mermaid
 flowchart TB
     subgraph Pi["Raspberry Pi 4B — hardware-bound nodes"]
-        HWBridge["mdp_hardware_bridge<br/>serial_bridge_node"]
-        TwistMux["twist_mux<br/>arbitrates cmd_vel sources"]
-        CtrlMgr["controller_manager<br/>ros2_control + ekf_node"]
+        HWBridge["mdp_hardware_bridge<br/>serial_bridge_node<br/>action: execute_moves<br/>topic: estop"]
         AndroidBridge["android_bridge_node<br/>pyserial, RFCOMM"]
         CamDriver["camera driver<br/>libcamera-based, TBD"]
-        AndroidBridge -->|/teleop/cmd_vel, high priority| TwistMux
-        TwistMux -->|/cmd_vel, single arbitrated output| CtrlMgr
-        CtrlMgr <-->|hardware_interface| HWBridge
+        AndroidBridge -->|calls execute_moves, or publishes estop| HWBridge
     end
 
     subgraph PC["Laptop/PC — compute-heavy nodes"]
@@ -41,7 +37,7 @@ flowchart TB
         RViz["RViz2<br/>arena/robot/detections display"]
     end
 
-    Planner -.->|/planner/cmd_vel, low priority| TwistMux
+    Planner -.->|calls execute_moves| HWBridge
     Pi <-.->|ROS2 / DDS over UDP, same LAN, ROS_DOMAIN_ID=16| PC
 
     STM32["STM32 MCU: mdp_stm32<br/>PlatformIO / STM32Cube HAL<br/>Rear motor: JGB37-520<br/>Steering servo: TD-8120MG<br/>Encoders + ICM-20948 IMU"]
@@ -53,71 +49,76 @@ flowchart TB
 
 ## Design principle: host-side kinematics, split across two hosts
 
-The STM32 does **no** path planning, no odometry integration, no control
-loops beyond raw PWM output — it exposes motor/servo actuation and raw
-sensor reads (encoders, IMU) over UART and nothing else. Everything that
-thinks runs on the ROS2 graph instead. This mirrors the course's own
-recommended split (STM32 = motor control board, RPi = "brain") but
-pushes *more* onto the graph than the course's bespoke-socket reference
-architecture does, since ROS2 gives us `ros2_control` +
-`robot_localization` instead of hand-rolled odometry.
+The STM32 does **no** path planning and no ROS-level control-loop math —
+but unlike the original plan here, it's *not* a dumb continuous-PWM
+slave either. Confirmed 2026-08-24 by actually reading the ported
+firmware (`stm32/src/main.c`'s `comm_task`): the STM32 runs its own
+**closed-loop, blocking maneuvers** — "drive forward 50cm" is executed
+entirely on-device with real acceleration ramping and encoder/gyro
+correction, and it reports back only when the whole maneuver is done.
+This directly overturned the original assumption (see "STM32 serial
+protocol" below for what changed and why).
 
-Within that ROS2 graph, nodes are further split by **where they need to
+Within the ROS2 graph, nodes are split by **where they need to
 physically be**, not by how "smart" they are:
 
 - **Stays on the Pi** (hardware-bound — the link can't move to another
-  machine): `mdp_hardware_bridge` (owns the UART link to STM32),
-  `controller_manager`/`ros2_control` (owns the hardware interface that
-  talks to `mdp_hardware_bridge` — keeping the control loop off Wi-Fi
-  avoids jitter risk to PWM commands), `ekf_node` (cheap, keeps odometry
-  latency-tight with the control loop it feeds), `android_bridge_node`
-  (Bluetooth radio is on the Pi), `twist_mux` (arbitrates teleop vs.
-  planner `cmd_vel` — see "Command arbitration" below; runs on the Pi
-  since it feeds `controller_manager`, which is also Pi-local), the
-  camera driver (physical camera is on the Pi — only *capture* stays
-  here, not inference).
+  machine): `mdp_hardware_bridge` (owns the UART link to STM32 and
+  exposes it as an `execute_moves` action — see "Nodes" below),
+  `android_bridge_node` (Bluetooth radio is on the Pi), the camera
+  driver (physical camera is on the Pi — only *capture* stays here, not
+  inference).
 - **Moves to a laptop/PC** (compute-heavy, latency-tolerant): perception
   (YOLO), the Hamiltonian+Dubins planner, RViz2. No Gazebo — dropped
   2026-08-24, not enough time in the schedule for a full 3D sim track;
   RViz2's 2D display covers the course's "simulate in software"
   requirement on its own (see "Course requirements this maps to").
 
+No `ros2_control`, no `controller_manager`, no `robot_localization`
+EKF in this design — all three assumed a continuous velocity/steering
+stream and a continuous odometry stream to fuse, and neither exists in
+the real protocol. Pose tracking is dead-reckoning instead: after each
+successful (`FIN`) move, whichever node commanded it updates its belief
+of `(x, y, θ)` by the commanded delta, trusting the STM32's own
+closed-loop accuracy for that one maneuver. The firmware has a
+commented-out `SendCoordUart()` call (`stm32/src/main.c`) suggesting a
+live-telemetry mode existed at some point — worth investigating if
+dead-reckoning drift turns out to be a real problem, but not enabled
+right now.
+
 ## Command arbitration
 
-Two things can legitimately want to drive the robot: manual teleop
-(Android tablet, via the Pi) and the autonomous planner (PC). They must
-**never** both publish directly to `/cmd_vel` — two uncoordinated
-writers to the same topic is a race (whichever message arrives last
-wins, with no defined ordering), which could mean the robot flapping
-between manual and autonomous commands unpredictably.
+Simpler than the earlier `twist_mux` design, because the underlying
+protocol is discrete, not continuous. Two things can legitimately want
+to drive the robot: manual teleop (Android, via the Pi) and the
+autonomous planner (PC). Both call the *same* `execute_moves` action on
+`mdp_hardware_bridge` — there's no separate topic each writes to, so
+there's no dual-writer race to design around in the first place.
 
-Fix: neither publishes to `/cmd_vel` directly. `android_bridge_node`
-publishes parsed movement commands to `/teleop/cmd_vel`; `mdp_planner`
-publishes to `/planner/cmd_vel`. `ros-jazzy-twist-mux` (stock package,
-confirmed available on `robostack-jazzy` for all three of this
-workspace's platforms) subscribes to both and arbitrates them by
-priority + timeout into the single `/cmd_vel` that `controller_manager`
-actually consumes — so there is always exactly one writer to `/cmd_vel`.
+Arbitration falls out of ROS2 actions' own semantics plus one rule:
 
-**Teleop is configured at higher priority than the planner** — this
-isn't arbitrary, it's the standard safety convention (a human should
-always be able to override autonomy, never the reverse). Two useful
-side effects fall out of this for free:
+- The action server's `goal_callback` **rejects a new goal while one is
+  already executing** (`REJECT` if `_busy` is set — see
+  `serial_bridge_node.py`). Whichever caller's goal lands first runs to
+  completion; the other gets a rejected goal, not silent interleaving.
+- The STM32 firmware enforces the same rule independently (`BUS`
+  response if a new instruction batch arrives mid-execution) — so even
+  if the ROS-side check were ever bypassed, the firmware itself won't
+  execute two batches concurrently.
+- **E-stop is a separate topic (`estop`, `std_msgs/Empty`), not routed
+  through the action at all.** This matters: the firmware checks for a
+  `Q`-prefixed packet on *every* received packet regardless of what
+  `comm_task` is doing, so e-stop is genuinely asynchronous on the
+  hardware side. The bridge mirrors that — `_on_estop` writes directly
+  to the serial port using a separate lock that's never held during a
+  long blocking read, so e-stop can preempt a batch that's actively
+  executing, not just one that hasn't started yet.
 
-- If the PC/planner is unreachable (crashed, network dropped), nothing
-  arrives on `/planner/cmd_vel` — teleop keeps working through the mux,
-  unaffected. This is the actual resilience property from the earlier
-  discussion, achieved without ever having two things write the same
-  topic.
-- If someone grabs manual control mid-autonomous-run (e.g. the planner
-  is doing something wrong), it takes over immediately by design.
-
-Real cost, not hand-waved away: this is one more node to configure and
-reason about (`twist_mux`'s priority/timeout YAML). It's a small,
-well-tested stock package rather than custom arbitration logic, but it
-is not zero-cost — worth it specifically because the alternative (raw
-dual-writer `/cmd_vel`) is a genuine hazard, not because more nodes are
-inherently good.
+This gives the same resilience property the `twist_mux` design was
+built for (manual control isn't blocked by a dead/unreachable planner)
+without needing a priority-arbitration node at all — there's nothing to
+arbitrate between two *streams*, only between two things that might
+each want to submit one *action goal* at a time.
 
 ## Networking across hosts
 
@@ -147,17 +148,14 @@ decisions specific to this project:
 
 ## Nodes
 
-| Node | Host | Package (planned) | Responsibility |
+| Node | Host | Package | Responsibility |
 | --- | --- | --- | --- |
-| `mdp_hardware_bridge` / `serial_bridge_node` | Pi | `mdp_hardware_bridge` | UART link to STM32 (USART3 @ 115200). Translates `ros2_control` hardware interface calls into PWM commands, and STM32 encoder/IMU frames into ROS messages. |
-| `android_bridge_node` | Pi | `mdp_android_bridge` | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Relays remote-control commands in and status/telemetry out — same role as `raspberry-pi/android_bridge` in the non-ROS implementation, reimplemented as a ROS node. Parsed movement commands go to `/teleop/cmd_vel`, not directly to `/cmd_vel` (see "Command arbitration"). |
-| `twist_mux` | Pi | `ros-jazzy-twist-mux` (stock) | Arbitrates `/teleop/cmd_vel` (high priority) vs. `/planner/cmd_vel` (low priority) into the single `/cmd_vel` that `controller_manager` consumes. See "Command arbitration". |
+| `serial_bridge_node` | Pi | `mdp_hardware_bridge` **(scaffolded, builds clean)** | Owns the UART link to STM32 (USART3 @ 115200). Speaks the firmware's real protocol directly — 5-byte packets (2-char command + 3-digit value), batched behind a `#` trigger, `RUN`/`FIN`/`BUS`/`FUL` status lines. Exposes this as the `execute_moves` action (`mdp_interfaces/ExecuteMoves`) plus an `estop` topic (`std_msgs/Empty`) that writes a `Q` packet outside the action entirely, mirroring the firmware's own asynchronous e-stop handling. See "Command arbitration". |
+| `android_bridge_node` | Pi | `mdp_android_bridge` (not yet scaffolded) | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Movement commands get translated into `execute_moves` goals (same action the planner calls); non-movement commands (obstacle placement, target-face annotation) go to `/android/cmd` for the planner. |
 | camera driver | Pi | TBD | Publishes raw camera frames for `mdp_perception` to consume over the network. libcamera-based (see Open Decisions — **not** the legacy `picamera` module). |
-| `ekf_node` | Pi | `robot_localization` (stock) | Fuses encoder odometry + IMU into a filtered pose estimate. |
-| `controller_manager` + controllers | Pi | `ros2_control` / `ros2_controllers` (stock) | Owns the hardware interface abstraction and the drive controller (e.g. `diff_drive_controller` or a custom car-kinematics controller, since this is a car with steering, not a differential-drive base). |
 | perception node(s) | PC | `mdp_perception` | Runs the trained YOLO model on camera frames streamed from the Pi, publishes detections. See "Can we use the reference-code checkpoint?" below for the model itself. |
-| autonomy / path planner | PC | `mdp_bringup` or a new `mdp_planner` package | Implements the course-required Hamiltonian-path ordering (nearest-neighbour + 2-opt / exhaustive search over the 5 obstacles) and Dubins path segments between configurations. **This is graded coursework — must be self-implemented, not a stock Nav2 planner.** See `mdp_bringup`'s eventual `planner/` module. |
-| RViz2 | PC | `ros-jazzy-rviz2` (stock) | Satisfies the course's "simulate the physical robot and algorithms in software" display requirement (arena, obstacles, robot pose, recognized images in real time). No Gazebo in this project — RViz2's 2D display covers the literal requirement without a full 3D physics sim. |
+| autonomy / path planner | PC | `mdp_bringup` or a new `mdp_planner` package | Implements the course-required Hamiltonian-path ordering (nearest-neighbour + 2-opt / exhaustive search over the 5 obstacles) and Dubins path segments between configurations, translated into a sequence of `MoveCommand`s and submitted as one `execute_moves` goal per leg. **This is graded coursework — must be self-implemented, not a stock Nav2 planner.** See `mdp_bringup`'s eventual `planner/` module. |
+| RViz2 | PC | `ros-jazzy-rviz2` (stock) | Satisfies the course's "simulate the physical robot and algorithms in software" display requirement (arena, obstacles, robot pose, recognized images in real time), driven by dead-reckoned pose updates (see "Design principle" above). No Gazebo in this project — RViz2's 2D display covers the literal requirement without a full 3D physics sim. |
 
 `mdp_bringup` (already scaffolded under `src/`) is the launch/config entry
 point that will eventually bring all of the above up together.
@@ -170,19 +168,16 @@ needs a custom message and belongs in a new `mdp_interfaces` package
 this task's specific fields (numeric class IDs 11–40, `marker`,
 `UNCERTAIN`, obstacle IDs).
 
-| Topic / service | Type | Publisher → Subscriber(s) | Notes |
+| Topic / service / action | Type | Publisher → Subscriber(s) | Notes |
 |---|---|---|---|
-| `/teleop/cmd_vel` | `geometry_msgs/TwistStamped` (stock) | `android_bridge_node` → `twist_mux` | Parsed manual movement commands, high priority in the mux. |
-| `/planner/cmd_vel` | `geometry_msgs/TwistStamped` (stock) | planner → `twist_mux` | Autonomous drive commands, low priority in the mux. |
-| `/cmd_vel` | `geometry_msgs/TwistStamped` (stock) | `twist_mux` → `controller_manager` | The single arbitrated output — the only thing `controller_manager` ever listens to. Never written to directly by anything else. |
-| `/odom` | `nav_msgs/Odometry` (stock) | drive controller → `ekf_node`, planner | Raw wheel-encoder odometry, pre-fusion. |
-| `/imu/data_raw` | `sensor_msgs/Imu` (stock) | `mdp_hardware_bridge` → `ekf_node` | ICM-20948 readings relayed from STM32. |
-| `/odometry/filtered` | `nav_msgs/Odometry` (stock) | `ekf_node` → planner, `mdp_bringup` | Fused pose estimate; this is what the planner should treat as ground truth for `(x, y, θ)`. |
+| `execute_moves` (action) | `mdp_interfaces/ExecuteMoves` **(exists, builds clean)** | android_bridge_node, planner → `serial_bridge_node` | Goal: an ordered list of `MoveCommand{command, value}`. Result: `success`, `status` (`"FIN"`/`"BUS"`/`"FUL"`/...). Feedback: commands sent so far. Only one goal runs at a time — see "Command arbitration". |
+| `estop` | `std_msgs/Empty` **(exists)** | android_bridge_node → `serial_bridge_node` | Writes a `Q` packet immediately, bypassing the action entirely — matches the firmware's own asynchronous e-stop handling (checked on every received packet, regardless of what's executing). |
+| `/robot_pose` | `geometry_msgs/PoseStamped` (stock) | whoever tracks dead-reckoned pose (planner or `serial_bridge_node` — not yet decided) → RViz2 | Updated after each `FIN`. Not a continuous stream — one message per completed move. See "Design principle" for why there's no continuous odometry here. |
 | `/camera/image_raw` | `sensor_msgs/Image` (stock) | camera driver node → `mdp_perception` | From the libcamera-based driver (see Open Decisions). |
-| `/detections` | `mdp_interfaces/ObstacleDetection` (custom) | `mdp_perception` → planner, `mdp_bringup` | One message per recognized obstacle: `obstacle_id`, `label` (`"11"`–`"40"` or `"marker"` or `"UNCERTAIN"`), `confidence`, `image` (`sensor_msgs/Image`, for the verification stitch). Mirrors the `image_result` JSON already drafted in the non-ROS implementation's `docs/protocol.md`. |
-| `/android/cmd` | `std_msgs/String` (stock, or a thin custom msg) | `android_bridge_node` → planner | **Non-movement** commands only — obstacle placement/removal, target-face annotation (the ARCM checklist's `ADD`/`SUB`/`FACE` messages). Movement commands (`FW`/`BW`/`TL`/`TR`/`STP`) are parsed separately and go to `/teleop/cmd_vel` instead — see "Command arbitration". This split is why `android_bridge_node` needs the PC (for config) but must *not* need it for basic driving. |
+| `/detections` | `mdp_interfaces/ObstacleDetection` (custom, not yet added) | `mdp_perception` → planner, `mdp_bringup` | One message per recognized obstacle: `obstacle_id`, `label` (`"11"`–`"40"` or `"marker"` or `"UNCERTAIN"`), `confidence`, `image` (`sensor_msgs/Image`, for the verification stitch). Mirrors the `image_result` JSON already drafted in the non-ROS implementation's `docs/protocol.md`. |
+| `/android/cmd` | `std_msgs/String` (stock, or a thin custom msg) | `android_bridge_node` → planner | **Non-movement** commands only — obstacle placement/removal, target-face annotation (the ARCM checklist's `ADD`/`SUB`/`FACE` messages). Movement commands go through `execute_moves` instead. |
 | `/android/status` | `std_msgs/String` (stock) | planner/bridge → `android_bridge_node` | Curated status text relayed to the tablet — same intent as the non-ROS protocol's `STATUS,<text>` line. |
-| `~/plan_run` (service or action) | `mdp_interfaces/PlanRun` (custom) | UI/bringup → planner | Kicks off the Hamiltonian-path + Dubins planning run given the known obstacle list; an action (not a plain service) if you want progress feedback as each obstacle is visited. |
+| `~/plan_run` (service or action) | `mdp_interfaces/PlanRun` (custom, not yet added) | UI/bringup → planner | Kicks off the Hamiltonian-path + Dubins planning run given the known obstacle list; an action (not a plain service) if you want progress feedback as each obstacle is visited. |
 
 ## TF tree
 
@@ -192,12 +187,13 @@ map
       └── base_link
            ├── camera_link   (front-center, per URDF below)
            ├── imu_link
-           └── (wheel/steering joint frames, from ros2_control's URDF)
+           └── (wheel/steering joint frames, from the robot's URDF —
+               for RViz2 display only now, not a ros2_control interface)
 ```
 
-- `odom → base_link`: published by the drive controller / `ekf_node`
-  (whichever owns odometry — typically the EKF republishes a filtered
-  `odom → base_link` transform).
+- `odom → base_link`: published by whichever node owns dead-reckoned
+  pose tracking (planner or `serial_bridge_node` — see `/robot_pose` in
+  the topics table above; not yet decided which one owns this).
 - `map → odom`: only needed if you localize against a fixed map of the
   200×200cm arena; for Task 1/2 the arena is fully known ahead of time,
   so this may just be a static identity transform rather than a real
@@ -229,37 +225,45 @@ conversion boundary deliberately (e.g. convert cm→m immediately at the
 planner's input, keep everything downstream in meters) rather than
 letting it leak across multiple nodes.
 
-## STM32 serial protocol — open design tension
+## STM32 serial protocol — resolved 2026-08-24
 
-The non-ROS implementation's `docs/protocol.md` already defines a **discrete**
-command set for RPi↔STM32: `FW:<mm>`, `BW:<mm>`, `TL:<deg>`, `TR:<deg>`,
-`STP`, with the STM32 replying `ACK` then `DONE` once a move completes.
-That protocol assumes the RPi issues one bounded move at a time and
-waits.
+This used to be an open question ("does `ros2_control` even fit this
+firmware?") argued from the non-ROS implementation's `docs/protocol.md`
+(`FW:<mm>`, `TL:<deg>`, `ACK`/`DONE`) as a proxy. It's no longer a
+guess — the actual protocol was read directly out of the ported
+firmware's `comm_task` (`stm32/src/main.c`), and the decision that
+follows from it is made, not pending.
 
-`ros2_control` doesn't work that way — a `SystemInterface` writes
-**continuous** command values (e.g. wheel velocity, steering angle) into
-the hardware every control-loop tick (typically 50-100Hz) and reads
-state back every tick; there's no notion of "move 50mm then tell me
-you're done."
+**The real protocol:**
 
-This is a real decision, not just a wiring detail:
+- Each instruction is a fixed **5-byte packet**: a 2-char command code +
+  a 3-digit zero-padded ASCII value (e.g. `b"FC050"` = drive forward
+  50cm). Confirmed command codes: `FC`/`BC` (straight), `FL`/`FR`/`BL`/`BR`
+  (turns), `FU`/`BU` (drive until a given ultrasound reading).
+- Packets queue up (`instrList[40]`) until a **`#`-prefixed trigger
+  packet** arrives, at which point the firmware replies `RUN\r\n` and
+  executes every queued instruction back-to-back, **blocking** on each
+  one (real acceleration/deceleration ramp, encoder + gyro correction,
+  polled to completion) before moving to the next.
+- Once the whole batch finishes, it replies `FIN\r\n`. Rejections:
+  `FUL\r\n` (queue full) or `BUS\r\n` (already executing).
+- A **`Q`-prefixed packet triggers immediate e-stop**, checked on every
+  received packet independent of `comm_task`'s state — genuinely
+  asynchronous on the firmware side, not queued behind anything.
 
-1. **Change the STM32 firmware's contract** to accept a continuous
-   `(velocity, steering_angle)` setpoint stream instead of discrete
-   move commands, with a watchdog (stop if no new setpoint within
-   ~200ms) — this is the "correct" `ros2_control` way, but means the
-   STM32 firmware needs new commands beyond what `docs/protocol.md`
-   currently specifies.
-2. **Keep the discrete protocol and adapt at the bridge** — have
-   `mdp_hardware_bridge` translate continuous `cmd_vel` into a stream of
-   small discrete `FW:`/`TL:` commands. Simpler (no STM32 firmware
-   change), but laggy and fights against what `ros2_control` is designed
-   for.
-
-Leaning toward (1), but this needs to be decided with whoever owns the
-STM32 firmware before `mdp_hardware_bridge` is written, since it changes
-what the firmware needs to expose.
+**This settles the `ros2_control` question**: a `SystemInterface`
+assumes continuous per-tick setpoints with live state feedback: neither
+exists here, so `ros2_control`/`controller_manager` isn't the right fit
+for this hardware at all — it would need to fake a continuous interface
+on top of a fundamentally discrete, blocking one. Decision: don't.
+`mdp_hardware_bridge` speaks the real protocol directly, exposed as the
+`execute_moves` ROS2 action (`mdp_interfaces/ExecuteMoves` — a
+`MoveCommand[]` goal, `success`/`status` result, "commands sent so far"
+feedback) plus a separate `estop` topic that bypasses the action
+entirely, mirroring the firmware's own async e-stop handling. See
+`mdp_hardware_bridge/serial_bridge_node.py` (scaffolded, builds and
+imports clean, packet encoding unit-checked against the confirmed
+format — not yet run against real hardware).
 
 ## Perception message contract
 
@@ -279,18 +283,20 @@ what the firmware needs to expose.
 
 ## Custom interfaces package (not yet created)
 
-`mdp_interfaces` — holds `ObstacleDetection.msg`, and `PlanRun.action` (or
-`.srv`) referenced in the topics table above. Needs to exist before
-`mdp_perception` or the planner package can be written against it, so
-it's a good first "real" package to scaffold after `mdp_bringup`.
+`mdp_interfaces` — **scaffolded 2026-08-24, builds clean.** Currently
+holds `MoveCommand.msg` and `ExecuteMoves.action` (used by
+`mdp_hardware_bridge`, verified importable and round-tripping the real
+packet encoding). Still needs `ObstacleDetection.msg` and `PlanRun.action`
+(or `.srv`) added before `mdp_perception` or the planner package can be
+written against them.
 
 ## Launch files (planned, not yet written)
 
-- `bringup.launch.py` — hardware bridge, `controller_manager`,
-  `ekf_node`, perception, planner, RViz2. The one launch file used for
-  real hardware runs; no separate sim variant since there's no Gazebo in
-  this project (see "Course requirements this maps to" for how the
-  course's simulation requirement is still satisfied).
+- `bringup.launch.py` — hardware bridge, android bridge, perception,
+  planner, RViz2. The one launch file used for real hardware runs; no
+  separate sim variant since there's no Gazebo in this project (see
+  "Course requirements this maps to" for how the course's simulation
+  requirement is still satisfied).
 - `teleop.launch.py` — just the Android bridge + hardware bridge, for
   early integration testing before the planner exists (equivalent to the
   non-ROS implementation's Week 2 "prove every comms link works" milestone).
@@ -336,10 +342,14 @@ still has to match what the wheel expects.
 | Concern          | Package(s)                                                                                                                                                                            |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Core             | `ros-jazzy-ros-base`, `ros-jazzy-rclpy`, `ros-jazzy-ros2cli`                                                                                                                    |
-| Control + fusion | `ros-jazzy-ros2-control`, `ros-jazzy-ros2-controllers`, `ros-jazzy-robot-localization`                                                                                          |
 | Perception       | `ros-jazzy-vision-msgs`, `ros-jazzy-cv-bridge`, `ros-jazzy-image-transport`, `ros-jazzy-compressed-image-transport`, `ultralytics` (pip — not a ROS package) |
 | Bridges          | `pyserial` (Bluetooth RFCOMM + UART), `ros-jazzy-tf2-ros`, `ros-jazzy-tf2-geometry-msgs`                                                                                        |
 | Robot description / visualization | `ros-jazzy-xacro`, `ros-jazzy-robot-state-publisher`, `ros-jazzy-joint-state-publisher`, `ros-jazzy-rviz2`. No Gazebo (`ros-gz-*`) — dropped 2026-08-24, not enough time in the schedule for a full 3D sim track. |
+
+No `ros2_control`/`ros2_controllers`/`robot_localization`/`twist_mux` —
+removed 2026-08-24 alongside the rest of the continuous-control design;
+see "STM32 serial protocol" above for why none of them fit this
+hardware's actual (discrete, blocking) protocol.
 
 ## Can we use the reference-code checkpoint?
 
@@ -369,14 +379,11 @@ HF like the rest of this project's models/datasets — worth doing once
   or `v4l2_camera` off the libcamera V4L2 device) — the legacy
   `picamera` module the course guide assumes is Buster-only and isn't a
   ROS concept at all.
-- **Drive controller.** Needs a car-like (Ackermann-ish: rear drive +
-  front steering servo) `ros2_control` controller, not the stock
-  `diff_drive_controller` — not yet selected/written.
 - **Planner package name/location.** Hamiltonian-path + Dubins planner
   not yet scaffolded as a package.
-- **STM32 command interface: discrete vs. continuous.** See "STM32
-  serial protocol" above — needs a decision with the STM32 firmware
-  owner before `mdp_hardware_bridge` is written.
+- **Who owns `/robot_pose` dead-reckoning** — the planner or
+  `serial_bridge_node`? Whichever tracks pose after each `FIN` and
+  publishes `odom → base_link`. Not yet decided.
 - **`map → odom` transform.** Static identity vs. real localization —
   the arena is fully known ahead of time, so a full localization stack
   (AMCL etc.) may be unnecessary overhead; not yet decided.
@@ -384,6 +391,14 @@ HF like the rest of this project's models/datasets — worth doing once
   planner/bringup package? Only decide once, since `pi_infer.py` in the
   non-ROS implementation and this doc both flag "don't duplicate the stitching
   logic in two places."
+- **STM32 pin mapping / part numbers vs. your actual board.** The ported
+  firmware compiles and links, but its GPIO/UART/I2C/TIM assignments and
+  the H-bridge driver chip's control scheme are only confirmed correct
+  if `stm32/` (ported from the course's `STM_Ref` project) was built for
+  the same physical kit — reasonably well-supported (same course, same
+  STM32F407VET6 part, matching calibration terminology) but not proven.
+  Motor (JGB37-520) and servo (TD-8120MG) are independently verified via
+  datasheet; the driver chip itself is unnamed in any course document.
 
 ## Course requirements this maps to
 
@@ -395,7 +410,8 @@ HF like the rest of this project's models/datasets — worth doing once
 - Task 1/2 autonomy, image recognition → perception node + planner
   package.
 - System functionality checklist (comms, movement, image recognition) →
-  the bridge nodes + `ros2_control` loop.
+  the bridge nodes (`mdp_hardware_bridge`'s `execute_moves` action,
+  `android_bridge_node`).
 
 See the non-ROS implementation's `docs/week2-checklist.md` and
 `docs/cv-integration-checklist.md` for the equivalent checklist items —
