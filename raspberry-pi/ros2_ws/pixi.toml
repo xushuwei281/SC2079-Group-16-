@@ -43,5 +43,13 @@ clean = {cmd = "rm -rf build install log", description = "Clean build artifacts 
 [activation]
 scripts = ["install/setup.bash"]
 
+[activation.env]
+# Group 16's dedicated ROS2 domain. On demo day this runs on its own
+# router/hotspot (isolated broadcast domain, no other MDP groups on the
+# same subnet), so this isn't preventing cross-team collisions — it's just
+# hygiene against any other stray ROS2 process on domain 0. Must match on
+# every machine joining this graph (Pi, this Mac, any other host).
+ROS_DOMAIN_ID = "16"
+
 [pypi-dependencies]
 ultralytics = ">=8.4.127, <9"
