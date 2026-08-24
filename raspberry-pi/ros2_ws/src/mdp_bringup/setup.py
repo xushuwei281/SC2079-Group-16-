@@ -16,7 +16,6 @@ setup(
     maintainer_email="frieddeli@gmail.com",
     description="Launch/config entry point for the SC2079 MDP ROS2 stack",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [],
     },
