@@ -15,57 +15,149 @@ about how the same problem is wired up as a ROS2 graph instead.
 
 ## System diagram
 
+Resolved 2026-08-24: the ROS2 graph is **split across two hosts**, not run
+on one machine. Hardware-bound nodes (anything touching UART, Bluetooth,
+or the camera) stay on the RPi4B; compute-heavy nodes (perception,
+planning, visualization) run on a laptop/PC. Both join the same ROS2
+graph over plain DDS — see "Networking across hosts" below for exactly
+why that "just works" on competition day but not necessarily elsewhere.
+
 ```mermaid
 flowchart TB
-    subgraph Host["Host: RPi4B or Host PC (TBD, see Open Decisions)"]
-        ROS["ROS2 Jazzy Stack<br/>Task 1 and 2 autonomy<br/>ros2_control + EKF fusion<br/>YOLO perception"]
-        AndroidBridge["android_bridge_node<br/>pyserial, RFCOMM"]
+    subgraph Pi["Raspberry Pi 4B — hardware-bound nodes"]
         HWBridge["mdp_hardware_bridge<br/>serial_bridge_node"]
-        ROS <-->|topics/services| AndroidBridge
-        ROS <-->|topics/services| HWBridge
+        TwistMux["twist_mux<br/>arbitrates cmd_vel sources"]
+        CtrlMgr["controller_manager<br/>ros2_control + ekf_node"]
+        AndroidBridge["android_bridge_node<br/>pyserial, RFCOMM"]
+        CamDriver["camera driver<br/>libcamera-based, TBD"]
+        AndroidBridge -->|/teleop/cmd_vel, high priority| TwistMux
+        TwistMux -->|/cmd_vel, single arbitrated output| CtrlMgr
+        CtrlMgr <-->|hardware_interface| HWBridge
     end
 
-    Gazebo["Gazebo Simulation<br/>3D physics engine"]
+    subgraph PC["Laptop/PC — compute-heavy nodes"]
+        Perception["mdp_perception<br/>YOLO inference"]
+        Planner["mdp_planner<br/>Hamiltonian + Dubins"]
+        RViz["RViz2<br/>arena/robot/detections display"]
+    end
+
+    Planner -.->|/planner/cmd_vel, low priority| TwistMux
+    Pi <-.->|ROS2 / DDS over UDP, same LAN, ROS_DOMAIN_ID=16| PC
+
     STM32["STM32 MCU: mdp_stm32<br/>PlatformIO / STM32Cube HAL<br/>Rear motor PWM: AT8236<br/>Steering servo PWM: HWZ020<br/>Encoders + ICM-20948 IMU"]
     Android["Android Tablet<br/>Remote app: 2D arena and controls"]
 
-    ROS <-->|sim bridge| Gazebo
     HWBridge <-->|Serial UART, USART3 at 115200| STM32
     AndroidBridge <-->|Bluetooth Serial RFCOMM| Android
 ```
 
-## Design principle: host-side kinematics
+## Design principle: host-side kinematics, split across two hosts
 
 The STM32 does **no** path planning, no odometry integration, no control
 loops beyond raw PWM output — it exposes motor/servo actuation and raw
-sensor reads (encoders, IMU) over UART and nothing else. All of the
-following live on the ROS2 host:
+sensor reads (encoders, IMU) over UART and nothing else. Everything that
+thinks runs on the ROS2 graph instead. This mirrors the course's own
+recommended split (STM32 = motor control board, RPi = "brain") but
+pushes *more* onto the graph than the course's bespoke-socket reference
+architecture does, since ROS2 gives us `ros2_control` +
+`robot_localization` instead of hand-rolled odometry.
 
-- Odometry integration and sensor fusion (`robot_localization` EKF, fed
-  by encoder + IMU data relayed from the STM32)
-- `ros2_control` hardware interface + controllers (turns ROS `cmd_vel`
-  into the STM32's PWM commands, and STM32 encoder reads into ROS
-  odometry)
-- Perception (YOLO detection of the 31-class symbol set)
-- Path planning / autonomy (Task 1 image recognition run, Task 2 fastest
-  car run)
+Within that ROS2 graph, nodes are further split by **where they need to
+physically be**, not by how "smart" they are:
 
-This mirrors the course's own recommended split (STM32 = motor control
-board, RPi = "brain") but pushes *more* onto the host than the course's
-bespoke-socket reference architecture does, since ROS2 gives us
-`ros2_control` + `robot_localization` instead of hand-rolled odometry.
+- **Stays on the Pi** (hardware-bound — the link can't move to another
+  machine): `mdp_hardware_bridge` (owns the UART link to STM32),
+  `controller_manager`/`ros2_control` (owns the hardware interface that
+  talks to `mdp_hardware_bridge` — keeping the control loop off Wi-Fi
+  avoids jitter risk to PWM commands), `ekf_node` (cheap, keeps odometry
+  latency-tight with the control loop it feeds), `android_bridge_node`
+  (Bluetooth radio is on the Pi), `twist_mux` (arbitrates teleop vs.
+  planner `cmd_vel` — see "Command arbitration" below; runs on the Pi
+  since it feeds `controller_manager`, which is also Pi-local), the
+  camera driver (physical camera is on the Pi — only *capture* stays
+  here, not inference).
+- **Moves to a laptop/PC** (compute-heavy, latency-tolerant): perception
+  (YOLO), the Hamiltonian+Dubins planner, RViz2. No Gazebo — dropped
+  2026-08-24, not enough time in the schedule for a full 3D sim track;
+  RViz2's 2D display covers the course's "simulate in software"
+  requirement on its own (see "Course requirements this maps to").
+
+## Command arbitration
+
+Two things can legitimately want to drive the robot: manual teleop
+(Android tablet, via the Pi) and the autonomous planner (PC). They must
+**never** both publish directly to `/cmd_vel` — two uncoordinated
+writers to the same topic is a race (whichever message arrives last
+wins, with no defined ordering), which could mean the robot flapping
+between manual and autonomous commands unpredictably.
+
+Fix: neither publishes to `/cmd_vel` directly. `android_bridge_node`
+publishes parsed movement commands to `/teleop/cmd_vel`; `mdp_planner`
+publishes to `/planner/cmd_vel`. `ros-jazzy-twist-mux` (stock package,
+confirmed available on `robostack-jazzy` for all three of this
+workspace's platforms) subscribes to both and arbitrates them by
+priority + timeout into the single `/cmd_vel` that `controller_manager`
+actually consumes — so there is always exactly one writer to `/cmd_vel`.
+
+**Teleop is configured at higher priority than the planner** — this
+isn't arbitrary, it's the standard safety convention (a human should
+always be able to override autonomy, never the reverse). Two useful
+side effects fall out of this for free:
+
+- If the PC/planner is unreachable (crashed, network dropped), nothing
+  arrives on `/planner/cmd_vel` — teleop keeps working through the mux,
+  unaffected. This is the actual resilience property from the earlier
+  discussion, achieved without ever having two things write the same
+  topic.
+- If someone grabs manual control mid-autonomous-run (e.g. the planner
+  is doing something wrong), it takes over immediately by design.
+
+Real cost, not hand-waved away: this is one more node to configure and
+reason about (`twist_mux`'s priority/timeout YAML). It's a small,
+well-tested stock package rather than custom arbitration logic, but it
+is not zero-cost — worth it specifically because the alternative (raw
+dual-writer `/cmd_vel`) is a genuine hazard, not because more nodes are
+inherently good.
+
+## Networking across hosts
+
+Both machines join the same ROS2 graph via plain DDS discovery — no
+Discovery Server, no `rmw_zenoh`, nothing exotic — because of two
+decisions specific to this project:
+
+1. **Same `ROS_DOMAIN_ID` on every machine** (`16`, set in this
+   workspace's `pixi.toml` under `[activation.env]`, so it's applied
+   automatically by `pixi run`/`pixi shell` rather than relying on
+   someone remembering to `export` it). Not chosen to dodge other MDP
+   groups — see point 2 — just hygiene against any other stray ROS2
+   process defaulting to domain `0`.
+2. **Same physical LAN on demo day.** The team brings its own
+   router/hotspot, so the Pi and PC share one isolated broadcast domain
+   with nobody else on it. This matters because ROS2's default discovery
+   (Fast DDS's Simple Discovery Protocol) uses **UDP multicast**, which
+   only works within a single L2 network — it does *not* traverse
+   Tailscale (Tailscale doesn't carry multicast) or any other VPN/NAT
+   hop. If development ever needs to happen with the Pi and PC on
+   different networks (e.g. remote debugging before physically meeting
+   up), plain `ROS_DOMAIN_ID` matching will silently fail to discover
+   peers — the fix in that case is `rmw_zenoh` (no multicast
+   requirement, NAT/VPN-friendly) or a Fast DDS Discovery Server, neither
+   of which is set up yet since it isn't needed for the demo-day
+   scenario.
 
 ## Nodes
 
-| Node                                             | Package (planned)                                | Responsibility                                                                                                                                                                                                                                                                                                               |
-| ------------------------------------------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mdp_hardware_bridge` / `serial_bridge_node` | `mdp_hardware_bridge`                          | UART link to STM32 (USART3 @ 115200). Translates`ros2_control` hardware interface calls into PWM commands, and STM32 encoder/IMU frames into ROS messages.                                                                                                                                                                 |
-| `android_bridge_node`                          | `mdp_android_bridge`                           | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Relays remote-control commands in and status/telemetry out — same role as `raspberry-pi/android_bridge` in the non-ROS implementation, reimplemented as a ROS node.                                                                               |
-| perception node(s)                               | `mdp_perception`                               | Runs the trained YOLO model (`Frieddeli/mdp-symbols` weights) on camera frames, publishes `vision_msgs/Detection2D` results. Camera capture via a libcamera-based ROS driver (see Open Decisions — **not** the legacy `picamera` module).                                                                       |
-| `ekf_node`                                     | `robot_localization` (stock)                   | Fuses encoder odometry + IMU into a filtered pose estimate.                                                                                                                                                                                                                                                                  |
-| `controller_manager` + controllers             | `ros2_control` / `ros2_controllers` (stock)  | Owns the hardware interface abstraction and the drive controller (e.g.`diff_drive_controller` or a custom car-kinematics controller, since this is a car with steering, not a differential-drive base).                                                                                                                    |
-| autonomy / path planner                          | `mdp_bringup` or a new `mdp_planner` package | Implements the course-required Hamiltonian-path ordering (nearest-neighbour + 2-opt / exhaustive search over the 5 obstacles) and Dubins path segments between configurations.**This is graded coursework — must be self-implemented, not a stock Nav2 planner.** See `mdp_bringup`'s eventual `planner/` module. |
-| Gazebo sim bridge                                | `ros_gz_bridge` (stock)                        | Bridges ROS topics ↔ Gazebo Harmonic for simulating the robot/arena before/alongside real hardware runs — satisfies the course's "simulate the physical robot and algorithms in software" requirement.                                                                                                                     |
+| Node | Host | Package (planned) | Responsibility |
+| --- | --- | --- | --- |
+| `mdp_hardware_bridge` / `serial_bridge_node` | Pi | `mdp_hardware_bridge` | UART link to STM32 (USART3 @ 115200). Translates `ros2_control` hardware interface calls into PWM commands, and STM32 encoder/IMU frames into ROS messages. |
+| `android_bridge_node` | Pi | `mdp_android_bridge` | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Relays remote-control commands in and status/telemetry out — same role as `raspberry-pi/android_bridge` in the non-ROS implementation, reimplemented as a ROS node. Parsed movement commands go to `/teleop/cmd_vel`, not directly to `/cmd_vel` (see "Command arbitration"). |
+| `twist_mux` | Pi | `ros-jazzy-twist-mux` (stock) | Arbitrates `/teleop/cmd_vel` (high priority) vs. `/planner/cmd_vel` (low priority) into the single `/cmd_vel` that `controller_manager` consumes. See "Command arbitration". |
+| camera driver | Pi | TBD | Publishes raw camera frames for `mdp_perception` to consume over the network. libcamera-based (see Open Decisions — **not** the legacy `picamera` module). |
+| `ekf_node` | Pi | `robot_localization` (stock) | Fuses encoder odometry + IMU into a filtered pose estimate. |
+| `controller_manager` + controllers | Pi | `ros2_control` / `ros2_controllers` (stock) | Owns the hardware interface abstraction and the drive controller (e.g. `diff_drive_controller` or a custom car-kinematics controller, since this is a car with steering, not a differential-drive base). |
+| perception node(s) | PC | `mdp_perception` | Runs the trained YOLO model on camera frames streamed from the Pi, publishes detections. See "Can we use the reference-code checkpoint?" below for the model itself. |
+| autonomy / path planner | PC | `mdp_bringup` or a new `mdp_planner` package | Implements the course-required Hamiltonian-path ordering (nearest-neighbour + 2-opt / exhaustive search over the 5 obstacles) and Dubins path segments between configurations. **This is graded coursework — must be self-implemented, not a stock Nav2 planner.** See `mdp_bringup`'s eventual `planner/` module. |
+| RViz2 | PC | `ros-jazzy-rviz2` (stock) | Satisfies the course's "simulate the physical robot and algorithms in software" display requirement (arena, obstacles, robot pose, recognized images in real time). No Gazebo in this project — RViz2's 2D display covers the literal requirement without a full 3D physics sim. |
 
 `mdp_bringup` (already scaffolded under `src/`) is the launch/config entry
 point that will eventually bring all of the above up together.
@@ -80,16 +172,17 @@ this task's specific fields (numeric class IDs 11–40, `marker`,
 
 | Topic / service | Type | Publisher → Subscriber(s) | Notes |
 |---|---|---|---|
-| `/cmd_vel` | `geometry_msgs/TwistStamped` (stock) | planner → `controller_manager` | Standard `ros2_control` input; the drive controller converts this into rear-motor velocity + steering angle. |
+| `/teleop/cmd_vel` | `geometry_msgs/TwistStamped` (stock) | `android_bridge_node` → `twist_mux` | Parsed manual movement commands, high priority in the mux. |
+| `/planner/cmd_vel` | `geometry_msgs/TwistStamped` (stock) | planner → `twist_mux` | Autonomous drive commands, low priority in the mux. |
+| `/cmd_vel` | `geometry_msgs/TwistStamped` (stock) | `twist_mux` → `controller_manager` | The single arbitrated output — the only thing `controller_manager` ever listens to. Never written to directly by anything else. |
 | `/odom` | `nav_msgs/Odometry` (stock) | drive controller → `ekf_node`, planner | Raw wheel-encoder odometry, pre-fusion. |
 | `/imu/data_raw` | `sensor_msgs/Imu` (stock) | `mdp_hardware_bridge` → `ekf_node` | ICM-20948 readings relayed from STM32. |
 | `/odometry/filtered` | `nav_msgs/Odometry` (stock) | `ekf_node` → planner, `mdp_bringup` | Fused pose estimate; this is what the planner should treat as ground truth for `(x, y, θ)`. |
 | `/camera/image_raw` | `sensor_msgs/Image` (stock) | camera driver node → `mdp_perception` | From the libcamera-based driver (see Open Decisions). |
 | `/detections` | `mdp_interfaces/ObstacleDetection` (custom) | `mdp_perception` → planner, `mdp_bringup` | One message per recognized obstacle: `obstacle_id`, `label` (`"11"`–`"40"` or `"marker"` or `"UNCERTAIN"`), `confidence`, `image` (`sensor_msgs/Image`, for the verification stitch). Mirrors the `image_result` JSON already drafted in the non-ROS implementation's `docs/protocol.md`. |
-| `/android/cmd` | `std_msgs/String` (stock, or a thin custom msg) | `android_bridge_node` → planner / teleop mux | Parsed remote-control commands from the tablet. |
+| `/android/cmd` | `std_msgs/String` (stock, or a thin custom msg) | `android_bridge_node` → planner | **Non-movement** commands only — obstacle placement/removal, target-face annotation (the ARCM checklist's `ADD`/`SUB`/`FACE` messages). Movement commands (`FW`/`BW`/`TL`/`TR`/`STP`) are parsed separately and go to `/teleop/cmd_vel` instead — see "Command arbitration". This split is why `android_bridge_node` needs the PC (for config) but must *not* need it for basic driving. |
 | `/android/status` | `std_msgs/String` (stock) | planner/bridge → `android_bridge_node` | Curated status text relayed to the tablet — same intent as the non-ROS protocol's `STATUS,<text>` line. |
 | `~/plan_run` (service or action) | `mdp_interfaces/PlanRun` (custom) | UI/bringup → planner | Kicks off the Hamiltonian-path + Dubins planning run given the known obstacle list; an action (not a plain service) if you want progress feedback as each obstacle is visited. |
-| `/gz/...` bridge topics | `ros_gz_bridge`-generated (stock) | Gazebo ↔ ROS graph | Auto-generated from the bridge YAML config once the robot's SDF/URDF exists. |
 
 ## TF tree
 
@@ -193,16 +286,11 @@ it's a good first "real" package to scaffold after `mdp_bringup`.
 
 ## Launch files (planned, not yet written)
 
-- `bringup.launch.py` — everything except Gazebo: hardware bridge,
-  `controller_manager`, `ekf_node`, perception, planner. Used on real
-  hardware.
-- `sim.launch.py` — Gazebo + `ros_gz_bridge` + the same
-  `controller_manager`/`ekf_node`/perception/planner stack, swapping the
-  hardware interface for Gazebo's simulated one. Keeping the same
-  planner/perception nodes between sim and real hardware (only the
-  hardware interface changes) is what makes the "simulate the algorithms
-  in software" checklist item actually meaningful rather than a
-  throwaway demo.
+- `bringup.launch.py` — hardware bridge, `controller_manager`,
+  `ekf_node`, perception, planner, RViz2. The one launch file used for
+  real hardware runs; no separate sim variant since there's no Gazebo in
+  this project (see "Course requirements this maps to" for how the
+  course's simulation requirement is still satisfied).
 - `teleop.launch.py` — just the Android bridge + hardware bridge, for
   early integration testing before the planner exists (equivalent to the
   non-ROS implementation's Week 2 "prove every comms link works" milestone).
@@ -241,37 +329,34 @@ still has to match what the wheel expects.
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Core             | `ros-jazzy-ros-base`, `ros-jazzy-rclpy`, `ros-jazzy-ros2cli`                                                                                                                    |
 | Control + fusion | `ros-jazzy-ros2-control`, `ros-jazzy-ros2-controllers`, `ros-jazzy-robot-localization`                                                                                          |
-| Perception       | `ros-jazzy-vision-msgs`, `ros-jazzy-cv-bridge`, `ros-jazzy-image-transport`, `ultralytics` (pip — not a ROS package)                                                         |
+| Perception       | `ros-jazzy-vision-msgs`, `ros-jazzy-cv-bridge`, `ros-jazzy-image-transport`, `ros-jazzy-compressed-image-transport`, `ultralytics` (pip — not a ROS package) |
 | Bridges          | `pyserial` (Bluetooth RFCOMM + UART), `ros-jazzy-tf2-ros`, `ros-jazzy-tf2-geometry-msgs`                                                                                        |
-| Simulation       | `ros-jazzy-ros-gz-sim`, `ros-jazzy-ros-gz-bridge`, `ros-jazzy-ros-gz-interfaces`, `ros-jazzy-xacro`, `ros-jazzy-robot-state-publisher`, `ros-jazzy-joint-state-publisher` |
+| Robot description / visualization | `ros-jazzy-xacro`, `ros-jazzy-robot-state-publisher`, `ros-jazzy-joint-state-publisher`, `ros-jazzy-rviz2`. No Gazebo (`ros-gz-*`) — dropped 2026-08-24, not enough time in the schedule for a full 3D sim track. |
+
+## Can we use the reference-code checkpoint?
+
+Yes — `optimal_weights.txt` in the course reference code's `img_rec/`
+(confirmed earlier as a genuine Ultralytics `best.pt`, ZIP structure
+verified, trained on the identical 31-class label set) is usable as the
+starting model for `mdp_perception`, copied into this workspace at
+`raspberry-pi/ros2_ws/models/reference_code_best.pt`. Two caveats before
+treating it as more than a bootstrap:
+
+- It was trained with **non-square `imgsz=[640,480]` and `rect=True`**
+  (per the decoded `args.yaml`) — the perception node's preprocessing
+  must match that, not just resize frames to square 640×640, or accuracy
+  degrades.
+- It's an **unbenchmarked reference-code artifact** — no known mAP/
+  validation numbers. Treat it as a baseline to validate against your
+  own held-out data before committing to it as the actual competition
+  model, not a drop-in final answer.
+
+(Packaging note: this is a local-only file for now, not yet uploaded to
+HF like the rest of this project's models/datasets — worth doing once
+`mdp_perception` actually needs to load it from more than one machine.)
 
 ## Open decisions
 
-- **Where does the ROS2 host actually run?** The diagram labels it
-  "RPi4B / Host PC" — still open, but **not** for OS-compatibility
-  reasons. Earlier draft of this doc assumed ROS2-on-RPi4B would force
-  Ubuntu Server over the course's recommended Raspberry Pi OS (Buster),
-  since official ROS2 debs only target Ubuntu. That assumption doesn't
-  apply here: `pixi-ros` installs ROS2 as self-contained robostack
-  conda packages, never touching the system package manager, so it's
-  agnostic to the underlying distro. Confirmed directly (not assumed) —
-  `robostack-jazzy`'s `linux-aarch64` channel (the RPi4B's actual
-  architecture) publishes every package this workspace depends on
-  (`ros2-control`, `robot_localization`, `ros-gz-sim`, `cv-bridge`,
-  etc.), and `pixi install` resolves and locks the full stack for
-  `linux-aarch64` alongside `osx-arm64` with no gaps (added as a
-  workspace platform in `pixi.toml`, verified 2026-08-24). So running
-  the ROS2 host directly on the RPi4B under plain **Raspberry Pi OS**
-  (matching the course's own setup guide, no Ubuntu detour) is fully
-  viable.
-
-  What's still genuinely open is **compute/thermal budget**, not
-  packaging: whether the RPi4B alone can run `ros2_control` + EKF +
-  YOLO perception + (optionally) the Gazebo bridge simultaneously at
-  acceptable rates, or whether perception specifically should stay
-  offloaded to a host PC/4060 (as in the non-ROS implementation's Track B) while
-  control/fusion stays on the Pi. That's a benchmarking question once
-  hardware is in hand, not a blocker to starting development.
 - **Camera driver.** Must use a libcamera-based ROS node (`camera_ros`
   or `v4l2_camera` off the libcamera V4L2 device) — the legacy
   `picamera` module the course guide assumes is Buster-only and isn't a
@@ -294,8 +379,11 @@ still has to match what the wheel expects.
 
 ## Course requirements this maps to
 
-- "Simulate the physical robot and algorithms in software" → Gazebo +
-  `ros_gz_bridge`.
+- "Simulate the physical robot and algorithms in software" → RViz2's 2D
+  display (arena, obstacles, robot pose/facing, recognized images in real
+  time) — matches the literal Algorithms briefing requirement (slide 40:
+  "a square shape or a marker is ok" for the robot) without needing a
+  full 3D physics engine. No Gazebo in this project.
 - Task 1/2 autonomy, image recognition → perception node + planner
   package.
 - System functionality checklist (comms, movement, image recognition) →
