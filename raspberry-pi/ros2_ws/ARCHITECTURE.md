@@ -44,7 +44,7 @@ flowchart TB
     Planner -.->|/planner/cmd_vel, low priority| TwistMux
     Pi <-.->|ROS2 / DDS over UDP, same LAN, ROS_DOMAIN_ID=16| PC
 
-    STM32["STM32 MCU: mdp_stm32<br/>PlatformIO / STM32Cube HAL<br/>Rear motor PWM: AT8236<br/>Steering servo PWM: HWZ020<br/>Encoders + ICM-20948 IMU"]
+    STM32["STM32 MCU: mdp_stm32<br/>PlatformIO / STM32Cube HAL<br/>Rear motor: JGB37-520<br/>Steering servo: TD-8120MG<br/>Encoders + ICM-20948 IMU"]
     Android["Android Tablet<br/>Remote app: 2D arena and controls"]
 
     HWBridge <-->|Serial UART, USART3 at 115200| STM32
@@ -297,10 +297,18 @@ it's a good first "real" package to scaffold after `mdp_bringup`.
 
 ## Hardware topology
 
-- **STM32 (`mdp_stm32` firmware, PlatformIO/STM32Cube HAL):** rear motor
-  PWM via AT8236 driver, steering servo PWM via HWZ020, wheel encoders,
-  ICM-20948 IMU. Talks UART only (USART3 @ 115200) — no logic beyond
-  reading sensors and writing PWM on command.
+- **STM32 (`mdp_stm32` firmware, PlatformIO/STM32Cube HAL, ported from the
+  course's `STM_Ref` project — see `stm32/` in this repo):** rear motor
+  PWM (DC motor confirmed as **JGB37-520**, 30x gearbox, hall encoder —
+  verified against `DCMotor_Encoder_ServoMotor_DataSheets_v2.pdf`; the
+  H-bridge *driver chip* itself isn't independently named anywhere in the
+  course materials — earlier drafts of this doc named it "AT8236," which
+  doesn't appear in any course document and should be treated as
+  unverified, not fact), steering servo PWM (confirmed as **TD-8120MG**,
+  500-2500µs pulse width, 180° range — same datasheet; earlier drafts
+  named this "HWZ020," which is also unverified and not in any course
+  document), wheel encoders, ICM-20948 IMU. Talks UART only (USART3 @
+  115200) — no logic beyond reading sensors and writing PWM on command.
 - **Host:** runs the full ROS2 graph. Physical placement (on the RPi4B
   itself vs. an external host PC) is not yet decided — see below.
 - **Android tablet:** remote controller app, 2D arena display, connects
