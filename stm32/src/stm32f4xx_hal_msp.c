@@ -189,29 +189,32 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* hadc)
 void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if(hi2c->Instance==I2C1)
+  /* I2C1 (PB8/PB9) removed 2026-08-25 -- those pins are the left motor's
+   * driver IN1/IN2 on this board, not I2C. The IMU is really on PB10/PB11,
+   * which on STM32F407 is I2C2, not an alternate I2C1 mapping. */
+  if(hi2c->Instance==I2C2)
   {
-  /* USER CODE BEGIN I2C1_MspInit 0 */
+  /* USER CODE BEGIN I2C2_MspInit 0 */
 
-  /* USER CODE END I2C1_MspInit 0 */
+  /* USER CODE END I2C2_MspInit 0 */
 
     __HAL_RCC_GPIOB_CLK_ENABLE();
-    /**I2C1 GPIO Configuration
-    PB8     ------> I2C1_SCL
-    PB9     ------> I2C1_SDA
+    /**I2C2 GPIO Configuration
+    PB10     ------> I2C2_SCL
+    PB11     ------> I2C2_SDA
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
+    GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_11;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     /* Peripheral clock enable */
-    __HAL_RCC_I2C1_CLK_ENABLE();
-  /* USER CODE BEGIN I2C1_MspInit 1 */
+    __HAL_RCC_I2C2_CLK_ENABLE();
+  /* USER CODE BEGIN I2C2_MspInit 1 */
 
-  /* USER CODE END I2C1_MspInit 1 */
+  /* USER CODE END I2C2_MspInit 1 */
 
   }
 
@@ -225,25 +228,25 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
 */
 void HAL_I2C_MspDeInit(I2C_HandleTypeDef* hi2c)
 {
-  if(hi2c->Instance==I2C1)
+  if(hi2c->Instance==I2C2)
   {
-  /* USER CODE BEGIN I2C1_MspDeInit 0 */
+  /* USER CODE BEGIN I2C2_MspDeInit 0 */
 
-  /* USER CODE END I2C1_MspDeInit 0 */
+  /* USER CODE END I2C2_MspDeInit 0 */
     /* Peripheral clock disable */
-    __HAL_RCC_I2C1_CLK_DISABLE();
+    __HAL_RCC_I2C2_CLK_DISABLE();
 
-    /**I2C1 GPIO Configuration
-    PB8     ------> I2C1_SCL
-    PB9     ------> I2C1_SDA
+    /**I2C2 GPIO Configuration
+    PB10     ------> I2C2_SCL
+    PB11     ------> I2C2_SDA
     */
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8);
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_10);
 
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_9);
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_11);
 
-  /* USER CODE BEGIN I2C1_MspDeInit 1 */
+  /* USER CODE BEGIN I2C2_MspDeInit 1 */
 
-  /* USER CODE END I2C1_MspDeInit 1 */
+  /* USER CODE END I2C2_MspDeInit 1 */
   }
 
 }
@@ -257,18 +260,10 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* hi2c)
 void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* htim_base)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if(htim_base->Instance==TIM1)
-  {
-  /* USER CODE BEGIN TIM1_MspInit 0 */
-
-  /* USER CODE END TIM1_MspInit 0 */
-    /* Peripheral clock enable */
-    __HAL_RCC_TIM1_CLK_ENABLE();
-  /* USER CODE BEGIN TIM1_MspInit 1 */
-
-  /* USER CODE END TIM1_MspInit 1 */
-  }
-  else if(htim_base->Instance==TIM6)
+  /* TIM1 originally drove PE14 as "the servo" -- wrong, PE14 is really
+   * MOTORD's IN1 (see TIM8 below, the real servo channel). TIM1 is reused
+   * here for the right motor's PWM (MOTORD, PE13/PE14) instead. */
+  if(htim_base->Instance==TIM6)
   {
   /* USER CODE BEGIN TIM6_MspInit 0 */
 
@@ -288,11 +283,11 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* htim_base)
     __HAL_RCC_TIM8_CLK_ENABLE();
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
-    /**TIM8 GPIO Configuration
+    /**TIM8 GPIO Configuration -- servo only now (PC6/CH1). PC8/CH3 dropped:
+    it isn't wired to anything real on this board (see main.h).
     PC6     ------> TIM8_CH1
-    PC8     ------> TIM8_CH3
     */
-    GPIO_InitStruct.Pin = MotorA_PWM_Pin|MotorB_PWM_Pin;
+    GPIO_InitStruct.Pin = Servo_PWM_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -302,6 +297,46 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* htim_base)
   /* USER CODE BEGIN TIM8_MspInit 1 */
 
   /* USER CODE END TIM8_MspInit 1 */
+  }
+  else if(htim_base->Instance==TIM4)
+  {
+    /* TIM4 repurposed 2026-08-25: was the (unused, now-dropped MOTORC)
+     * right encoder. Now the left motor's PWM -- PB8/PB9 are U8's IN2/IN1,
+     * and VREF is hardwired on this board, so speed is set by PWM-ing
+     * whichever direction pin is active (see motor() in main.c). */
+    __HAL_RCC_TIM4_CLK_ENABLE();
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**TIM4 GPIO Configuration
+    PB8     ------> TIM4_CH3 (left motor IN2)
+    PB9     ------> TIM4_CH4 (left motor IN1)
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  }
+  else if(htim_base->Instance==TIM1)
+  {
+    /* TIM1 added 2026-08-25: right motor's PWM -- PE13/PE14 are U12's
+     * IN2/IN1 (MOTORD header). Same VREF-hardwired situation as TIM4
+     * above. TIM1 is an advanced-control timer like TIM8, so its PWM
+     * init (MX_TIM1_Init in main.c) also needs a BreakDeadTime config. */
+    __HAL_RCC_TIM1_CLK_ENABLE();
+
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    /**TIM1 GPIO Configuration
+    PE13     ------> TIM1_CH3 (right motor IN2)
+    PE14     ------> TIM1_CH4 (right motor IN1)
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
+    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
   }
 
 }
@@ -347,29 +382,28 @@ void HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef* htim_encoder)
 
   /* USER CODE END TIM2_MspInit 1 */
   }
-  else if(htim_encoder->Instance==TIM4)
+  /* TIM4/PB6/PB7 removed 2026-08-25: that was MOTORC's encoder. MOTORC is
+   * not used any more (see main.h) -- TIM4 is now the left motor's PWM,
+   * configured in HAL_TIM_Base_MspInit above instead. */
+  else if(htim_encoder->Instance==TIM5)
   {
-  /* USER CODE BEGIN TIM4_MspInit 0 */
+    /* TIM5 added 2026-08-25 for the right motor's (MOTORD) encoder,
+     * PA0/PA1. (First tried TIM3/PB4/PB5 for MOTORB -- conflicted with the
+     * ultrasonic sensor's echo capture, also on TIM3. TIM5 is otherwise
+     * unused in this firmware, no such conflict here.) */
+    __HAL_RCC_TIM5_CLK_ENABLE();
 
-  /* USER CODE END TIM4_MspInit 0 */
-    /* Peripheral clock enable */
-    __HAL_RCC_TIM4_CLK_ENABLE();
-
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    /**TIM4 GPIO Configuration
-    PB6     ------> TIM4_CH1
-    PB7     ------> TIM4_CH2
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    /**TIM5 GPIO Configuration
+    PA0     ------> TIM5_CH1 (right motor encoder A)
+    PA1     ------> TIM5_CH2 (right motor encoder B)
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+    GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN TIM4_MspInit 1 */
-
-  /* USER CODE END TIM4_MspInit 1 */
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM5;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
   }
 
 }
@@ -415,29 +449,10 @@ void HAL_TIM_IC_MspInit(TIM_HandleTypeDef* htim_ic)
 
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim)
 {
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if(htim->Instance==TIM1)
-  {
-  /* USER CODE BEGIN TIM1_MspPostInit 0 */
-
-  /* USER CODE END TIM1_MspPostInit 0 */
-
-    __HAL_RCC_GPIOE_CLK_ENABLE();
-    /**TIM1 GPIO Configuration
-    PE14     ------> TIM1_CH4
-    */
-    GPIO_InitStruct.Pin = GPIO_PIN_14;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF1_TIM1;
-    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN TIM1_MspPostInit 1 */
-
-  /* USER CODE END TIM1_MspPostInit 1 */
-  }
-
+  /* Unused since 2026-08-25 -- TIM1/TIM4/TIM8's PWM pins are all
+   * configured in HAL_TIM_Base_MspInit instead, matching how TIM8
+   * already did it before this file was touched. */
+  (void)htim;
 }
 /**
 * @brief TIM_Base MSP De-Initialization
@@ -447,18 +462,7 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim)
 */
 void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* htim_base)
 {
-  if(htim_base->Instance==TIM1)
-  {
-  /* USER CODE BEGIN TIM1_MspDeInit 0 */
-
-  /* USER CODE END TIM1_MspDeInit 0 */
-    /* Peripheral clock disable */
-    __HAL_RCC_TIM1_CLK_DISABLE();
-  /* USER CODE BEGIN TIM1_MspDeInit 1 */
-
-  /* USER CODE END TIM1_MspDeInit 1 */
-  }
-  else if(htim_base->Instance==TIM6)
+  if(htim_base->Instance==TIM6)
   {
   /* USER CODE BEGIN TIM6_MspDeInit 0 */
 
@@ -477,15 +481,36 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* htim_base)
     /* Peripheral clock disable */
     __HAL_RCC_TIM8_CLK_DISABLE();
 
-    /**TIM8 GPIO Configuration
+    /**TIM8 GPIO Configuration -- servo only now, see HAL_TIM_Base_MspInit.
     PC6     ------> TIM8_CH1
-    PC8     ------> TIM8_CH3
     */
-    HAL_GPIO_DeInit(GPIOC, MotorA_PWM_Pin|MotorB_PWM_Pin);
+    HAL_GPIO_DeInit(GPIOC, Servo_PWM_Pin);
 
   /* USER CODE BEGIN TIM8_MspDeInit 1 */
 
   /* USER CODE END TIM8_MspDeInit 1 */
+  }
+  else if(htim_base->Instance==TIM4)
+  {
+    /* Peripheral clock disable */
+    __HAL_RCC_TIM4_CLK_DISABLE();
+
+    /**TIM4 GPIO Configuration -- left motor PWM, see HAL_TIM_Base_MspInit.
+    PB8     ------> TIM4_CH3
+    PB9     ------> TIM4_CH4
+    */
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8|GPIO_PIN_9);
+  }
+  else if(htim_base->Instance==TIM1)
+  {
+    /* Peripheral clock disable */
+    __HAL_RCC_TIM1_CLK_DISABLE();
+
+    /**TIM1 GPIO Configuration -- right motor PWM, see HAL_TIM_Base_MspInit.
+    PE13     ------> TIM1_CH3
+    PE14     ------> TIM1_CH4
+    */
+    HAL_GPIO_DeInit(GPIOE, GPIO_PIN_13|GPIO_PIN_14);
   }
 
 }
@@ -518,23 +543,17 @@ void HAL_TIM_Encoder_MspDeInit(TIM_HandleTypeDef* htim_encoder)
 
   /* USER CODE END TIM2_MspDeInit 1 */
   }
-  else if(htim_encoder->Instance==TIM4)
+  else if(htim_encoder->Instance==TIM5)
   {
-  /* USER CODE BEGIN TIM4_MspDeInit 0 */
-
-  /* USER CODE END TIM4_MspDeInit 0 */
     /* Peripheral clock disable */
-    __HAL_RCC_TIM4_CLK_DISABLE();
+    __HAL_RCC_TIM5_CLK_DISABLE();
 
-    /**TIM4 GPIO Configuration
-    PB6     ------> TIM4_CH1
-    PB7     ------> TIM4_CH2
+    /**TIM5 GPIO Configuration -- right motor encoder, see
+    HAL_TIM_Encoder_MspInit.
+    PA0     ------> TIM5_CH1
+    PA1     ------> TIM5_CH2
     */
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6|GPIO_PIN_7);
-
-  /* USER CODE BEGIN TIM4_MspDeInit 1 */
-
-  /* USER CODE END TIM4_MspDeInit 1 */
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_0|GPIO_PIN_1);
   }
 
 }

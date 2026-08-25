@@ -127,12 +127,13 @@
 ADC_HandleTypeDef hadc1;
 ADC_HandleTypeDef hadc2;
 
-I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2; /* was hi2c1 -- IMU is really on I2C2 (PB10/PB11), see stm32f4xx_hal_msp.c */
 
-TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim1; /* right motor PWM (MOTORD, PE13/PE14) */
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
+TIM_HandleTypeDef htim5; /* right motor encoder (MOTORD, PA0/PA1) */
 TIM_HandleTypeDef htim6;
 TIM_HandleTypeDef htim8;
 
@@ -192,8 +193,9 @@ static void MX_TIM2_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_TIM4_Init(void);
-static void MX_I2C1_Init(void);
+static void MX_I2C2_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_TIM5_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_ADC2_Init(void);
@@ -319,8 +321,9 @@ int main(void)
   MX_TIM1_Init();
   MX_USART3_UART_Init();
   MX_TIM4_Init();
-  MX_I2C1_Init();
+  MX_I2C2_Init();
   MX_TIM3_Init();
+  MX_TIM5_Init();
   MX_TIM6_Init();
   MX_ADC1_Init();
   MX_ADC2_Init();
@@ -328,8 +331,8 @@ int main(void)
 
   /* Init all my dear libraries */
   OLED_Init();
-  sensors_init(&hi2c1, &sensors);
-  motor_encoder_init(&htim2, &htim4);
+  sensors_init(&hi2c2, &sensors);
+  motor_encoder_init(&htim2, &htim5); /* right encoder moved off TIM4 (now left motor PWM) to TIM5 -- see main.h and MX_TIM5_Init */
 
 //  OLED_ShowString(0,5, "My Display");
   OLED_Refresh_Gram();
@@ -591,32 +594,24 @@ static void MX_ADC2_Init(void)
   * @param None
   * @retval None
   */
-static void MX_I2C1_Init(void)
+static void MX_I2C2_Init(void)
 {
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  /* Renamed from MX_I2C1_Init 2026-08-25 -- the IMU is wired to I2C2
+   * (PB10/PB11) on this board, not I2C1 (PB8/PB9, which is really the
+   * left motor driver's IN1/IN2 here). See stm32f4xx_hal_msp.c. */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 100000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C1_Init 2 */
-
-  /* USER CODE END I2C1_Init 2 */
 
 }
 
@@ -625,28 +620,28 @@ static void MX_I2C1_Init(void)
   * @param None
   * @retval None
   */
+/* Repurposed 2026-08-25: originally drove PE14 as "the servo" -- wrong,
+ * PE14 is really MOTORD's IN1 (see TIM8/main.h). Now the right motor's PWM
+ * (PE13/PE14, MOTORD's IN2/IN1). Same PSC/ARR as TIM4 (0/7199, ~2.2kHz),
+ * the scale MOTORHIGH/MID/LOW/MAX were already tuned against. TIM1 is an
+ * advanced-control timer, so (like TIM8) it needs a BreakDeadTime config
+ * even for plain PWM output. (First tried TIM9/PE5/PE6 for MOTORB's
+ * driver -- moved to MOTORD because MOTORB's encoder pins conflicted with
+ * the ultrasonic sensor; see MX_TIM5_Init.) */
 static void MX_TIM1_Init(void)
 {
-
-  /* USER CODE BEGIN TIM1_Init 0 */
-
-  /* USER CODE END TIM1_Init 0 */
-
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
-  /* USER CODE BEGIN TIM1_Init 1 */
-
-  /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 160;
+  htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 1000;
+  htim1.Init.Period = 7199;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
@@ -669,9 +664,14 @@ static void MX_TIM1_Init(void)
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
   sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
@@ -687,10 +687,6 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM1_Init 2 */
-
-  /* USER CODE END TIM1_Init 2 */
-  HAL_TIM_MspPostInit(&htim1);
 
 }
 
@@ -786,7 +782,10 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
-
+  /* Encoder mode briefly added here 2026-08-25 for a MOTORB-paired right
+   * encoder, then removed: it conflicted with the ultrasonic capture above
+   * (same timer). Right encoder moved to TIM5/MOTORD instead -- see
+   * MX_TIM5_Init. This is purely the ultrasonic timer again. */
   /* USER CODE END TIM3_Init 2 */
 
 }
@@ -799,22 +798,71 @@ static void MX_TIM3_Init(void)
 static void MX_TIM4_Init(void)
 {
 
-  /* USER CODE BEGIN TIM4_Init 0 */
-
-  /* USER CODE END TIM4_Init 0 */
-
-  TIM_Encoder_InitTypeDef sConfig = {0};
+  /* Repurposed 2026-08-25: was MOTORC's encoder (Encoder mode, TI12).
+   * MOTORC isn't used any more -- this is now the left motor's PWM
+   * (PB8/PB9 = U8's IN2/IN1, MOTORA). Same PSC/ARR as TIM1's PWM config
+   * below (0/7199), see its comment for why. */
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM4_Init 1 */
-
-  /* USER CODE END TIM4_Init 1 */
   htim4.Instance = TIM4;
   htim4.Init.Prescaler = 0;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 65535;
+  htim4.Init.Period = 7199;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim4, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+}
+
+/**
+  * @brief TIM5 Initialization Function
+  * @param None
+  * @retval None
+  */
+/* Added 2026-08-25: right motor's encoder (MOTORD, PA0/PA1). Mirrors
+ * TIM2's encoder config (TIM5 is also a 32-bit general-purpose timer). */
+static void MX_TIM5_Init(void)
+{
+  TIM_Encoder_InitTypeDef sConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  htim5.Instance = TIM5;
+  htim5.Init.Prescaler = 0;
+  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim5.Init.Period = 65535;
+  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
@@ -824,19 +872,16 @@ static void MX_TIM4_Init(void)
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
   sConfig.IC2Filter = 0;
-  if (HAL_TIM_Encoder_Init(&htim4, &sConfig) != HAL_OK)
+  if (HAL_TIM_Encoder_Init(&htim5, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM4_Init 2 */
-
-  /* USER CODE END TIM4_Init 2 */
 
 }
 
@@ -896,12 +941,17 @@ static void MX_TIM8_Init(void)
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM8_Init 1 */
-
+  /* Repurposed 2026-08-25: PC6/CH1 is the real servo pin on this board
+   * (STM_Ref called it "MotorA_PWM" -- wrong, see main.h). PSC/ARR changed
+   * from 0/7199 (~2.2kHz, was meant for motor PWM) to 160/1000, copied
+   * from the old TIM1 servo config so SERVOMIN/CENTER/MAX keep meaning
+   * what they already meant (~99Hz, CCR 0-1000 maps to roughly a
+   * 0.95-2.3ms pulse). CH3/PC8 dropped -- unused on this board. */
   /* USER CODE END TIM8_Init 1 */
   htim8.Instance = TIM8;
-  htim8.Init.Prescaler = 0;
+  htim8.Init.Prescaler = 160;
   htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim8.Init.Period = 7199;
+  htim8.Init.Period = 1000;
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim8.Init.RepetitionCounter = 0;
   htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -932,10 +982,6 @@ static void MX_TIM8_Init(void)
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
   sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
   if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1007,20 +1053,23 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE(); /* added for the corrected OLED pins */
 
+  /* MotorA_AIN1/AIN2 and MotorB_CIN1/CIN2 removed 2026-08-25: those were
+   * plain-GPIO direction pins on the wrong (STM_Ref-assumed) pins. The
+   * real motor driver pins are PWM timer channels now (TIM4 CH3/CH4 for
+   * the left motor, TIM1 CH3/CH4 for the right), configured in
+   * HAL_TIM_Base_MspInit (stm32f4xx_hal_msp.c), not here. */
+
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOE, LED3_Pin|MotorB_CIN1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOE, LED3_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level (OLED, corrected to GPIOD) */
   HAL_GPIO_WritePin(GPIOD, OLED_SCLK_Pin|OLED_SDA_Pin|OLED_RESET_Pin|OLED_DC_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, MotorA_AIN2_Pin|MotorA_AIN1_Pin, GPIO_PIN_RESET);
+  /*Configure GPIO pin Output Level (Buzzer corrected to PA8, see main.h) */
+  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(MotorB_CIN2_GPIO_Port, MotorB_CIN2_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, Buzzer_Pin|US_Trigger_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, US_Trigger_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : LED3_Pin */
   GPIO_InitStruct.Pin = LED3_Pin;
@@ -1037,29 +1086,15 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : MotorA_AIN2_Pin MotorA_AIN1_Pin */
-  GPIO_InitStruct.Pin = MotorA_AIN2_Pin|MotorA_AIN1_Pin;
+  /*Configure GPIO pin : Buzzer_Pin (corrected to PA8, see main.h) */
+  GPIO_InitStruct.Pin = Buzzer_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(Buzzer_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : MotorB_CIN2_Pin */
-  GPIO_InitStruct.Pin = MotorB_CIN2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(MotorB_CIN2_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : MotorB_CIN1_Pin */
-  GPIO_InitStruct.Pin = MotorB_CIN1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(MotorB_CIN1_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : Buzzer_Pin US_Trigger_Pin */
-  GPIO_InitStruct.Pin = Buzzer_Pin|US_Trigger_Pin;
+  /*Configure GPIO pin : US_Trigger_Pin */
+  GPIO_InitStruct.Pin = US_Trigger_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -1145,15 +1180,14 @@ static void MX_GPIO_Init(void)
 		{
 			OLED_ShowString(0, 0, "E STOP          ");
 			OLED_Refresh_Gram();
-			HAL_GPIO_WritePin(GPIOE, MotorB_CIN1_Pin, GPIO_PIN_SET);
-			HAL_GPIO_WritePin(GPIOC, MotorB_CIN2_Pin, GPIO_PIN_RESET);
-			__HAL_TIM_SetCompare(&htim8,TIM_CHANNEL_3,0);
+			/* Both direction channels to 0 duty -- motors stopped either way,
+			 * see motor() below for the PWM-through-IN1/IN2 scheme. */
+			__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3,0);
+			__HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0);
+			__HAL_TIM_SetCompare(&htim1,TIM_CHANNEL_3,0);
+			__HAL_TIM_SetCompare(&htim1,TIM_CHANNEL_4,0);
 
-			HAL_GPIO_WritePin(GPIOA, MotorA_AIN1_Pin, GPIO_PIN_SET);
-			HAL_GPIO_WritePin(GPIOA, MotorA_AIN2_Pin, GPIO_PIN_RESET);
-			__HAL_TIM_SetCompare(&htim8,TIM_CHANNEL_1,0);
-
-			htim1.Instance->CCR4 = SERVOCENTER;	//extreme right
+			htim8.Instance->CCR1 = SERVOCENTER;	//extreme right
 		}
 	}
 
@@ -2025,9 +2059,11 @@ void motor(void *argument)
 	//	right_target = 0, left_target = 0;
 	//	right_dir = 0, left_dir = 0;
 
-		HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
-		HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
+		HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
+		HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
+		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
 		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
+		HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
 	  /* Infinite loop */
 	  for(;;)
 	  {
@@ -2055,40 +2091,45 @@ void motor(void *argument)
 		  if(move_dir == 'L')
 			  left_pwmVal_motor = left_pwmVal_motor*TURNRATIO;
 
-		  //LEFT MOTOR
+		  /* Speed control corrected 2026-08-25: this board's AT8236 VREF pins
+		   * are hardwired to 3V3 (see main.h), so there's no separate speed
+		   * pin to PWM like the old htim8 CH1/CH3 lines assumed -- speed is
+		   * now set by PWM-ing whichever direction channel is active and
+		   * holding the other at 0, same left_pwmVal_motor/right_pwmVal_motor
+		   * values as before, just retargeted to the real IN1/IN2 pins. */
+
+		  //LEFT MOTOR (PB9=IN1=TIM4_CH4, PB8=IN2=TIM4_CH3)
 		  if (left_dir>0)//move forward
 		  {
-			  HAL_GPIO_WritePin(GPIOA, MotorA_AIN1_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOA, MotorA_AIN2_Pin, GPIO_PIN_RESET);
-			  __HAL_TIM_SetCompare(&htim8,TIM_CHANNEL_1,left_pwmVal_motor);
+			  __HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,left_pwmVal_motor);
+			  __HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3,0);
 		  }
 		  else if (left_dir<0)//move backward
 		  {
-			  HAL_GPIO_WritePin(GPIOA, MotorA_AIN2_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOA, MotorA_AIN1_Pin, GPIO_PIN_RESET);
-			  __HAL_TIM_SetCompare(&htim8,TIM_CHANNEL_1,left_pwmVal_motor);
+			  __HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3,left_pwmVal_motor);
+			  __HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0);
 		  }
 		  else	//left_dir==0 dont move
 		  {
-			  __HAL_TIM_SetCompare(&htim8,TIM_CHANNEL_1,0);
+			  __HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_3,0);
+			  __HAL_TIM_SetCompare(&htim4,TIM_CHANNEL_4,0);
 		  }
 
-		  //RIGHT MOTOR
+		  //RIGHT MOTOR (PE14=IN1=TIM1_CH4, PE13=IN2=TIM1_CH3, MOTORD/U12)
 		  if (right_dir>0)//move forward
 		  {
-			  HAL_GPIO_WritePin(GPIOE, MotorB_CIN1_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOC, MotorB_CIN2_Pin, GPIO_PIN_RESET);
-			  __HAL_TIM_SetCompare(&htim8,TIM_CHANNEL_3,right_pwmVal_motor);
+			  __HAL_TIM_SetCompare(&htim1,TIM_CHANNEL_4,right_pwmVal_motor);
+			  __HAL_TIM_SetCompare(&htim1,TIM_CHANNEL_3,0);
 		  }
 		  else if (right_dir<0)//move backward
 		  {
-			  HAL_GPIO_WritePin(GPIOC, MotorB_CIN2_Pin, GPIO_PIN_SET);
-			  HAL_GPIO_WritePin(GPIOE, MotorB_CIN1_Pin, GPIO_PIN_RESET);
-			  __HAL_TIM_SetCompare(&htim8,TIM_CHANNEL_3,right_pwmVal_motor);
+			  __HAL_TIM_SetCompare(&htim1,TIM_CHANNEL_3,right_pwmVal_motor);
+			  __HAL_TIM_SetCompare(&htim1,TIM_CHANNEL_4,0);
 		  }
 		  else	//right_dir==0 dont move
 		  {
-			  __HAL_TIM_SetCompare(&htim8,TIM_CHANNEL_3,0);
+			  __HAL_TIM_SetCompare(&htim1,TIM_CHANNEL_3,0);
+			  __HAL_TIM_SetCompare(&htim1,TIM_CHANNEL_4,0);
 		  }
 
 		  // SERVO
@@ -2111,7 +2152,7 @@ void motor(void *argument)
 		  }
 
 	//	  sprintf(oled_display[5], "S pwm:%d\0   ", pwmVal_servo);
-		   htim1.Instance->CCR4 = pwmVal_servo;	//extreme right
+		   htim8.Instance->CCR1 = pwmVal_servo;	//extreme right
 	   osDelay(10); //30
 	  }
   /* USER CODE END motor */
