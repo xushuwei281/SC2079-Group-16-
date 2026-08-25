@@ -2083,14 +2083,29 @@ void motor(void *argument)
 	//	right_target = 0, left_target = 0;
 	//	right_dir = 0, left_dir = 0;
 
+		/* Diagnostic 2026-08-25: prove over UART3 (already confirmed working)
+		 * whether this task's loop runs at all, since the OLED-based check
+		 * was inconclusive. Remove once resolved. */
+		HAL_UART_Transmit(&huart3, (uint8_t *)"MOTOR_TASK_STARTED\r\n", 21, 100);
+
 		HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
 		HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
 		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
 		HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 		HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
+
+		HAL_UART_Transmit(&huart3, (uint8_t *)"MOTOR_PWM_STARTED\r\n", 20, 100);
+
+		uint32_t motor_loop_count = 0;
 	  /* Infinite loop */
 	  for(;;)
 	  {
+		  motor_loop_count++;
+		  if (motor_loop_count % 100 == 1)
+		  {
+			  HAL_UART_Transmit(&huart3, (uint8_t *)"MOTOR_HEARTBEAT\r\n", 17, 100);
+		  }
+
 		  left_pwmVal_motor = pwmVal_motor_target;
 		  right_pwmVal_motor = pwmVal_motor_target;
 
