@@ -341,15 +341,15 @@ written against them.
 - **STM32 (`mdp_stm32` firmware, PlatformIO/STM32Cube HAL, ported from the
   course's `STM_Ref` project — see `stm32/` in this repo):** rear motor
   PWM (DC motor confirmed as **JGB37-520**, 30x gearbox, hall encoder —
-  verified against `DCMotor_Encoder_ServoMotor_DataSheets_v2.pdf`; the
-  H-bridge *driver chip* itself isn't independently named anywhere in the
-  course materials — earlier drafts of this doc named it "AT8236," which
-  doesn't appear in any course document and should be treated as
-  unverified, not fact), steering servo PWM (confirmed as **TD-8120MG**,
-  500-2500µs pulse width, 180° range — same datasheet; earlier drafts
-  named this "HWZ020," which is also unverified and not in any course
-  document), wheel encoders, ICM-20948 IMU. Talks UART only (USART3 @
-  115200) — no logic beyond reading sensors and writing PWM on command.
+  verified against `DCMotor_Encoder_ServoMotor_DataSheets_v2.pdf`; H-bridge
+  driver confirmed as **AT8236**, labeled directly on the annotated board
+  photo in `General Care And Maintenance (STM32 Ver C30D Aug 2025).pdf`
+  — a text search of course materials had missed this earlier since the
+  label is embedded in an image, not extractable text), steering servo
+  PWM (confirmed as **TD-8120MG**, 500-2500µs pulse width, 180° range —
+  same datasheet as the motor), wheel encoders, ICM-20948 IMU. Talks UART
+  only (USART3 @ 115200) — no logic beyond reading sensors and writing
+  PWM on command.
 - **Host:** runs the full ROS2 graph. Physical placement (on the RPi4B
   itself vs. an external host PC) is not yet decided — see below.
 - **Android tablet:** remote controller app, 2D arena display, connects
@@ -426,14 +426,13 @@ HF like the rest of this project's models/datasets — worth doing once
   planner/bringup package? Only decide once, since `pi_infer.py` in the
   non-ROS implementation and this doc both flag "don't duplicate the stitching
   logic in two places."
-- **STM32 pin mapping / part numbers vs. your actual board.** The ported
-  firmware compiles and links, but its GPIO/UART/I2C/TIM assignments and
-  the H-bridge driver chip's control scheme are only confirmed correct
-  if `stm32/` (ported from the course's `STM_Ref` project) was built for
-  the same physical kit — reasonably well-supported (same course, same
-  STM32F407VET6 part, matching calibration terminology) but not proven.
-  Motor (JGB37-520) and servo (TD-8120MG) are independently verified via
-  datasheet; the driver chip itself is unnamed in any course document.
+- ~~STM32 pin mapping / part numbers vs. your actual board~~ — resolved.
+  The course issues one standardized board to every team, and `STM_Ref`
+  (the source `stm32/` was ported from) was written against that same
+  board, so its GPIO/UART/I2C/TIM assignments aren't a per-team wiring
+  guess. Motor (JGB37-520), servo (TD-8120MG), and the H-bridge driver
+  (AT8236) are all independently confirmed against course materials —
+  see "Hardware topology" above.
 
 ## Course requirements this maps to
 
