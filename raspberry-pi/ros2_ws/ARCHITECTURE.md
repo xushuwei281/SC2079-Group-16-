@@ -25,7 +25,7 @@ why that "just works" on competition day but not necessarily elsewhere.
 ```mermaid
 flowchart TB
     subgraph Pi["Raspberry Pi 4B — hardware-bound nodes"]
-        HWBridge["mdp_hardware_bridge<br/>serial_bridge_node<br/>action: execute_moves<br/>topic: estop"]
+        HWBridge["mdp_hardware_bridge<br/>serial_bridge_node<br/>service: execute_moves<br/>topic: estop"]
         AndroidBridge["android_bridge_node<br/>pyserial, RFCOMM"]
         CamDriver["camera driver<br/>libcamera-based, TBD"]
         AndroidBridge -->|calls execute_moves, or publishes estop| HWBridge
@@ -47,6 +47,32 @@ flowchart TB
     AndroidBridge <-->|Bluetooth Serial RFCOMM| Android
 ```
 
+## What each piece does, in plain language
+
+The diagram above is precise but dense. This table is the "what is this
+thing and why does it exist" version — useful context: **`ros2_control`,
+`controller_manager`, and `robot_localization` (EKF) were all in an
+earlier version of this design and were removed entirely** (2026-08-24)
+once we confirmed the STM32 firmware doesn't give ROS2 anything
+continuous to drive or fuse. They're listed at the bottom as a "why
+isn't this here" reference, not as part of the current system.
+
+| Piece | What it actually is | Why it exists |
+| --- | --- | --- |
+| `mdp_hardware_bridge` (`serial_bridge_node`) | A Python ROS2 node on the Pi that opens the UART port to the STM32 and speaks its exact packet format (`FC050` = drive forward 50cm, etc.). | Every other node needs to move the robot without knowing UART byte formats. This is the one place that translates "drive forward 50cm" into the actual bytes, and the one place that reads back `RUN`/`FIN`/`BUS`. |
+| `execute_moves` (service) | A ROS2 *service* — like a function call over the network: caller sends a list of moves, blocks, gets back success/status when the STM32 finishes the whole batch. | The STM32 itself blocks until a maneuver is physically done and gives no progress update. A blocking service call is an honest match for that — there's nothing to report mid-move, and nothing graceful to cancel mid-move either. (This used to be a ROS2 *action* — actions add cancellation and progress feedback, but neither is real here, so a plain service is simpler and equally capable.) |
+| `estop` (topic) | A separate one-way channel, outside `execute_moves`, that immediately writes the STM32's emergency-stop byte. | The firmware checks for e-stop on *every* incoming byte regardless of what it's doing — it's async on the hardware side. Routing it outside the blocking service means e-stop can interrupt a move that's already running, not just queue behind it. |
+| `android_bridge_node` | Bluetooth RFCOMM link to the Android tablet. Translates tablet button-presses into the same `execute_moves` calls the planner makes. | The tablet is a second "driver" of the robot (manual override / demo mode). It reuses the same service so there's only one code path that actually talks to the STM32. |
+| `mdp_interfaces` | A small package holding our custom message/service definitions (`MoveCommand.msg`, `ExecuteMoves.srv`, and later `ObstacleDetection.msg`, `PlanRun.action`). | ROS2 needs a schema for any data type that isn't one of the built-in ones (`std_msgs`, `geometry_msgs`, etc.). This package is just those schemas — no logic. |
+| perception node (`mdp_perception`) | Runs the trained YOLO model on camera frames, publishes what it sees (obstacle ID, symbol label, confidence). | This is the actual "read the image, tell me what symbol is on which obstacle" task — separate from movement so it can run on a beefier PC instead of the Pi. |
+| planner (`mdp_planner` / `mdp_bringup`) | Runs the Hamiltonian-path + Dubins-path algorithm (our own graded implementation) to decide obstacle visit order and turns/straights between them, then calls `execute_moves` once per leg. | This is "the brain" — the only node that decides *where* the robot goes. Everything else just executes what this node asks for or feeds it sensor data. |
+| RViz2 | Off-the-shelf ROS2 visualization tool — no code of ours, just a display. | Satisfies the course's "simulate the robot and algorithms in software" requirement — shows the arena, robot pose, and detections live, without us writing a renderer. |
+| camera driver | Small node that just grabs frames from the Pi camera and publishes them. | Physically has to run on the Pi (camera is attached there), but does no thinking — it hands frames to the perception node running on the PC. |
+| `/robot_pose` | A pose estimate updated once per completed move (dead reckoning: "we commanded +50cm forward, so update belief by that"), not a live stream. | RViz2 and the planner need *some* idea of where the robot is. There's no live odometry to fuse (see below), so this is the honest substitute: update after each confirmed move, not continuously. |
+| **Not in this design:** `ros2_control` / `controller_manager` | A ROS2 framework for driving hardware that accepts *continuous* per-tick setpoints (e.g. "target velocity right now") and reports *continuous* state back. | Doesn't fit here. Our STM32 doesn't take per-tick setpoints — it takes one discrete command ("drive 50cm") and executes it internally, blocking, with no live feedback until done. Using `ros2_control` would mean building a fake continuous interface on top of hardware that fundamentally isn't continuous — extra complexity for no real benefit. |
+| **Not in this design:** `robot_localization` (EKF) | A sensor-fusion node that blends multiple continuous sources (wheel odometry, IMU, GPS...) into one smoothed pose estimate. | Fusion needs continuous streams to fuse. We don't have any — no live odometry topic, no live IMU topic (the IMU is used internally by the STM32 for its own turn correction, not exposed to ROS2). Nothing to feed it. |
+| **Not in this design:** `twist_mux` | A node that arbitrates between multiple `cmd_vel` (velocity command) publishers, so only one drives the robot at a time. | Built for continuous velocity streams from multiple sources (teleop vs. autonomy). We don't have `cmd_vel` streams at all — we have one-shot service calls, and the busy-check inside `execute_moves` already does the same job (reject a second caller while one's running) with far less code. |
+
 ## Design principle: host-side kinematics, split across two hosts
 
 The STM32 does **no** path planning and no ROS-level control-loop math —
@@ -64,7 +90,7 @@ physically be**, not by how "smart" they are:
 
 - **Stays on the Pi** (hardware-bound — the link can't move to another
   machine): `mdp_hardware_bridge` (owns the UART link to STM32 and
-  exposes it as an `execute_moves` action — see "Nodes" below),
+  exposes it as an `execute_moves` service — see "Nodes" below),
   `android_bridge_node` (Bluetooth radio is on the Pi), the camera
   driver (physical camera is on the Pi — only *capture* stays here, not
   inference).
@@ -91,22 +117,23 @@ right now.
 Simpler than the earlier `twist_mux` design, because the underlying
 protocol is discrete, not continuous. Two things can legitimately want
 to drive the robot: manual teleop (Android, via the Pi) and the
-autonomous planner (PC). Both call the *same* `execute_moves` action on
+autonomous planner (PC). Both call the *same* `execute_moves` service on
 `mdp_hardware_bridge` — there's no separate topic each writes to, so
 there's no dual-writer race to design around in the first place.
 
-Arbitration falls out of ROS2 actions' own semantics plus one rule:
+Arbitration is one rule plus the fact that a service call blocks:
 
-- The action server's `goal_callback` **rejects a new goal while one is
-  already executing** (`REJECT` if `_busy` is set — see
-  `serial_bridge_node.py`). Whichever caller's goal lands first runs to
-  completion; the other gets a rejected goal, not silent interleaving.
+- The service handler **rejects a new call while a batch is already
+  executing** (`response.success = False, status = "BUSY_LOCAL"` if
+  `_busy` is set — see `serial_bridge_node.py`). Whichever caller's
+  request lands first runs to completion; the other gets an immediate
+  rejection, not silent interleaving or a queued wait.
 - The STM32 firmware enforces the same rule independently (`BUS`
   response if a new instruction batch arrives mid-execution) — so even
   if the ROS-side check were ever bypassed, the firmware itself won't
   execute two batches concurrently.
 - **E-stop is a separate topic (`estop`, `std_msgs/Empty`), not routed
-  through the action at all.** This matters: the firmware checks for a
+  through the service at all.** This matters: the firmware checks for a
   `Q`-prefixed packet on *every* received packet regardless of what
   `comm_task` is doing, so e-stop is genuinely asynchronous on the
   hardware side. The bridge mirrors that — `_on_estop` writes directly
@@ -118,7 +145,10 @@ This gives the same resilience property the `twist_mux` design was
 built for (manual control isn't blocked by a dead/unreachable planner)
 without needing a priority-arbitration node at all — there's nothing to
 arbitrate between two *streams*, only between two things that might
-each want to submit one *action goal* at a time.
+each want to make one blocking *call* at a time. (An action server was
+the first design here and was reconsidered — see "STM32 serial
+protocol" below for why a plain service turned out to be the better
+fit, not just a simpler one.)
 
 ## Networking across hosts
 
@@ -150,11 +180,11 @@ decisions specific to this project:
 
 | Node | Host | Package | Responsibility |
 | --- | --- | --- | --- |
-| `serial_bridge_node` | Pi | `mdp_hardware_bridge` **(scaffolded, builds clean)** | Owns the UART link to STM32 (USART3 @ 115200). Speaks the firmware's real protocol directly — 5-byte packets (2-char command + 3-digit value), batched behind a `#` trigger, `RUN`/`FIN`/`BUS`/`FUL` status lines. Exposes this as the `execute_moves` action (`mdp_interfaces/ExecuteMoves`) plus an `estop` topic (`std_msgs/Empty`) that writes a `Q` packet outside the action entirely, mirroring the firmware's own asynchronous e-stop handling. See "Command arbitration". |
-| `android_bridge_node` | Pi | `mdp_android_bridge` (not yet scaffolded) | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Movement commands get translated into `execute_moves` goals (same action the planner calls); non-movement commands (obstacle placement, target-face annotation) go to `/android/cmd` for the planner. |
+| `serial_bridge_node` | Pi | `mdp_hardware_bridge` **(scaffolded, builds clean)** | Owns the UART link to STM32 (USART3 @ 115200). Speaks the firmware's real protocol directly — 5-byte packets (2-char command + 3-digit value), batched behind a `#` trigger, `RUN`/`FIN`/`BUS`/`FUL` status lines. Exposes this as the `execute_moves` service (`mdp_interfaces/ExecuteMoves`) plus an `estop` topic (`std_msgs/Empty`) that writes a `Q` packet outside the service entirely, mirroring the firmware's own asynchronous e-stop handling. See "Command arbitration". |
+| `android_bridge_node` | Pi | `mdp_android_bridge` (not yet scaffolded) | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Movement commands get translated into `execute_moves` calls (same service the planner calls); non-movement commands (obstacle placement, target-face annotation) go to `/android/cmd` for the planner. |
 | camera driver | Pi | TBD | Publishes raw camera frames for `mdp_perception` to consume over the network. libcamera-based (see Open Decisions — **not** the legacy `picamera` module). |
 | perception node(s) | PC | `mdp_perception` | Runs the trained YOLO model on camera frames streamed from the Pi, publishes detections. See "Can we use the reference-code checkpoint?" below for the model itself. |
-| autonomy / path planner | PC | `mdp_bringup` or a new `mdp_planner` package | Implements the course-required Hamiltonian-path ordering (nearest-neighbour + 2-opt / exhaustive search over the 5 obstacles) and Dubins path segments between configurations, translated into a sequence of `MoveCommand`s and submitted as one `execute_moves` goal per leg. **This is graded coursework — must be self-implemented, not a stock Nav2 planner.** See `mdp_bringup`'s eventual `planner/` module. |
+| autonomy / path planner | PC | `mdp_bringup` or a new `mdp_planner` package | Implements the course-required Hamiltonian-path ordering (nearest-neighbour + 2-opt / exhaustive search over the 5 obstacles) and Dubins path segments between configurations, translated into a sequence of `MoveCommand`s and submitted as one `execute_moves` call per leg. **This is graded coursework — must be self-implemented, not a stock Nav2 planner.** See `mdp_bringup`'s eventual `planner/` module. |
 | RViz2 | PC | `ros-jazzy-rviz2` (stock) | Satisfies the course's "simulate the physical robot and algorithms in software" display requirement (arena, obstacles, robot pose, recognized images in real time), driven by dead-reckoned pose updates (see "Design principle" above). No Gazebo in this project — RViz2's 2D display covers the literal requirement without a full 3D physics sim. |
 
 `mdp_bringup` (already scaffolded under `src/`) is the launch/config entry
@@ -170,8 +200,8 @@ this task's specific fields (numeric class IDs 11–40, `marker`,
 
 | Topic / service / action | Type | Publisher → Subscriber(s) | Notes |
 |---|---|---|---|
-| `execute_moves` (action) | `mdp_interfaces/ExecuteMoves` **(exists, builds clean)** | android_bridge_node, planner → `serial_bridge_node` | Goal: an ordered list of `MoveCommand{command, value}`. Result: `success`, `status` (`"FIN"`/`"BUS"`/`"FUL"`/...). Feedback: commands sent so far. Only one goal runs at a time — see "Command arbitration". |
-| `estop` | `std_msgs/Empty` **(exists)** | android_bridge_node → `serial_bridge_node` | Writes a `Q` packet immediately, bypassing the action entirely — matches the firmware's own asynchronous e-stop handling (checked on every received packet, regardless of what's executing). |
+| `execute_moves` (service) | `mdp_interfaces/ExecuteMoves` **(exists, builds clean)** | android_bridge_node, planner → `serial_bridge_node` | Request: an ordered list of `MoveCommand{command, value}`. Response: `success`, `status` (`"FIN"`/`"BUS"`/`"FUL"`/...). Call blocks until the batch finishes — no mid-call feedback, since the firmware gives none. Only one call runs at a time — see "Command arbitration". |
+| `estop` | `std_msgs/Empty` **(exists)** | android_bridge_node → `serial_bridge_node` | Writes a `Q` packet immediately, bypassing the service entirely — matches the firmware's own asynchronous e-stop handling (checked on every received packet, regardless of what's executing). |
 | `/robot_pose` | `geometry_msgs/PoseStamped` (stock) | whoever tracks dead-reckoned pose (planner or `serial_bridge_node` — not yet decided) → RViz2 | Updated after each `FIN`. Not a continuous stream — one message per completed move. See "Design principle" for why there's no continuous odometry here. |
 | `/camera/image_raw` | `sensor_msgs/Image` (stock) | camera driver node → `mdp_perception` | From the libcamera-based driver (see Open Decisions). |
 | `/detections` | `mdp_interfaces/ObstacleDetection` (custom, not yet added) | `mdp_perception` → planner, `mdp_bringup` | One message per recognized obstacle: `obstacle_id`, `label` (`"11"`–`"40"` or `"marker"` or `"UNCERTAIN"`), `confidence`, `image` (`sensor_msgs/Image`, for the verification stitch). Mirrors the `image_result` JSON already drafted in the non-ROS implementation's `docs/protocol.md`. |
@@ -257,10 +287,15 @@ exists here, so `ros2_control`/`controller_manager` isn't the right fit
 for this hardware at all — it would need to fake a continuous interface
 on top of a fundamentally discrete, blocking one. Decision: don't.
 `mdp_hardware_bridge` speaks the real protocol directly, exposed as the
-`execute_moves` ROS2 action (`mdp_interfaces/ExecuteMoves` — a
-`MoveCommand[]` goal, `success`/`status` result, "commands sent so far"
-feedback) plus a separate `estop` topic that bypasses the action
-entirely, mirroring the firmware's own async e-stop handling. See
+`execute_moves` ROS2 service (`mdp_interfaces/ExecuteMoves` — a
+`MoveCommand[]` request, `success`/`status` response) plus a separate
+`estop` topic that bypasses the service entirely, mirroring the
+firmware's own async e-stop handling. A service rather than an action:
+the two things an action buys you — mid-flight cancellation and
+incremental feedback — don't hold up against this firmware. Cancellation
+only works pre-trigger anyway (no graceful single-move abort, only the
+blunt e-stop), and "feedback" would only ever reflect fast packet
+writes, not real physical progress (invisible until `FIN`). See
 `mdp_hardware_bridge/serial_bridge_node.py` (scaffolded, builds and
 imports clean, packet encoding unit-checked against the confirmed
 format — not yet run against real hardware).
@@ -284,7 +319,7 @@ format — not yet run against real hardware).
 ## Custom interfaces package (not yet created)
 
 `mdp_interfaces` — **scaffolded 2026-08-24, builds clean.** Currently
-holds `MoveCommand.msg` and `ExecuteMoves.action` (used by
+holds `MoveCommand.msg` and `ExecuteMoves.srv` (used by
 `mdp_hardware_bridge`, verified importable and round-tripping the real
 packet encoding). Still needs `ObstacleDetection.msg` and `PlanRun.action`
 (or `.srv`) added before `mdp_perception` or the planner package can be
@@ -410,7 +445,7 @@ HF like the rest of this project's models/datasets — worth doing once
 - Task 1/2 autonomy, image recognition → perception node + planner
   package.
 - System functionality checklist (comms, movement, image recognition) →
-  the bridge nodes (`mdp_hardware_bridge`'s `execute_moves` action,
+  the bridge nodes (`mdp_hardware_bridge`'s `execute_moves` service,
   `android_bridge_node`).
 
 See the non-ROS implementation's `docs/week2-checklist.md` and

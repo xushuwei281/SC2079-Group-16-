@@ -3,9 +3,14 @@
 Speaks the STM32's actual protocol directly (confirmed by reading the
 ported STM_Ref firmware's comm_task dispatch, see stm32/src/main.c) --
 NOT a continuous ros2_control interface. The firmware executes discrete,
-blocking maneuvers (drive N cm, turn N degrees, ...), not a live
-velocity/steering stream, so this node exposes that as a ROS2 action
-instead of a ros2_control hardware_interface.
+blocking maneuvers (drive N cm, turn N degrees, ...) and gives no
+progress signal while one is running, so this is exposed as a plain
+blocking ROS2 service rather than an action: an action's two real
+advantages (mid-flight cancellation, incremental feedback) don't hold up
+here -- the firmware has no graceful "abort this one move" (only the
+blunt e-stop, which is handled separately below), and there's no
+progress to report between "packets written" (near-instant) and "FIN"
+(the only signal that anything physical actually finished).
 
 Packet format: 5 bytes = 2-char command code + 3-digit zero-padded ASCII
 value (e.g. b"FC050" = drive forward 50cm). A batch of move packets is
@@ -20,14 +25,13 @@ for a long-running batch send/wait.
 import threading
 
 import rclpy
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 import serial
 from std_msgs.msg import Empty
 
-from mdp_interfaces.action import ExecuteMoves
+from mdp_interfaces.srv import ExecuteMoves
 
 # Confirmed valid 2-char command codes from the firmware's comm_task
 # switch statement (stm32/src/main.c).
@@ -38,10 +42,12 @@ class SerialBridgeNode(Node):
     def __init__(self):
         super().__init__("serial_bridge_node")
 
-        # TODO verify on real hardware -- the course's RPi-InfraSetup guide
-        # describes the STM32 link as USB-serial (ttyACMx), not raw GPIO
-        # UART pins, even though the firmware config is USART3 @ 115200.
-        # Confirm the actual device path once the Pi is wired up.
+        # Confirmed 2026-08-25: the STM32 link to the Pi is USB-serial
+        # (ttyACMx), not raw GPIO UART pins, even though the firmware's own
+        # UART peripheral config is USART3 @ 115200 -- the USB-CDC layer
+        # just carries those same bytes. Exact device number (ACM0 vs ACM1,
+        # if anything else on the Pi also enumerates as ACM) still TBD once
+        # the Pi is wired up alongside everything else.
         self.declare_parameter("serial_port", "/dev/ttyACM0")
         self.declare_parameter("baud_rate", 115200)
         # How long to wait for FIN/BUS/FUL after triggering a batch.
@@ -60,21 +66,18 @@ class SerialBridgeNode(Node):
         self._write_lock = threading.Lock()
         self._busy = threading.Event()
 
-        # Actions block for a long time (real motion), so they need their
-        # own thread -- otherwise a running goal would starve the e-stop
-        # subscription's callback from ever running.
+        # The service call blocks for a long time (real motion), so it
+        # needs its own thread -- otherwise a running call would starve
+        # the e-stop subscription's callback from ever running.
         callback_group = ReentrantCallbackGroup()
 
         self._estop_sub = self.create_subscription(
             Empty, "estop", self._on_estop, 10, callback_group=callback_group
         )
-        self._action_server = ActionServer(
-            self,
+        self._service = self.create_service(
             ExecuteMoves,
             "execute_moves",
-            execute_callback=self._execute_callback,
-            goal_callback=self._goal_callback,
-            cancel_callback=self._cancel_callback,
+            self._handle_execute_moves,
             callback_group=callback_group,
         )
 
@@ -97,74 +100,39 @@ class SerialBridgeNode(Node):
             self._serial.write(b"Q\x00\x00\x00\x00")
             self._serial.flush()
 
-    def _goal_callback(self, _goal_request) -> GoalResponse:
+    def _handle_execute_moves(self, request, response):
         if self._busy.is_set():
-            self.get_logger().warn("Rejecting goal -- a batch is already executing")
-            return GoalResponse.REJECT
-        return GoalResponse.ACCEPT
-
-    def _cancel_callback(self, _goal_handle) -> CancelResponse:
-        return CancelResponse.ACCEPT
-
-    def _execute_callback(self, goal_handle):
-        result = ExecuteMoves.Result()
-        commands = goal_handle.request.commands
-        feedback = ExecuteMoves.Feedback()
-        feedback.commands_total = len(commands)
+            response.success = False
+            response.status = "BUSY_LOCAL"
+            return response
 
         self._busy.set()
         try:
             with self._write_lock:
                 self._serial.reset_input_buffer()
-                for i, mc in enumerate(commands):
-                    packet = self._encode(mc.command, mc.value)
-                    self._serial.write(packet)
-                    feedback.commands_sent = i + 1
-                    goal_handle.publish_feedback(feedback)
+                for mc in request.commands:
+                    self._serial.write(self._encode(mc.command, mc.value))
                 # Trigger packet -- starts execution of everything just queued.
                 self._serial.write(b"#\x00\x00\x00\x00")
                 self._serial.flush()
 
-            # Wait for RUN, then FIN/BUS/FUL. Read with a loop of short
-            # timeouts (not one long blocking read) so a cancel request
-            # is noticed promptly instead of only after the whole wait
-            # elapses.
-            status = self._read_status_line(
-                deadline_sec=5.0, goal_handle=goal_handle
-            )
+            status = self._read_status_line(deadline_sec=5.0)
             if status != "RUN":
-                result.success = False
-                result.status = status or "NO_RESPONSE"
-                goal_handle.abort()
-                return result
+                response.success = False
+                response.status = status or "NO_RESPONSE"
+                return response
 
-            status = self._read_status_line(
-                deadline_sec=self._batch_timeout_sec, goal_handle=goal_handle
-            )
-            if goal_handle.is_cancel_requested:
-                goal_handle.canceled()
-                result.success = False
-                result.status = "CANCELED"
-                return result
-
-            result.success = status == "FIN"
-            result.status = status or "TIMEOUT"
-            if result.success:
-                goal_handle.succeed()
-            else:
-                goal_handle.abort()
+            status = self._read_status_line(deadline_sec=self._batch_timeout_sec)
+            response.success = status == "FIN"
+            response.status = status or "TIMEOUT"
         finally:
             self._busy.clear()
-        return result
+        return response
 
-    def _read_status_line(self, deadline_sec: float, goal_handle) -> str:
-        """Poll for a \\r\\n-terminated status line without blocking so long
-        that a cancel request or node shutdown can't be noticed."""
+    def _read_status_line(self, deadline_sec: float) -> str:
         remaining = deadline_sec
         buf = b""
         while remaining > 0:
-            if goal_handle.is_cancel_requested:
-                return ""
             chunk = self._serial.readline()  # bounded by serial timeout=0.5s
             remaining -= 0.5
             if chunk:

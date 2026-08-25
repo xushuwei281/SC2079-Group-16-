@@ -1,11 +1,10 @@
 # Send a batch of discrete move commands to the STM32 and run them as
 # one queued sequence (matches the firmware's own batching: N move
 # packets + a '#' trigger packet, executed back-to-back on the STM32
-# before it replies).
+# before it replies). Blocks until the STM32 replies FIN/BUS/FUL or the
+# bridge's timeout elapses -- the firmware gives no progress signal
+# during execution, so there's nothing meaningful to report mid-call.
 MoveCommand[] commands
 ---
 bool success
 string status
----
-uint32 commands_sent
-uint32 commands_total

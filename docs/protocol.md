@@ -50,6 +50,34 @@ For today's integration pass, the Algorithm side can hardcode a 2-point
 dummy path so RPi↔STM32↔Algorithm can be exercised end-to-end before real
 pathfinding exists.
 
+## Image recognition results (Raspberry Pi → Algorithm PC + Android)
+
+No format existed for this until the CV model was actually trained — added
+now that it's needed.
+
+The **raw frame goes to the Algorithm PC**, not Android: the PC already has
+a TCP link and far more headroom than the Bluetooth serial line, and it's
+the PC that builds the stitched verification image required by the
+checklist ("stitched RAW images... shown as a single image in android or
+PC"). Android gets a lightweight text status only — no image payload over
+Bluetooth.
+
+| Direction | Format | Meaning |
+|---|---|---|
+| RPi → Algo | `{"type":"image_result","obstacle_id":"<id>","label":"<class or UNCERTAIN>","confidence":<float>,"image_b64":"<jpeg>"}` | one detection, raw frame attached |
+| RPi → Android | `STATUS,recognized <label> at <obstacle_id>` | text-only status, no image |
+
+`label` uses the numeric class IDs from the table below (`11`–`40`), or the
+string `marker` for a bull's-eye, or `UNCERTAIN` if confidence is below
+threshold — see `raspberry-pi/cv/pi_infer.py`, which already produces this
+exact shape (`Detection.label`/`.confidence`/`.raw_frame`), it just needs
+`_send_result()` wired to this format instead of its current `TODO`.
+
+The Algorithm PC accumulates `image_result` messages per `obstacle_id` and
+builds the stitched grid the same way `pi_infer.py`'s
+`build_verification_stitch()` sketches it — whichever side ends up owning
+the display, don't duplicate the stitching logic in both places.
+
 ## Image IDs
 
 See `MDP briefing.pdf` / `algarithms_briefing` for the full image ID table
