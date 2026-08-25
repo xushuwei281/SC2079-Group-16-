@@ -6,7 +6,7 @@ built with PlatformIO instead of STM32CubeIDE.
 
 - Toolchain: PlatformIO (`platform = ststm32`, `framework = stm32cube`)
 - Responsibilities: motor control, encoders, IMU, OLED, serial comms with
-  the Raspberry Pi (see `../raspberry-pi/ros2_ws/ARCHITECTURE.md` for the
+  the Raspberry Pi (see `../ros2_ws/ARCHITECTURE.md` for the
   UART protocol this firmware speaks)
 
 ## Build

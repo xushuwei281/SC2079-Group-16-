@@ -3,49 +3,124 @@ name = "mdp-ros2-ws"
 channels = ["https://prefix.dev/robostack-jazzy", "https://prefix.dev/conda-forge"]
 platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
 
-[dependencies]
-# Base ROS dependencies
+# ============================================================================
+# The ROS2 graph is split across two hosts (see ARCHITECTURE.md, "Design
+# principle"), so the dependencies are split the same way — ONE source tree,
+# TWO environments:
+#
+#   pixi run -e pi build     Raspberry Pi 4B    (linux-aarch64)
+#   pixi run -e pc build     laptop/PC or Mac   (linux-64, osx-arm64)
+#
+# The source tree is deliberately NOT split into two workspaces.
+# mdp_interfaces is shared by both hosts, and ROS2 hashes message definitions
+# into the type name — two copies that drift by one field give you nodes that
+# build clean, start clean, discover each other, and then silently never
+# deliver. A single copy makes that failure impossible.
+#
+# There is no usable `default` environment on purpose: every dependency lives
+# in a feature, so `pixi run build` without -e fails immediately with "task
+# not found" instead of quietly building against the wrong dependency set.
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# common — everything BOTH hosts need.
+#
+# Anything added here lands on the Pi as well. Keep heavy things out: torch,
+# ultralytics, rviz2 and the CUDA stack belong in [feature.pc]. Before adding
+# a dependency here, ask "does a node that physically runs on the Pi need
+# this?" — if not, it goes under pc.
+# ----------------------------------------------------------------------------
+[feature.common.dependencies]
 ros-jazzy-ros-base = "*"
+ros-jazzy-rclpy = "*"
+ros-jazzy-ros2cli = "*"
+
+# Build toolchain. mdp_interfaces is an ament_cmake package with rosidl
+# generation and both hosts build it, so both need a compiler.
 pkg-config = "*"
 compilers = "*"
 make = "*"
 ninja = "*"
-ros-jazzy-ros2cli = "*"
-
-# Build tools
 colcon-common-extensions = "*"
 
-# Workspace dependencies
-ros-jazzy-rclpy = "*"
-ros-jazzy-vision-msgs = ">=4.1.1,<5"
-ros-jazzy-cv-bridge = ">=4.1.0,<5"
-ros-jazzy-image-transport = ">=5.1.7,<6"
+# Serial. The Pi needs it at runtime (UART to the STM32, Bluetooth RFCOMM to
+# the tablet); the PC needs it because serial_bridge_node's packet-encoding
+# tests import `serial` without ever opening a port. Pure Python, ~100KB.
 pyserial = ">=3.5,<4"
+
+# TF. Whichever node ends up owning dead-reckoned pose publishes
+# odom -> base_link, and which node that is is still an open decision
+# (planner on the PC vs serial_bridge_node on the Pi), so both get tf2.
 ros-jazzy-tf2-ros = ">=0.36.20,<0.37"
 ros-jazzy-tf2-geometry-msgs = ">=0.36.20,<0.37"
+
+# Image transport plugins must exist on BOTH ends of a compressed topic: the
+# Pi's camera driver publishes, mdp_perception on the PC subscribes.
+ros-jazzy-image-transport = ">=5.1.7,<6"
+ros-jazzy-compressed-image-transport = ">=4.0.7,<5"
+
+[feature.common.tasks]
+clean = { cmd = "rm -rf build install log", description = "Remove colcon build artifacts (build, install, log)" }
+
+# Sourced on activation; created by the first colcon build.
+[feature.common.activation]
+scripts = ["install/setup.bash"]
+
+[feature.common.activation.env]
+# Group 16's dedicated ROS2 domain. On demo day this runs on its own
+# router/hotspot (isolated broadcast domain, no other MDP groups on the same
+# subnet), so this isn't preventing cross-team collisions — it's just hygiene
+# against any other stray ROS2 process on domain 0. Must match on every
+# machine joining this graph. Defined once, in the feature both environments
+# share, on purpose: two copies of this number is exactly the kind of thing
+# that drifts and costs an evening.
+ROS_DOMAIN_ID = "16"
+
+# ----------------------------------------------------------------------------
+# pi — hardware-bound nodes: UART to the STM32, Bluetooth to the tablet,
+# camera capture. No inference, no visualization. This environment is meant to
+# stay small; that is the entire point of it.
+# ----------------------------------------------------------------------------
+[feature.pi]
+platforms = ["linux-aarch64"]
+
+[feature.pi.dependencies]
+# The libcamera-based camera driver goes here once the choice between
+# ros-jazzy-camera-ros and ros-jazzy-v4l2-camera is settled — see "Open
+# decisions" in ARCHITECTURE.md. Not picked here; that's the team's call.
+
+[feature.pi.tasks]
+# Explicit list of what runs on the robot. When you add a new hardware-bound
+# package (android bridge, camera driver), add it here too — otherwise it
+# silently never gets built on the Pi.
+build = { cmd = "colcon build --packages-up-to mdp_hardware_bridge mdp_bringup", description = "Build only the packages that run on the Pi" }
+test = { cmd = "colcon test --packages-up-to mdp_hardware_bridge mdp_bringup", description = "Test only the packages that run on the Pi" }
+
+# ----------------------------------------------------------------------------
+# pc — compute-heavy nodes: YOLO perception, the Hamiltonian+Dubins planner,
+# RViz2. Builds the whole workspace, including the Pi's packages, so the
+# interfaces and the bridge's unit tests are available for development here.
+# ----------------------------------------------------------------------------
+[feature.pc]
+platforms = ["osx-arm64", "linux-64"]
+
+[feature.pc.dependencies]
+ros-jazzy-rviz2 = ">=14.1.20,<15"
+ros-jazzy-cv-bridge = ">=4.1.0,<5"
+ros-jazzy-vision-msgs = ">=4.1.1,<5"
 ros-jazzy-xacro = ">=2.1.1,<3"
 ros-jazzy-robot-state-publisher = ">=3.3.3,<4"
 ros-jazzy-joint-state-publisher = ">=2.4.1,<3"
-ros-jazzy-rviz2 = ">=14.1.20,<15"
-ros-jazzy-compressed-image-transport = ">=4.0.7,<5"
 
-[tasks]
-build = {cmd = "colcon build", description = "Build the ROS workspace"}
-test = {cmd = "colcon test", description = "Run tests for the workspace"}
-clean = {cmd = "rm -rf build install log", description = "Clean build artifacts (build, install, log directories)"}
-
-# Scripts to source on environment activation, found after first colcon build.
-
-[activation]
-scripts = ["install/setup.bash"]
-
-[activation.env]
-# Group 16's dedicated ROS2 domain. On demo day this runs on its own
-# router/hotspot (isolated broadcast domain, no other MDP groups on the
-# same subnet), so this isn't preventing cross-team collisions — it's just
-# hygiene against any other stray ROS2 process on domain 0. Must match on
-# every machine joining this graph (Pi, this Mac, any other host).
-ROS_DOMAIN_ID = "16"
-
-[pypi-dependencies]
+[feature.pc.pypi-dependencies]
+# Pulls torch + torchvision, and on linux-64 the entire NVIDIA CUDA stack.
+# This is the dependency that made splitting the environments worth doing.
 ultralytics = ">=8.4.127, <9"
+
+[feature.pc.tasks]
+build = { cmd = "colcon build", description = "Build the full workspace" }
+test = { cmd = "colcon test", description = "Test the full workspace" }
+
+[environments]
+pi = ["common", "pi"]
+pc = ["common", "pc"]

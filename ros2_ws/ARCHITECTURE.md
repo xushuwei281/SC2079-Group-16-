@@ -1,14 +1,15 @@
 # MDP ROS2 Architecture
 
 SC2079 Group 16 — ROS2 Jazzy implementation of the Raspberry Pi module,
-living at `raspberry-pi/ros2_ws/` in this repo. It implements a
+living at `ros2_ws/` in this repo (top level — the graph spans two
+hosts, so it is not a Raspberry Pi subfolder). It implements a
 **host-side kinematics** architecture: the STM32 is a dumb hardware I/O
 controller, and everything that thinks (control, sensor fusion,
 perception, path planning) runs on the ROS2 host.
 
 This is a parallel track to the non-ROS bespoke-socket implementation in
-[`raspberry-pi/cv/`](../cv/) (raw Bluetooth/UART/TCP, no ROS, alongside
-the existing [`docs/protocol.md`](../../docs/protocol.md)). The trained
+[`raspberry-pi/cv/`](../raspberry-pi/cv/) (raw Bluetooth/UART/TCP, no ROS, alongside
+the existing [`docs/protocol.md`](../docs/protocol.md)). The trained
 CV weights (`Frieddeli/mdp-symbols` on HF) and all the course-material
 research already captured in this repo still apply here — this doc is
 about how the same problem is wired up as a ROS2 graph instead.
@@ -157,7 +158,9 @@ Discovery Server, no `rmw_zenoh`, nothing exotic — because of two
 decisions specific to this project:
 
 1. **Same `ROS_DOMAIN_ID` on every machine** (`16`, set in this
-   workspace's `pixi.toml` under `[activation.env]`, so it's applied
+   workspace's `pixi.toml` under `[feature.common.activation.env]` —
+   the feature both host environments share, so it's defined once and
+   applied
    automatically by `pixi run`/`pixi shell` rather than relying on
    someone remembering to `export` it). Not chosen to dodge other MDP
    groups — see point 2 — just hygiene against any other stray ROS2
@@ -359,12 +362,43 @@ written against them.
 ## Software stack (pixi-ros, ROS2 Jazzy)
 
 Managed via `pixi.toml` in this workspace (robostack-jazzy + conda-forge
-channels), resolved and locked for three platforms: `osx-arm64` (local
-dev on this Mac), `linux-aarch64` (the RPi4B's real architecture — see
-"Where does the ROS2 host actually run?" above), and `linux-64` (a Linux
-laptop/host PC with an NVIDIA GPU, in case perception ends up offloaded
-there rather than run on the Pi — same Track A/Track B split as the
-non-ROS implementation's CV pipeline). All three added and verified 2026-08-24.
+channels), across three platforms: `osx-arm64` (local dev on this Mac),
+`linux-aarch64` (the RPi4B's real architecture), and `linux-64` (a Linux
+laptop/host PC with an NVIDIA GPU). Added and verified 2026-08-24.
+
+**Split into two environments over one source tree, 2026-08-25.** Because
+the graph is split across two hosts, the dependencies are too:
+
+| Environment | Platforms | Packages resolved | For |
+| --- | --- | --- | --- |
+| `pi` | `linux-aarch64` | 544 | Hardware-bound nodes on the RPi4B |
+| `pc` | `linux-64`, `osx-arm64` | 672 / 597 | Perception, planning, RViz2 |
+
+Before the split, one environment covered all three platforms, so the
+`linux-aarch64` solve installed `torch`, `torchvision`, the full NVIDIA
+CUDA stack (`nvidia_cublas`, `nvidia_cudnn`, `nvidia_nccl`, …) and the
+Qt/OGRE tree behind RViz2 **onto a Raspberry Pi 4B** — a machine that in
+this architecture runs no inference and no visualization at all. Several
+GB of dead weight, none of it reachable from any node the Pi launches.
+
+The **source tree is deliberately not split** into a workspace per host.
+`mdp_interfaces` is shared, and ROS2 hashes message definitions into the
+type name: two copies drifting by one field yield nodes that build clean,
+start clean, discover each other over DDS, and then silently never
+deliver — a failure with no error message pointing at its cause. Unused
+source on the Pi costs ~200KB of Python that never executes, since a node
+only runs if something launches it. Cheap insurance against an expensive
+integration bug.
+
+Usage, and which dependency block to add things to, is in
+[`README_PIXI.md`](README_PIXI.md). The short version:
+`pixi run -e pi build` on the robot, `pixi run -e pc build` on a laptop.
+There is no usable `default` environment — running `pixi run build`
+without `-e` errors rather than guessing.
+
+Two packages land on the Pi that look misplaced: `cv_bridge` (transitive
+via `compressed_image_transport`) and `robot_state_publisher` (part of the
+`ros_base` variant). Both are unavoidable and small.
 
 Note on `linux-64` + GPU: the `ultralytics` PyPI dependency pulls in
 `torch`, and PyPI's Linux `torch` wheels bundle CUDA by default (unlike
@@ -374,12 +408,17 @@ runtime one. Confirm CUDA is actually picked up on the target laptop
 deployed there; the driver/CUDA-toolkit version on the laptop itself
 still has to match what the wheel expects.
 
+Per-environment breakdown (the `Environment` column is the `pixi.toml`
+feature each lands in):
+
 | Concern          | Package(s)                                                                                                                                                                            |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core             | `ros-jazzy-ros-base`, `ros-jazzy-rclpy`, `ros-jazzy-ros2cli`                                                                                                                    |
-| Perception       | `ros-jazzy-vision-msgs`, `ros-jazzy-cv-bridge`, `ros-jazzy-image-transport`, `ros-jazzy-compressed-image-transport`, `ultralytics` (pip — not a ROS package) |
-| Bridges          | `pyserial` (Bluetooth RFCOMM + UART), `ros-jazzy-tf2-ros`, `ros-jazzy-tf2-geometry-msgs`                                                                                        |
-| Robot description / visualization | `ros-jazzy-xacro`, `ros-jazzy-robot-state-publisher`, `ros-jazzy-joint-state-publisher`, `ros-jazzy-rviz2`. No Gazebo (`ros-gz-*`) — dropped 2026-08-24, not enough time in the schedule for a full 3D sim track. |
+| Core             | `ros-jazzy-ros-base`, `ros-jazzy-rclpy`, `ros-jazzy-ros2cli` — `common` (both hosts)                                                                          |
+| Bridges          | `pyserial` (Bluetooth RFCOMM + UART), `ros-jazzy-tf2-ros`, `ros-jazzy-tf2-geometry-msgs` — `common`. `pyserial` is shared not because the PC talks to hardware but because the bridge's packet-encoding tests import it. |
+| Image transport  | `ros-jazzy-image-transport`, `ros-jazzy-compressed-image-transport` — `common`. Transport plugins must exist on **both** ends of a compressed topic: the Pi publishes frames, the PC subscribes. |
+| Perception       | `ros-jazzy-vision-msgs`, `ros-jazzy-cv-bridge`, `ultralytics` (pip — not a ROS package) — `pc`                                                                |
+| Robot description / visualization | `ros-jazzy-xacro`, `ros-jazzy-robot-state-publisher`, `ros-jazzy-joint-state-publisher`, `ros-jazzy-rviz2` — `pc`. No Gazebo (`ros-gz-*`) — dropped 2026-08-24, not enough time in the schedule for a full 3D sim track. |
+| Camera driver    | `pi` — not added yet, pending the libcamera choice in "Open decisions".                                                                                       |
 
 No `ros2_control`/`ros2_controllers`/`robot_localization`/`twist_mux` —
 removed 2026-08-24 alongside the rest of the continuous-control design;
@@ -392,7 +431,7 @@ Yes — `optimal_weights.txt` in the course reference code's `img_rec/`
 (confirmed earlier as a genuine Ultralytics `best.pt`, ZIP structure
 verified, trained on the identical 31-class label set) is usable as the
 starting model for `mdp_perception`, copied into this workspace at
-`raspberry-pi/ros2_ws/models/reference_code_best.pt`. Two caveats before
+`ros2_ws/models/reference_code_best.pt`. Two caveats before
 treating it as more than a bootstrap:
 
 - It was trained with **non-square `imgsz=[640,480]` and `rect=True`**
