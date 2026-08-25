@@ -93,8 +93,8 @@ platforms = ["linux-aarch64"]
 # Explicit list of what runs on the robot. When you add a new hardware-bound
 # package (android bridge, camera driver), add it here too — otherwise it
 # silently never gets built on the Pi.
-build = { cmd = "colcon build --packages-up-to mdp_hardware_bridge mdp_bringup", description = "Build only the packages that run on the Pi" }
-test = { cmd = "colcon test --packages-up-to mdp_hardware_bridge mdp_bringup", description = "Test only the packages that run on the Pi" }
+build = { cmd = "colcon build --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_bringup", description = "Build only the packages that run on the Pi" }
+test = { cmd = "colcon test --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_bringup", description = "Test only the packages that run on the Pi" }
 
 # ----------------------------------------------------------------------------
 # pc — compute-heavy nodes: YOLO perception, the Hamiltonian+Dubins planner,

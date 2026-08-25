@@ -184,7 +184,7 @@ decisions specific to this project:
 | Node | Host | Package | Responsibility |
 | --- | --- | --- | --- |
 | `serial_bridge_node` | Pi | `mdp_hardware_bridge` **(scaffolded, builds clean)** | Owns the UART link to STM32 (USART3 @ 115200). Speaks the firmware's real protocol directly — 5-byte packets (2-char command + 3-digit value), batched behind a `#` trigger, `RUN`/`FIN`/`BUS`/`FUL` status lines. Exposes this as the `execute_moves` service (`mdp_interfaces/ExecuteMoves`) plus an `estop` topic (`std_msgs/Empty`) that writes a `Q` packet outside the service entirely, mirroring the firmware's own asynchronous e-stop handling. See "Command arbitration". |
-| `android_bridge_node` | Pi | `mdp_android_bridge` (not yet scaffolded) | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Movement commands get translated into `execute_moves` calls (same service the planner calls); non-movement commands (obstacle placement, target-face annotation) go to `/android/cmd` for the planner. |
+| `android_bridge_node` | Pi | `mdp_android_bridge` **(scaffolded 2026-08-25, builds and imports clean)** | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Movement commands (`FW`/`BW`/`TL`/`TR`) get translated into `execute_moves` calls (same service the planner calls); `STP` publishes on `estop` instead, bypassing the service so it can preempt a move already running; non-movement commands (`ADD`/`SUB`/`FACE` — obstacle placement, target-face annotation) go to `/android/cmd` for the planner. Status text from `/android/status` is relayed back as `STATUS,<text>`, and a completed move as `DONE`. **Not yet run against a real tablet**, and it implements `docs/protocol.md`'s Android table, which that file marks as a negotiable draft — the open question is units: the draft has the tablet sending millimetres, so `FW:50` becomes `FC005` (5cm), and at the firmware's 1cm resolution anything under `FW:5` rounds to a no-op. Confirm with the Android subteam before the first tablet test. |
 | camera driver | Pi | TBD | Publishes raw camera frames for `mdp_perception` to consume over the network. libcamera-based (see Open Decisions — **not** the legacy `picamera` module). |
 | perception node(s) | PC | `mdp_perception` | Runs the trained YOLO model on camera frames streamed from the Pi, publishes detections. See "Can we use the reference-code checkpoint?" below for the model itself. |
 | autonomy / path planner | PC | `mdp_bringup` or a new `mdp_planner` package | Implements the course-required Hamiltonian-path ordering (nearest-neighbour + 2-opt / exhaustive search over the 5 obstacles) and Dubins path segments between configurations, translated into a sequence of `MoveCommand`s and submitted as one `execute_moves` call per leg. **This is graded coursework — must be self-implemented, not a stock Nav2 planner.** See `mdp_bringup`'s eventual `planner/` module. |
@@ -338,6 +338,11 @@ written against them.
 - `teleop.launch.py` — just the Android bridge + hardware bridge, for
   early integration testing before the planner exists (equivalent to the
   non-ROS implementation's Week 2 "prove every comms link works" milestone).
+  Both nodes now exist; this launch file does not yet. Note that
+  `android_bridge_node` assumes `/dev/rfcommN` is already bound — pairing
+  the tablet (`bluetoothctl`) and binding the device
+  (`sudo rfcomm bind 0 <MAC> 1`) happens outside ROS and is the part most
+  likely to need debugging first.
 
 ## Hardware topology
 
