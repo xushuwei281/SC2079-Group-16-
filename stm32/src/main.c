@@ -82,6 +82,13 @@
 
 #define MOVEIROVERSHOOT 3.0f
 
+/* Set to 1 to run a boot-time hardware test instead of normal operation --
+ * sweeps the servo, then spins each motor forward/backward at low speed
+ * while showing live encoder counts on the OLED. No UART/protocol
+ * dependency, since USART3's real wiring hasn't been checked against the
+ * schematic yet. Wheels off the ground before enabling this. */
+#define HARDWARE_TEST_MODE 0
+
 //===INDOOR CALIBRATION===
 #define WHEEL_D_CM_INDOOR 6.47f
 #define MOVEOVERSHOOT_INDOOR 1.5f//1.6f
@@ -380,6 +387,23 @@ int main(void)
   oledUpdateTaskHandle = osThreadNew(oled_update_task, NULL, &oledUpdateTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+  /* Diagnostic 2026-08-25: osThreadNew()'s return is never checked anywhere
+   * in this codebase. If any task failed to create, show which one on the
+   * OLED immediately (before osKernelStart(), independent of any task
+   * actually running) rather than silently continuing. */
+  if (!defaultTaskHandle || !MotorTaskHandle || !EncoderTaskHandle ||
+      !CommTaskHandle || !GyroTaskHandle || !oledUpdateTaskHandle)
+  {
+    sprintf((char *)oled_display[0], "NULL:%c%c%c%c%c%c   ",
+            defaultTaskHandle ? '-' : 'D',
+            MotorTaskHandle ? '-' : 'M',
+            EncoderTaskHandle ? '-' : 'E',
+            CommTaskHandle ? '-' : 'C',
+            GyroTaskHandle ? '-' : 'G',
+            oledUpdateTaskHandle ? '-' : 'O');
+    OLED_ShowString(0, 0, oled_display[0]);
+    OLED_Refresh_Gram();
+  }
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
