@@ -24,20 +24,25 @@ byte to the screen).
 | RPi → Android | `STATUS,<text>` | `STATUS,moving` | free-text status update |
 | RPi → Android | `DONE` | `DONE` | last movement command completed |
 
-## Raspberry Pi ↔ STM32 (UART/serial)
+## Raspberry Pi ↔ STM32 (UART/serial, 115200 baud)
 
-Plain ASCII lines, `\n`-terminated. STM32 ACKs on receipt, then sends
-`DONE` once the physical motion finishes (add odometry to `DONE` once
-encoders are wired up — `DONE:<x>,<y>,<theta>` — not required for the
-first integration pass).
+Fixed **5-byte packets** for instructions, trigger, and e-stop. Handshake lines (`RUN\r\n`, `FIN:<dist>,<heading>\r\n`, `BUS\r\n`, `FUL\r\n`) for execution status and telemetry.
 
-| Direction | Format | Meaning |
-|---|---|---|
-| RPi → STM32 | `FW:<mm>` / `BW:<mm>` | move forward/backward |
-| RPi → STM32 | `TL:<deg>` / `TR:<deg>` | turn left/right |
-| RPi → STM32 | `STP` | stop immediately |
-| STM32 → RPi | `ACK` | command received |
-| STM32 → RPi | `DONE` | motion completed |
+> **Full Specification:** See [`docs/stm32-uart-protocol-spec.md`](stm32-uart-protocol-spec.md) for sequence diagrams, C code templates, and complete packet definitions.
+
+| Direction | Format | Example | Meaning |
+|---|---|---|---|
+| RPi → STM32 | `FC<dist>` / `BC<dist>` | `FC050` | Forward/Backward straight distance in cm (000–999) |
+| RPi → STM32 | `FL<deg>` / `FR<deg>` | `FL090` | Forward Left/Right turn in degrees (000–360) |
+| RPi → STM32 | `BL<deg>` / `BR<deg>` | `BL045` | Backward Left/Right turn in degrees (000–360) |
+| RPi → STM32 | `FU<dist>` / `BU<dist>` | `FU020` | Forward/Backward until ultrasound reads `dist` cm |
+| RPi → STM32 | `b"#\x00\x00\x00\x00"` | `#\x00...` | **Trigger:** Begin executing queued batch |
+| RPi → STM32 | `b"Q\x00\x00\x00\x00"` | `Q\x00...` | **Emergency Stop:** Immediate ISR motor cutoff |
+| STM32 → RPi | `RUN\r\n` | `RUN` | Batch execution started |
+| STM32 → RPi | `FIN:<dist>,<heading>\r\n` | `FIN:50.2,0.4` | Batch completed with measured encoder distance (cm) & gyro heading (deg) |
+| STM32 → RPi | `BUS\r\n` | `BUS` | Rejected: STM32 busy executing a move (Pi retries) |
+| STM32 → RPi | `FUL\r\n` | `FUL` | Rejected: Command queue full (>40) |
+
 
 ## Raspberry Pi ↔ Algorithm (PC) (TCP, JSON lines)
 

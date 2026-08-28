@@ -16,6 +16,7 @@ setup(
     maintainer_email="frieddeli@gmail.com",
     description="UART bridge to the STM32 motor controller (discrete move-command protocol)",
     license="Apache-2.0",
+    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "serial_bridge_node = mdp_hardware_bridge.serial_bridge_node:main",

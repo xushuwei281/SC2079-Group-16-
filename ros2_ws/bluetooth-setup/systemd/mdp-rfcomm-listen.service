@@ -1,0 +1,14 @@
+[Unit]
+Description=MDP RFCOMM listener, binds incoming Android SPP connection to /dev/rfcomm0
+After=mdp-bluetooth-setup.service
+Requires=mdp-bluetooth-setup.service
+
+[Service]
+Type=simple
+ExecStart=/opt/mdp/bluetooth-setup/rfcomm-listen.sh
+Restart=always
+RestartSec=1
+User=root
+
+[Install]
+WantedBy=multi-user.target

@@ -8,6 +8,10 @@
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>mdp_hardware_bridge</exec_depend>
+  <exec_depend>mdp_android_bridge</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

@@ -22,32 +22,53 @@ node mirrors that by never gating the e-stop write behind the lock used
 for a long-running batch send/wait.
 """
 
+import math
+import os
 import threading
+import time
+from typing import Optional
 
+from geometry_msgs.msg import PoseStamped, TransformStamped
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 import serial
+import serial.tools.list_ports
 from std_msgs.msg import Empty
+import tf2_ros
 
+from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves
 
 # Confirmed valid 2-char command codes from the firmware's comm_task
 # switch statement (stm32/src/main.c).
 _VALID_COMMANDS = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU"}
 
+# Firmware queue capacity: instrList[40][5] (stm32/src/main.c). The '#'
+# trigger is NOT stored by the firmware, so all 40 slots take real moves.
+_MAX_BATCH = 40
+
+# Retries when the firmware answers BUS (a previous batch was still
+# executing when our trigger landed -- e.g. right after a missed FIN).
+_BUS_RETRIES = 3
+
+# Standard candidate device nodes for STM32 USB-CDC / UART
+_DEFAULT_CANDIDATE_PORTS = [
+    "/dev/ttySTM32",
+    "/dev/ttyACM0",
+    "/dev/ttyACM1",
+    "/dev/ttyUSB0",
+    "/dev/ttyUSB1",
+]
+
 
 class SerialBridgeNode(Node):
     def __init__(self):
         super().__init__("serial_bridge_node")
 
-        # Confirmed 2026-08-25: the STM32 link to the Pi is USB-serial
-        # (ttyACMx), not raw GPIO UART pins, even though the firmware's own
-        # UART peripheral config is USART3 @ 115200 -- the USB-CDC layer
-        # just carries those same bytes. Exact device number (ACM0 vs ACM1,
-        # if anything else on the Pi also enumerates as ACM) still TBD once
-        # the Pi is wired up alongside everything else.
+        # Configured serial port: explicit path (e.g. /dev/ttyACM0, /dev/ttySTM32)
+        # or 'auto' to auto-detect from available devices.
         self.declare_parameter("serial_port", "/dev/ttyACM0")
         self.declare_parameter("baud_rate", 115200)
         # How long to wait for FIN/BUS/FUL after triggering a batch.
@@ -55,12 +76,30 @@ class SerialBridgeNode(Node):
         # acceleration/deceleration ramps), so this needs real headroom --
         # start generous and tighten once you know real maneuver timing.
         self.declare_parameter("batch_timeout_sec", 30.0)
+        self.declare_parameter("reconnect_interval_sec", 2.0)
+        self.declare_parameter("auto_reconnect", True)
+        self.declare_parameter("publish_tf", True)
+        self.declare_parameter("odom_frame_id", "odom")
+        self.declare_parameter("base_frame_id", "base_link")
 
-        port = self.get_parameter("serial_port").value
-        baud = self.get_parameter("baud_rate").value
+        self._configured_port = self.get_parameter("serial_port").value
+        self._baud = self.get_parameter("baud_rate").value
         self._batch_timeout_sec = self.get_parameter("batch_timeout_sec").value
+        self._auto_reconnect = self.get_parameter("auto_reconnect").value
+        reconnect_interval = self.get_parameter("reconnect_interval_sec").value
+        self._publish_tf = self.get_parameter("publish_tf").value
+        self._odom_frame_id = self.get_parameter("odom_frame_id").value
+        self._base_frame_id = self.get_parameter("base_frame_id").value
 
-        self._serial = serial.Serial(port, baud, timeout=0.5)
+        # Robot dead-reckoning state (in meters and radians)
+        self._x: float = 0.0
+        self._y: float = 0.0
+        self._yaw: float = 0.0
+
+        self._serial: Optional[serial.Serial] = None
+        self._active_port: Optional[str] = None
+        self._last_warn_time: float = 0.0
+
         # Guards raw writes only -- never held across a blocking read, so
         # e-stop can always preempt a batch that's mid-execution.
         self._write_lock = threading.Lock()
@@ -70,6 +109,9 @@ class SerialBridgeNode(Node):
         # needs its own thread -- otherwise a running call would starve
         # the e-stop subscription's callback from ever running.
         callback_group = ReentrantCallbackGroup()
+
+        self._pose_pub = self.create_publisher(PoseStamped, "/robot_pose", 10)
+        self._tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
         self._estop_sub = self.create_subscription(
             Empty, "estop", self._on_estop, 10, callback_group=callback_group
@@ -81,7 +123,82 @@ class SerialBridgeNode(Node):
             callback_group=callback_group,
         )
 
-        self.get_logger().info(f"Connected to STM32 on {port} @ {baud}")
+        # Attempt initial connection
+        self._try_connect()
+
+        # Background periodic reconnection check
+        if self._auto_reconnect:
+            self._timer = self.create_timer(
+                reconnect_interval, self._check_connection, callback_group=callback_group
+            )
+        else:
+            self._timer = None
+
+    def _find_candidate_ports(self) -> list[str]:
+        candidates: list[str] = []
+        if self._configured_port and self._configured_port.lower() != "auto":
+            candidates.append(self._configured_port)
+
+        for dev in _DEFAULT_CANDIDATE_PORTS:
+            if dev not in candidates:
+                candidates.append(dev)
+
+        try:
+            for port_info in serial.tools.list_ports.comports():
+                dev = port_info.device
+                if dev not in candidates:
+                    candidates.append(dev)
+        except Exception:
+            pass
+
+        return candidates
+
+    def _try_connect(self) -> bool:
+        with self._write_lock:
+            if self._serial is not None and self._serial.is_open:
+                return True
+
+            self._close_serial_locked()
+
+            candidates = self._find_candidate_ports()
+            for port in candidates:
+                if not os.path.exists(port):
+                    continue
+                try:
+                    s = serial.Serial(port, self._baud, timeout=0.5)
+                    self._serial = s
+                    self._active_port = port
+                    self.get_logger().info(f"Connected to STM32 on {port} @ {self._baud}")
+                    return True
+                except (serial.SerialException, OSError) as exc:
+                    self.get_logger().debug(f"Failed to open {port}: {exc}")
+
+            now = time.monotonic()
+            if now - self._last_warn_time > 5.0:
+                self._last_warn_time = now
+                if candidates:
+                    self.get_logger().warn(
+                        f"STM32 not connected. Tried candidates: {candidates}. Will keep retrying."
+                    )
+                else:
+                    self.get_logger().warn(
+                        "STM32 not connected (no candidate serial ports found). Will keep retrying."
+                    )
+            return False
+
+    def _close_serial_locked(self) -> None:
+        if self._serial is not None:
+            try:
+                if self._serial.is_open:
+                    self._serial.close()
+            except Exception:
+                pass
+            self._serial = None
+            self._active_port = None
+
+    def _check_connection(self) -> None:
+        if self._serial is None or not self._serial.is_open:
+            self._try_connect()
 
     def _encode(self, command: str, value: int) -> bytes:
         if command not in _VALID_COMMANDS:
@@ -97,8 +214,15 @@ class SerialBridgeNode(Node):
     def _on_estop(self, _msg: Empty) -> None:
         self.get_logger().warn("E-STOP requested")
         with self._write_lock:
-            self._serial.write(b"Q\x00\x00\x00\x00")
-            self._serial.flush()
+            if self._serial is None or not self._serial.is_open:
+                self.get_logger().error("E-STOP requested but STM32 is not connected")
+                return
+            try:
+                self._serial.write(b"Q\x00\x00\x00\x00")
+                self._serial.flush()
+            except (serial.SerialException, OSError) as exc:
+                self.get_logger().error(f"Failed to write E-STOP to STM32: {exc}")
+                self._close_serial_locked()
 
     def _handle_execute_moves(self, request, response):
         if self._busy.is_set():
@@ -106,40 +230,174 @@ class SerialBridgeNode(Node):
             response.status = "BUSY_LOCAL"
             return response
 
+        if len(request.commands) > _MAX_BATCH:
+            response.success = False
+            response.status = f"TOO_MANY ({len(request.commands)} > {_MAX_BATCH})"
+            return response
+
+        if not self._try_connect():
+            response.success = False
+            response.status = "DISCONNECTED"
+            return response
+
         self._busy.set()
         try:
-            with self._write_lock:
-                self._serial.reset_input_buffer()
-                for mc in request.commands:
-                    self._serial.write(self._encode(mc.command, mc.value))
-                # Trigger packet -- starts execution of everything just queued.
-                self._serial.write(b"#\x00\x00\x00\x00")
-                self._serial.flush()
+            status = ""
+            for _ in range(_BUS_RETRIES):
+                with self._write_lock:
+                    if self._serial is None or not self._serial.is_open:
+                        response.success = False
+                        response.status = "DISCONNECTED"
+                        return response
+                    try:
+                        self._serial.reset_input_buffer()
+                        for mc in request.commands:
+                            self._serial.write(self._encode(mc.command, mc.value))
+                            self._serial.flush()
+                            time.sleep(0.015)
+                        # Trigger packet -- starts execution of everything just queued.
+                        self._serial.write(b"#\x00\x00\x00\x00")
+                        self._serial.flush()
+                    except (serial.SerialException, OSError) as exc:
+                        self.get_logger().error(f"Serial write error: {exc}")
+                        self._close_serial_locked()
+                        response.success = False
+                        response.status = "SERIAL_ERROR"
+                        return response
 
-            status = self._read_status_line(deadline_sec=5.0)
+                status = self._read_status_line(deadline_sec=5.0)
+                if status == "BUS":
+                    # Firmware was mid-batch; our packets were rejected
+                    # (not queued), so resending the whole batch is safe.
+                    time.sleep(1.0)
+                    continue
+                break
+
             if status != "RUN":
                 response.success = False
                 response.status = status or "NO_RESPONSE"
                 return response
 
             status = self._read_status_line(deadline_sec=self._batch_timeout_sec)
-            response.success = status == "FIN"
+            response.success = status.startswith("FIN")
             response.status = status or "TIMEOUT"
+            if response.success:
+                self._update_and_publish_pose(status, request.commands)
         finally:
             self._busy.clear()
         return response
 
+    def _update_and_publish_pose(self, status: str, commands: list[MoveCommand]) -> None:
+        """Update dead-reckoning pose and broadcast TF transform.
+
+        If the firmware sent measured feedback ('FIN:<dist_cm>,<heading_deg>'),
+        we use the real sensor-fused distance and gyro heading. Otherwise,
+        we fall back to nominal kinematics from the commanded list.
+        """
+        if status.startswith("FIN:"):
+            payload = status[4:].strip()
+            try:
+                dist_str, heading_str = payload.split(",")
+                dist_m = float(dist_str) / 100.0
+                measured_yaw = math.radians(float(heading_str))
+
+                # If the batch contained purely backward moves, distance delta is negative
+                is_backward = all(mc.command in {"BC", "BL", "BR", "BU"} for mc in commands)
+                if is_backward and dist_m > 0:
+                    dist_m = -dist_m
+
+                self._x += dist_m * math.cos(measured_yaw)
+                self._y += dist_m * math.sin(measured_yaw)
+                self._yaw = measured_yaw
+            except Exception as exc:
+                self.get_logger().warn(f"Failed to parse sensor feedback from {status!r}: {exc}")
+                self._accumulate_nominal(commands)
+        else:
+            self._accumulate_nominal(commands)
+
+        # Normalize yaw to (-pi, pi]
+        self._yaw = (self._yaw + math.pi) % (2.0 * math.pi) - math.pi
+
+        # Publish PoseStamped
+        now = self.get_clock().now().to_msg()
+        pose_msg = PoseStamped()
+        pose_msg.header.stamp = now
+        pose_msg.header.frame_id = self._odom_frame_id
+        pose_msg.pose.position.x = float(self._x)
+        pose_msg.pose.position.y = float(self._y)
+        pose_msg.pose.position.z = 0.0
+
+        qz = math.sin(self._yaw / 2.0)
+        qw = math.cos(self._yaw / 2.0)
+        pose_msg.pose.orientation.z = float(qz)
+        pose_msg.pose.orientation.w = float(qw)
+        self._pose_pub.publish(pose_msg)
+
+        # Broadcast TF odom -> base_link
+        if self._publish_tf:
+            tf_msg = TransformStamped()
+            tf_msg.header.stamp = now
+            tf_msg.header.frame_id = self._odom_frame_id
+            tf_msg.child_frame_id = self._base_frame_id
+            tf_msg.transform.translation.x = float(self._x)
+            tf_msg.transform.translation.y = float(self._y)
+            tf_msg.transform.translation.z = 0.0
+            tf_msg.transform.rotation.z = float(qz)
+            tf_msg.transform.rotation.w = float(qw)
+            self._tf_broadcaster.sendTransform(tf_msg)
+
+        self.get_logger().info(
+            f"Pose updated: x={self._x:.3f}m, y={self._y:.3f}m, yaw={math.degrees(self._yaw):.1f}°"
+        )
+
+    def _accumulate_nominal(self, commands: list[MoveCommand]) -> None:
+        """Nominal kinematic integration when raw sensor feedback is unavailable."""
+        for mc in commands:
+            cmd = mc.command
+            val = float(mc.value)
+            if cmd in {"FC", "FU"}:
+                d = val / 100.0
+                self._x += d * math.cos(self._yaw)
+                self._y += d * math.sin(self._yaw)
+            elif cmd in {"BC", "BU"}:
+                d = val / 100.0
+                self._x -= d * math.cos(self._yaw)
+                self._y -= d * math.sin(self._yaw)
+            elif cmd == "FL":
+                self._yaw += math.radians(val)
+            elif cmd == "FR":
+                self._yaw -= math.radians(val)
+            elif cmd == "BL":
+                self._yaw -= math.radians(val)
+            elif cmd == "BR":
+                self._yaw += math.radians(val)
+
     def _read_status_line(self, deadline_sec: float) -> str:
-        remaining = deadline_sec
         buf = b""
-        while remaining > 0:
-            chunk = self._serial.readline()  # bounded by serial timeout=0.5s
-            remaining -= 0.5
+        deadline = time.monotonic() + deadline_sec
+        while time.monotonic() < deadline:
+            with self._write_lock:
+                if self._serial is None or not self._serial.is_open:
+                    return ""
+                try:
+                    chunk = self._serial.readline()  # bounded by serial timeout=0.5s
+                except (serial.SerialException, OSError) as exc:
+                    self.get_logger().error(f"Serial read error: {exc}")
+                    self._close_serial_locked()
+                    return ""
+
             if chunk:
                 buf += chunk
                 if buf.endswith(b"\n"):
                     return buf.decode("ascii", errors="replace").strip()
         return ""
+
+    def destroy_node(self):
+        if self._timer is not None:
+            self._timer.cancel()
+        with self._write_lock:
+            self._close_serial_locked()
+        return super().destroy_node()
 
 
 def main(args=None):

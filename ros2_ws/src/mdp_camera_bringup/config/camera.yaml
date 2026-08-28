@@ -1,0 +1,23 @@
+# Parameters for v4l2_camera_node driving the PiCamera V2.1 (IMX219).
+#
+# The node must run with LD_PRELOAD=/usr/libexec/aarch64-linux-gnu/libcamera/
+# v4l2-compat.so (set in launch/camera.launch.py) so /dev/video0 is the CSI
+# camera exposed by system libcamera, not the unusable raw Unicam node.
+#
+# 640x480 matches the reference checkpoint's training resolution
+# (imgsz=[640,480], rect=True — see ARCHITECTURE.md). pixel_format must be
+# YUYV: it is the format v4l2_camera can actually convert (via cv_bridge) —
+# RGB3 frames negotiate fine but crash the node on conversion
+# ("Unrecognized image encoding"). output_encoding=rgb8 gives perception
+# standard rgb8 frames; the Pi does the YUYV->RGB conversion.
+#
+# Topic contract (ARCHITECTURE.md): the driver publishes
+#   /image_raw    sensor_msgs/Image   (rgb8)
+#   /camera_info  sensor_msgs/CameraInfo
+/camera:
+  ros__parameters:
+    device: /dev/video0
+    image_size: [640, 480]
+    pixel_format: YUYV
+    output_encoding: rgb8
+    camera_frame_id: camera_link

@@ -1,7 +1,5 @@
 #include "oled.h"
-
-#include "stdlib.h"
-
+#include <stdlib.h>
 #include "oledfont.h"
 
 uint8_t OLED_GRAM[128][8];	 

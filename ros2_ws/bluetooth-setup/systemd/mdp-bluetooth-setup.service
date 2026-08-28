@@ -1,0 +1,12 @@
+[Unit]
+Description=MDP Bluetooth adapter bring-up + SPP SDP registration
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mdp/bluetooth-setup/bring-up-and-register.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

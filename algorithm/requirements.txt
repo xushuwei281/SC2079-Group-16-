@@ -1,0 +1,7 @@
+# Pure-Python pathfinding + arena simulator.
+# No ROS2 dependency here -- this package is imported both by the standalone
+# pygame simulator (B.1/B.2/B.3 deliverable) and by mdp_bringup/planner_core.py,
+# so the two views can never drift apart.
+numpy>=1.24
+pygame>=2.0
+scipy>=1.10

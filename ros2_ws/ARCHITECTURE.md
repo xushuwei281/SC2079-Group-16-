@@ -335,14 +335,21 @@ written against them.
   separate sim variant since there's no Gazebo in this project (see
   "Course requirements this maps to" for how the course's simulation
   requirement is still satisfied).
-- `teleop.launch.py` — just the Android bridge + hardware bridge, for
-  early integration testing before the planner exists (equivalent to the
-  non-ROS implementation's Week 2 "prove every comms link works" milestone).
-  Both nodes now exist; this launch file does not yet. Note that
-  `android_bridge_node` assumes `/dev/rfcommN` is already bound — pairing
-  the tablet (`bluetoothctl`) and binding the device
-  (`sudo rfcomm bind 0 <MAC> 1`) happens outside ROS and is the part most
-  likely to need debugging first.
+- `teleop.launch.py` **(added 2026-08-26, in `mdp_bringup/launch/`)** — just
+  the Android bridge + hardware bridge, for early integration testing
+  before the planner exists (equivalent to the non-ROS implementation's
+  Week 2 "prove every comms link works" milestone). `android_bridge_node`
+  assumes `/dev/rfcomm0` is already bound to an accepted connection —
+  pairing the tablet is still a manual one-time step
+  (`ros2_ws/bluetooth-setup/pair-agent.sh`), but the bind itself is now
+  automated: **not** `rfcomm bind` (that's for this machine initiating an
+  *outgoing* connection to a known remote device — the wrong role here,
+  since the Android app is the one calling `connect()`), but `rfcomm watch`
+  running persistently under systemd, so the Pi is always ready to accept a
+  connection without a human running commands first. See
+  `ros2_ws/bluetooth-setup/README.md` for the full setup (adapter
+  power-on + SDP registration + the `rfcomm watch` listener, each as its
+  own systemd unit).
 
 ## Hardware topology
 

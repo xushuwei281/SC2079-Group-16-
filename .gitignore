@@ -1,1 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+
+# ROS 2 Build Artifacts
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+ros2_ws/.pixi/
+
+# PlatformIO & Embedded Builds
+.pio/
+*/.pio/
+stm32/Debug/
+stm32/.pio/
+*.elf
+*.bin
+*.hex
+*.list
+*.map
+*.o
+*.d
+*.su
+
+# IDE & OS files
 .DS_Store
+.vscode/
+.idea/

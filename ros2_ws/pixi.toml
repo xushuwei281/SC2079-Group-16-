@@ -3,6 +3,14 @@ name = "mdp-ros2-ws"
 channels = ["https://prefix.dev/robostack-jazzy", "https://prefix.dev/conda-forge"]
 platforms = ["osx-arm64", "linux-aarch64", "linux-64"]
 
+# The Pi runs Debian 13 (trixie, glibc 2.41); any x86 laptop built in the
+# last decade clears this too. Without this, the solver assumes conda-forge's
+# 2.17 baseline when locking off-machine and rejects libudev1/libcamera,
+# which camera_ros needs (added 2026-08-26).
+[system-requirements]
+linux = "5.15"
+libc = { version = "2.34", family = "glibc" }
+
 # ============================================================================
 # The ROS2 graph is split across two hosts (see ARCHITECTURE.md, "Design
 # principle"), so the dependencies are split the same way — ONE source tree,
@@ -85,16 +93,28 @@ ROS_DOMAIN_ID = "16"
 platforms = ["linux-aarch64"]
 
 [feature.pi.dependencies]
-# The libcamera-based camera driver goes here once the choice between
-# ros-jazzy-camera-ros and ros-jazzy-v4l2-camera is settled — see "Open
-# decisions" in ARCHITECTURE.md. Not picked here; that's the team's call.
+# Camera driver: v4l2_camera running against Raspberry Pi's official
+# libcamera-V4L2 adaptation layer (LD_PRELOAD of
+# /usr/libexec/aarch64-linux-gnu/libcamera/v4l2-compat.so, set in
+# mdp_camera_bringup's launch file). camera_ros was tried first (2026-08-26)
+# but its conda libcamera (0.5.2) cannot drive Debian trixie's newer kernel
+# media graph (system libcamera is 0.7.2+rpt) — the IPA proxy init times out
+# regardless of tuning-file fixes. The compat layer runs SYSTEM libcamera and
+# exposes the IMX219 as an ordinary V4L2 device offering RGB3/640x480, so
+# perception gets rgb8 frames with no conversion step.
+ros-jazzy-v4l2-camera = "*"
+
+# Foxglove Studio websocket bridge (default ws://<pi>:8765) for live
+# visualization/debugging from a laptop.
+ros-jazzy-foxglove-bridge = "*"
 
 [feature.pi.tasks]
 # Explicit list of what runs on the robot. When you add a new hardware-bound
-# package (android bridge, camera driver), add it here too — otherwise it
-# silently never gets built on the Pi.
-build = { cmd = "colcon build --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_bringup", description = "Build only the packages that run on the Pi" }
-test = { cmd = "colcon test --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_bringup", description = "Test only the packages that run on the Pi" }
+# package, add it here too — otherwise it silently never gets built on the Pi.
+build = { cmd = "colcon build --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_camera_bringup mdp_bringup", description = "Build only the packages that run on the Pi" }
+test = { cmd = "colcon test --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_camera_bringup mdp_bringup", description = "Test only the packages that run on the Pi" }
+camera = { cmd = "ros2 launch mdp_camera_bringup camera.launch.py", description = "Start the Pi camera driver" }
+foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", description = "Start the Foxglove websocket bridge (ws://mdp.local:8765)" }
 
 # ----------------------------------------------------------------------------
 # pc — compute-heavy nodes: YOLO perception, the Hamiltonian+Dubins planner,
