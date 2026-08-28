@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "serial_bridge_node = mdp_hardware_bridge.serial_bridge_node:main",
+            "teleop_keyboard = mdp_hardware_bridge.teleop_keyboard:main",
         ],
     },
 )
