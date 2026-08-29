@@ -10,7 +10,12 @@ Launches all hardware-bound and autonomous mission nodes in one command:
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    TimerAction,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -82,15 +87,23 @@ def generate_launch_description():
         output="screen",
     )
 
-    return LaunchDescription(
-        [
-            zenoh_router,
-            stm32_port_arg,
-            rfcomm_device_arg,
+    # Delayed launch of all ROS nodes (gives Zenoh router 2.0s to bind and start listening)
+    delayed_nodes = TimerAction(
+        period=2.0,
+        actions=[
             hardware_bridge,
             android_bridge,
             camera_launch,
             planner,
             foxglove,
+        ],
+    )
+
+    return LaunchDescription(
+        [
+            zenoh_router,
+            stm32_port_arg,
+            rfcomm_device_arg,
+            delayed_nodes,
         ]
     )
