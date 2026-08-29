@@ -4,5 +4,10 @@
     endpoints: [
       "tcp/100.70.103.60:7447"
     ]
+  },
+  transport: {
+    shared_memory: {
+      enabled: false
+    }
   }
 }
