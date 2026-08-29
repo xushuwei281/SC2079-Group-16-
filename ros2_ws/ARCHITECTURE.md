@@ -164,6 +164,8 @@ Both machines join the same ROS2 graph via **`rmw_zenoh_cpp`** (configured in `p
    `ROS_DOMAIN_ID=16` is set in `[feature.common.activation.env]`.
 3. **Foxglove Studio WebSocket Bridge (Port 8765):**  
    `foxglove_bridge` runs on the Pi (bound to `0.0.0.0:8765`), allowing any laptop or browser on the network or Tailscale mesh to connect via `ws://100.70.103.60:8765` without needing ROS installed on the host.
+4. **Router vs. client config — do not conflate them:**  
+   Every ROS node's Zenoh session is configured via `ZENOH_SESSION_CONFIG_URI`, set by `scripts/activate_zenoh_pi.sh` / `activate_zenoh_pc.sh` to `config/zenoh_client_{local,pc}.json5` (`mode: "client"`, `transport.shared_memory.enabled: false`). A client session only *connects* outward — it never listens. The `rmw_zenohd` router process is launched inside the same pixi environment (and, for `hardware.launch.py`/`robot.launch.py`/`teleop.launch.py`, the same `LaunchDescription`) as every other node, so if left alone it inherits that same client config and **silently fails to bind port 7447 at all** — no error, just nothing listening (verify with `ss -tln | grep 7447`). Discovery can still look partially alive afterward (stale liveliness info from a previous, correctly-configured router instance lingers in `ros2 topic list`/`ros2 topic info`), which makes this easy to misdiagnose as a QoS or SHM problem instead. Every place that starts the router (`config/zenoh_router_pi.json5`, referenced via `additional_env` in the three launch files above, and `env -u ZENOH_SESSION_CONFIG_URI` in the `pixi.toml` `zenoh` task) must explicitly override it to a `mode: "router"` config with a real `listen` endpoint instead of inheriting the ambient client one.
 
 ## Nodes
 

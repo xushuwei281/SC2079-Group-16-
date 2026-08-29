@@ -78,7 +78,13 @@ clean = { cmd = "rm -rf build install log", description = "Remove colcon build a
 sim = { cmd = "python3 ../algorithm/simulator.py", description = "Launch the interactive 2D arena simulator" }
 planner = { cmd = "python3 ../algorithm/planner.py", description = "Run the CLI path planning algorithm demo" }
 test-algo = { cmd = "python3 -m unittest discover -s ../algorithm/test -p 'test_*.py'", description = "Run algorithm unit tests" }
-zenoh = { cmd = "ros2 run rmw_zenoh_cpp rmw_zenohd", description = "Start Zenoh router for Tailscale / multi-host networking" }
+# -u ZENOH_SESSION_CONFIG_URI: this task is shared by pi/pc, both of whose
+# activation scripts point that var at a mode:"client" config (client sessions
+# only connect, they never listen). The router process needs mode:"router" with
+# an actual listen endpoint, so it must run with that var unset rather than
+# inherited — otherwise it silently fails to bind port 7447. See
+# config/zenoh_router_pi.json5 for the launch-file equivalent of this override.
+zenoh = { cmd = "env -u ZENOH_SESSION_CONFIG_URI ros2 run rmw_zenoh_cpp rmw_zenohd", description = "Start Zenoh router for Tailscale / multi-host networking" }
 
 # Sourced on activation; created by the first colcon build.
 [feature.common.activation]

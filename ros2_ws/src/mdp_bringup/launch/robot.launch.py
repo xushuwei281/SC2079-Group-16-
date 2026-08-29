@@ -40,6 +40,26 @@ def generate_launch_description():
 
     set_zenoh_env = SetEnvironmentVariable("ZENOH_SESSION_CONFIG_URI", zenoh_cfg)
 
+    # Router-only config: the router process is launched inside this same
+    # LaunchDescription, so it would otherwise inherit ZENOH_SESSION_CONFIG_URI
+    # from either set_zenoh_env above or scripts/activate_zenoh_pi.sh (both point
+    # at the mode:"client" config). A client session only connects, it never
+    # listens, so the router would silently fail to bind port 7447. This override
+    # forces the router process specifically onto a mode:"router" config.
+    router_config_candidates = [
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), "../../../config/zenoh_router_pi.json5"
+            )
+        ),
+        "/home/mdp/dev/SC2079-Group-16/ros2_ws/config/zenoh_router_pi.json5",
+    ]
+    router_cfg = router_config_candidates[0]
+    for cp in router_config_candidates:
+        if os.path.exists(cp):
+            router_cfg = cp
+            break
+
     # Package share directories
     camera_bringup_dir = get_package_share_directory("mdp_camera_bringup")
 
@@ -60,6 +80,7 @@ def generate_launch_description():
         cmd=["ros2", "run", "rmw_zenoh_cpp", "rmw_zenohd"],
         name="zenoh_router",
         output="screen",
+        additional_env={"ZENOH_SESSION_CONFIG_URI": router_cfg},
     )
 
     # 2. STM32 Serial Hardware Bridge Node

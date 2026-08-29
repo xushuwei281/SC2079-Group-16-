@@ -2,6 +2,8 @@
 and manual teleop control.
 """
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
@@ -9,6 +11,26 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    # The router process is launched inside this same LaunchDescription, so it
+    # would otherwise inherit ZENOH_SESSION_CONFIG_URI from
+    # scripts/activate_zenoh_pi.sh (mode:"client"). A client session only
+    # connects, it never listens, so the router would silently fail to bind
+    # port 7447. This override forces the router process onto a mode:"router"
+    # config instead.
+    router_config_candidates = [
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), "../../../config/zenoh_router_pi.json5"
+            )
+        ),
+        "/home/mdp/dev/SC2079-Group-16/ros2_ws/config/zenoh_router_pi.json5",
+    ]
+    router_cfg = router_config_candidates[0]
+    for cp in router_config_candidates:
+        if os.path.exists(cp):
+            router_cfg = cp
+            break
+
     stm32_port_arg = DeclareLaunchArgument(
         "stm32_port",
         default_value="/dev/ttyACM1",
@@ -26,6 +48,7 @@ def generate_launch_description():
         cmd=["ros2", "run", "rmw_zenoh_cpp", "rmw_zenohd"],
         name="zenoh_router",
         output="screen",
+        additional_env={"ZENOH_SESSION_CONFIG_URI": router_cfg},
     )
 
     # 2. STM32 Hardware Serial Bridge

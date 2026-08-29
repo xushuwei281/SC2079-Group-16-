@@ -1,0 +1,25 @@
+// Config for the rmw_zenohd router process itself (NOT for regular ROS nodes).
+//
+// The router process is launched inside the same pixi `pi` environment as every
+// other node, so it inherits ZENOH_SESSION_CONFIG_URI from scripts/activate_zenoh_pi.sh
+// (which points at zenoh_client_local.json5, mode: "client"). A client session only
+// connects outward — it never listens — so if the router process is left to inherit
+// that client config it silently fails to bind port 7447 at all (confirmed via
+// `ss -tln` showing nothing listening, while `ros2 topic info` still reported
+// stale discovery data from a previous, correctly-configured router instance).
+//
+// hardware.launch.py / robot.launch.py must override ZENOH_SESSION_CONFIG_URI to
+// this file specifically for the zenoh_router ExecuteProcess action.
+{
+  mode: "router",
+  listen: {
+    endpoints: [
+      "tcp/0.0.0.0:7447"
+    ]
+  },
+  transport: {
+    shared_memory: {
+      enabled: false
+    }
+  }
+}
