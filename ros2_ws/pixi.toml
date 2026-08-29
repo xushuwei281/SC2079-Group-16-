@@ -170,6 +170,11 @@ ultralytics = ">=8.4.127, <9"
 build = { cmd = "colcon build", description = "Build the full workspace" }
 test = { cmd = "colcon test", description = "Test the full workspace" }
 perception = { cmd = "ros2 run mdp_perception perception_node", description = "Start the YOLO target detection and verification stitcher node" }
+# Overrides the Tailscale endpoint activate_zenoh_pc.sh sets by default —
+# for use when the Mac and Pi are on the same LAN (e.g. NTU Secure) instead
+# of reaching each other over Tailscale's DERP relay. Update the IP in
+# config/zenoh_client_pc_lan.json5 to the Pi's current LAN address first.
+perception-lan = { cmd = "ZENOH_SESSION_CONFIG_URI=config/zenoh_client_pc_lan.json5 ros2 run mdp_perception perception_node", description = "Start perception using the same-LAN Zenoh config instead of Tailscale" }
 foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", description = "Start local Foxglove websocket bridge on PC" }
 
 [environments]

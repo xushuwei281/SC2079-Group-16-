@@ -1,0 +1,28 @@
+// PC-side Zenoh client config for when the Mac and Pi are on the SAME local
+// network (e.g. NTU Secure, a shared hotspot) instead of reaching each other
+// over Tailscale. Same mode:"client" / SHM-disabled setup as
+// zenoh_client_pc.json5 — the only difference is the endpoint IP, since a LAN
+// DHCP lease won't match the Pi's Tailscale IP.
+//
+// UPDATE THE IP BELOW each time you join a new LAN: on the Pi, run
+// `hostname -I` (or `ip -4 addr show wlan0`) and take its LAN address (the
+// 192.168.x.x / 10.x.x.x one — NOT the 100.x.x.x Tailscale address).
+//
+// If the Pi is unreachable even on the same SSID (ping fails both ways),
+// the network likely enforces client/AP isolation and this won't work no
+// matter what IP you plug in — fall back to zenoh_client_pc.json5 over
+// Tailscale (accepting the DERP-relay throughput penalty) or to a private
+// hotspot instead.
+{
+  mode: "client",
+  connect: {
+    endpoints: [
+      "tcp/192.168.1.100:7447" // <-- REPLACE with the Pi's current LAN IP
+    ]
+  },
+  transport: {
+    shared_memory: {
+      enabled: false
+    }
+  }
+}
