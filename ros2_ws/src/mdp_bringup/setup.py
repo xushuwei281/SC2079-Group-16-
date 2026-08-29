@@ -21,6 +21,8 @@ setup(
     description="Launch/config entry point for the SC2079 MDP ROS2 stack",
     license="Apache-2.0",
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "planner_node = mdp_bringup.planner_node:main",
+        ],
     },
 )

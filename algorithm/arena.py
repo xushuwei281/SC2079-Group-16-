@@ -21,7 +21,7 @@ ARENA_SIZE_CM = 200          # 2.0m x 2.0m
 START_ZONE_CM = 40           # 40cm x 40cm at the bottom-left corner
 ROBOT_W_CM = 20
 ROBOT_H_CM = 21
-TURNING_RADIUS_CM = 25       # ~25cm, larger if moving faster
+TURNING_RADIUS_CM = 31.0     # calibrated 31cm conservative physical turning radius
 OBSTACLE_SIZE_CM = 10        # 10cm x 10cm footprint
 IMAGE_RECOG_DIST_CM = 20     # ideal camera distance to an obstacle
 
@@ -119,6 +119,139 @@ def collides_any(px: float, py: float, arena: Optional[Dict] = None) -> Optional
     for ob in a["obstacles"]:
         if point_collides_obstacle(px, py, ob, a):
             return ob
+    return None
+
+
+# ----------------------------------------------------------------------------
+# Oriented footprint collision.  The cheap point check above treats the robot
+# as a point; the planner and simulator need the real 20x21cm body, so the
+# robot is modelled as an oriented rectangle and tested against each 10x10
+# obstacle with a separating-axis test.  This is the briefing's "30cm padded
+# planning footprint" done properly (Minkowski sum of robot + obstacle) rather
+# than an over-approximating inflation that rejects valid paths.
+# ----------------------------------------------------------------------------
+def _obb_collide(cx1: float, cy1: float, th1: float, w1: float, h1: float,
+                 cx2: float, cy2: float, w2: float, h2: float) -> bool:
+    """Separating-axis test between robot oriented rectangle (w1 width, h1 length along heading th1)
+    and axis-aligned rectangle (w2 width in x, h2 height in y).
+    """
+    c, s = math.cos(th1), math.sin(th1)
+    hw1, hh1 = w1 / 2.0, h1 / 2.0  # hw1 = half-width (transverse), hh1 = half-length (longitudinal)
+    hw2, hh2 = w2 / 2.0, h2 / 2.0
+    dx, dy = cx1 - cx2, cy1 - cy2
+    # Axes to test: rect1's heading (c, s) and transverse (-s, c) + world axes (1, 0), (0, 1)
+    axes = ((c, s), (-s, c), (1.0, 0.0), (0.0, 1.0))
+    for ax, ay in axes:
+        # Extent of rect1 (hh1 along heading (c, s), hw1 along transverse (-s, c))
+        e1 = (hh1 * abs(ax * c + ay * s)
+              + hw1 * abs(-ax * s + ay * c))
+        # Extent of rect2 (axis-aligned) along this axis.
+        e2 = hw2 * abs(ax) + hh2 * abs(ay)
+        if abs(dx * ax + dy * ay) >= e1 + e2:
+            return False  # a separating axis exists -> no overlap
+    return True
+
+
+def robot_corners(px: float, py: float, theta: float,
+                  robot_w: float = ROBOT_W_CM,
+                  robot_h: float = ROBOT_H_CM) -> List[Tuple[float, float]]:
+    """Return the 4 world-space corners of the oriented robot chassis."""
+    c, s = math.cos(theta), math.sin(theta)
+    hh = robot_h / 2.0  # longitudinal (heading)
+    hw = robot_w / 2.0  # transverse (side)
+    return [
+        (px + hh * c - hw * s, py + hh * s + hw * c),
+        (px + hh * c + hw * s, py + hh * s - hw * c),
+        (px - hh * c + hw * s, py - hh * s - hw * c),
+        (px - hh * c - hw * s, py - hh * s + hw * c),
+    ]
+
+
+def robot_in_bounds(px: float, py: float, theta: float,
+                    arena: Optional[Dict] = None,
+                    robot_w: Optional[float] = None,
+                    robot_h: Optional[float] = None,
+                    margin: float = 0.0) -> bool:
+    """Check if the entire oriented robot chassis stays within arena walls."""
+    a = arena or default_arena()
+    s = a.get("arena_size", ARENA_SIZE_CM)
+    rw = robot_w if robot_w is not None else a.get("robot_w", ROBOT_W_CM)
+    rh = robot_h if robot_h is not None else a.get("robot_h", ROBOT_H_CM)
+    for cx, cy in robot_corners(px, py, theta, rw, rh):
+        if not (margin <= cx <= s - margin and margin <= cy <= s - margin):
+            return False
+    return True
+
+
+def robot_collides_obstacle(px: float, py: float, theta: float, ob: Obstacle,
+                            robot_w: Optional[float] = None,
+                            robot_h: Optional[float] = None,
+                            arena: Optional[Dict] = None) -> bool:
+    """Is the robot's oriented body (centre at (px,py), heading theta)
+    overlapping this 10x10 obstacle?"""
+    a = arena or default_arena()
+    rw = robot_w if robot_w is not None else a["robot_w"]
+    rh = robot_h if robot_h is not None else a["robot_h"]
+    sz = OBSTACLE_SIZE_CM
+    return _obb_collide(px, py, theta, rw, rh, ob.x, ob.y, sz, sz)
+
+
+def robot_collides_any(px: float, py: float, theta: float,
+                       arena: Optional[Dict] = None,
+                       robot_w: Optional[float] = None,
+                       robot_h: Optional[float] = None,
+                       safety_margin: float = 4.0
+                       ) -> Optional[Obstacle]:
+    """First obstacle or wall boundary the robot's oriented body collides with (or None)."""
+    a = arena or default_arena()
+    rw = (robot_w if robot_w is not None else a.get("robot_w", ROBOT_W_CM)) + 2.0 * safety_margin
+    rh = (robot_h if robot_h is not None else a.get("robot_h", ROBOT_H_CM)) + 2.0 * safety_margin
+
+    # 1. Check arena boundaries
+    if not robot_in_bounds(px, py, theta, a, rw, rh, margin=0.0):
+        return Obstacle(id=-1, x=int(px), y=int(py), label="wall")
+
+    # 2. Check each obstacle
+    for ob in a["obstacles"]:
+        if robot_collides_obstacle(px, py, theta, ob, rw, rh, a):
+            return ob
+    return None
+
+
+def path_collides(poses, step: float = 2.0,
+                  arena: Optional[Dict] = None,
+                  robot_w: Optional[float] = None,
+                  robot_h: Optional[float] = None,
+                  safety_margin: float = 4.0
+                  ) -> Optional[Obstacle]:
+    """Sample a path (list of (x, y, theta) poses) and find the first
+    obstacle or boundary wall the robot body runs into.
+    """
+    if not poses:
+        return None
+    a = arena or default_arena()
+    p0 = poses[0]
+    last_x, last_y = (p0.x, p0.y) if isinstance(p0, Config) else (p0[0], p0[1])
+    n = len(poses)
+    for i in range(n):
+        p = poses[i]
+        x, y, theta = (p.x, p.y, p.theta) if isinstance(p, Config) else (p[0], p[1], p[2])
+        if i > 0:
+            seg = math.hypot(x - last_x, y - last_y)
+            k = max(1, int(math.ceil(seg / step)))
+            for j in range(1, k + 1):
+                t = j / k
+                px = last_x + (x - last_x) * t
+                py = last_y + (y - last_y) * t
+                th = theta
+                hit = robot_collides_any(px, py, th, a, robot_w, robot_h, safety_margin=safety_margin)
+                if hit is not None:
+                    return hit
+        else:
+            hit = robot_collides_any(x, y, theta, a, robot_w, robot_h, safety_margin=safety_margin)
+            if hit is not None:
+                return hit
+        last_x, last_y = x, y
     return None
 
 

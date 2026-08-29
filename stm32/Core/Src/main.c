@@ -880,6 +880,8 @@ static void MotorsOff(void)
     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);
     __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_1, 0);
     __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_2, 0);
+    target_pwmVal_servo = SERVOCENTER;
+    pwmVal_servo        = SERVOCENTER;
     htim8.Instance->CCR2 = SERVOCENTER;
 
     /* CRITICAL: otherwise motor() re-drives them 40 ms later */

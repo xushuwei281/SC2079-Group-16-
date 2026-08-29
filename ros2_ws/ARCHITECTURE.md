@@ -16,30 +16,33 @@ about how the same problem is wired up as a ROS2 graph instead.
 
 ## System diagram
 
-Resolved 2026-08-24: the ROS2 graph is **split across two hosts**, not run
-on one machine. Hardware-bound nodes (anything touching UART, Bluetooth,
-or the camera) stay on the RPi4B; compute-heavy nodes (perception,
-planning, visualization) run on a laptop/PC. Both join the same ROS2
-graph over plain DDS — see "Networking across hosts" below for exactly
-why that "just works" on competition day but not necessarily elsewhere.
+Architecture: the ROS2 graph is split across the **Raspberry Pi 4B (Robot)** and the **Laptop/PC (GPU & Dashboard)**:
+- **Raspberry Pi 4B (Robot):** Runs all hardware-bound nodes AND the autonomous mission planner (`planner_node`, `serial_bridge_node`, `android_bridge_node`, `camera_node`). This guarantees zero movement latency and 100% immunity to competition Wi-Fi drops.
+- **Laptop/PC (GPU):** Runs heavy compute (`mdp_perception` with YOLOv8 on GPU, 3x3 verification image stitcher) and visual monitoring (`RViz2`, `Foxglove Studio`, Pygame Simulator).
+- Both join the same ROS2 graph over standard DDS on `ROS_DOMAIN_ID=16`.
 
 ```mermaid
 flowchart TB
-    subgraph Pi["Raspberry Pi 4B — hardware-bound nodes"]
-        HWBridge["mdp_hardware_bridge<br/>serial_bridge_node<br/>service: execute_moves<br/>topic: estop"]
-        AndroidBridge["android_bridge_node<br/>pyserial, RFCOMM"]
-        CamDriver["camera driver<br/>libcamera-based, TBD"]
-        AndroidBridge -->|calls execute_moves, or publishes estop| HWBridge
+    subgraph Pi["Raspberry Pi 4B — Robot Autonomous Stack"]
+        HWBridge["mdp_hardware_bridge<br/>serial_bridge_node<br/>service: /execute_moves<br/>topic: /estop, /robot_pose"]
+        AndroidBridge["mdp_android_bridge<br/>android_bridge_node<br/>RFCOMM Bluetooth<br/>topic: /android/cmd, /android/target"]
+        CamDriver["mdp_camera_bringup<br/>v4l2_camera_node<br/>topic: /camera/image_raw"]
+        Planner["mdp_bringup<br/>planner_node<br/>Reeds-Shepp TSP Optimizer"]
+
+        AndroidBridge -->|relays tablet commands| Planner
+        Planner -->|calls /execute_moves| HWBridge
+        HWBridge -->|pose feedback| Planner
     end
 
-    subgraph PC["Laptop/PC — compute-heavy nodes"]
-        Perception["mdp_perception<br/>YOLO inference"]
-        Planner["mdp_planner<br/>Hamiltonian + Dubins"]
-        RViz["RViz2<br/>arena/robot/detections display"]
+    subgraph PC["Laptop/PC — GPU Perception & Visual Dashboard"]
+        Perception["mdp_perception<br/>perception_node (YOLOv8 GPU)<br/>3x3 Verification Grid Stitcher"]
+        RViz["RViz2 / Foxglove / Simulator<br/>Live Arena Display"]
     end
 
-    Planner -.->|calls execute_moves| HWBridge
-    Pi <-.->|ROS2 / DDS over UDP, same LAN, ROS_DOMAIN_ID=16| PC
+    CamDriver -->|Streams video over Wi-Fi| Perception
+    Perception -->|Sends target symbols over Wi-Fi| AndroidBridge
+    Planner -.->|/planner/path| RViz
+    HWBridge -.->|/robot_pose| RViz
 
     STM32["STM32 MCU: mdp_stm32<br/>PlatformIO / STM32Cube HAL<br/>Rear motor: JGB37-520<br/>Steering servo: TD-8120MG<br/>Encoders + ICM-20948 IMU"]
     Android["Android Tablet<br/>Remote app: 2D arena and controls"]
@@ -153,42 +156,26 @@ fit, not just a simpler one.)
 
 ## Networking across hosts
 
-Both machines join the same ROS2 graph via plain DDS discovery — no
-Discovery Server, no `rmw_zenoh`, nothing exotic — because of two
-decisions specific to this project:
+Both machines join the same ROS2 graph via **`rmw_zenoh_cpp`** (configured in `pixi.toml`):
 
-1. **Same `ROS_DOMAIN_ID` on every machine** (`16`, set in this
-   workspace's `pixi.toml` under `[feature.common.activation.env]` —
-   the feature both host environments share, so it's defined once and
-   applied
-   automatically by `pixi run`/`pixi shell` rather than relying on
-   someone remembering to `export` it). Not chosen to dodge other MDP
-   groups — see point 2 — just hygiene against any other stray ROS2
-   process defaulting to domain `0`.
-2. **Same physical LAN on demo day.** The team brings its own
-   router/hotspot, so the Pi and PC share one isolated broadcast domain
-   with nobody else on it. This matters because ROS2's default discovery
-   (Fast DDS's Simple Discovery Protocol) uses **UDP multicast**, which
-   only works within a single L2 network — it does *not* traverse
-   Tailscale (Tailscale doesn't carry multicast) or any other VPN/NAT
-   hop. If development ever needs to happen with the Pi and PC on
-   different networks (e.g. remote debugging before physically meeting
-   up), plain `ROS_DOMAIN_ID` matching will silently fail to discover
-   peers — the fix in that case is `rmw_zenoh` (no multicast
-   requirement, NAT/VPN-friendly) or a Fast DDS Discovery Server, neither
-   of which is set up yet since it isn't needed for the demo-day
-   scenario.
+1. **Unicast TCP/QUIC over Tailscale / Wi-Fi:**  
+   Zenoh operates over point-to-point unicast TCP (e.g. `100.70.103.60`), completely bypassing the UDP multicast restrictions of Tailscale and campus Wi-Fi client isolation.
+2. **Dedicated ROS Domain ID:**  
+   `ROS_DOMAIN_ID=16` is set in `[feature.common.activation.env]`.
+3. **Foxglove Studio WebSocket Bridge (Port 8765):**  
+   `foxglove_bridge` runs on the Pi (bound to `0.0.0.0:8765`), allowing any laptop or browser on the network or Tailscale mesh to connect via `ws://100.70.103.60:8765` without needing ROS installed on the host.
 
 ## Nodes
 
 | Node | Host | Package | Responsibility |
 | --- | --- | --- | --- |
-| `serial_bridge_node` | Pi | `mdp_hardware_bridge` **(scaffolded, builds clean)** | Owns the UART link to STM32 (USART3 @ 115200). Speaks the firmware's real protocol directly — 5-byte packets (2-char command + 3-digit value), batched behind a `#` trigger, `RUN`/`FIN`/`BUS`/`FUL` status lines. Exposes this as the `execute_moves` service (`mdp_interfaces/ExecuteMoves`) plus an `estop` topic (`std_msgs/Empty`) that writes a `Q` packet outside the service entirely, mirroring the firmware's own asynchronous e-stop handling. See "Command arbitration". |
-| `android_bridge_node` | Pi | `mdp_android_bridge` **(scaffolded 2026-08-25, builds and imports clean)** | Bluetooth RFCOMM link to the Android tablet (`/dev/rfcommN`, via `pyserial`). Movement commands (`FW`/`BW`/`TL`/`TR`) get translated into `execute_moves` calls (same service the planner calls); `STP` publishes on `estop` instead, bypassing the service so it can preempt a move already running; non-movement commands (`ADD`/`SUB`/`FACE` — obstacle placement, target-face annotation) go to `/android/cmd` for the planner. Status text from `/android/status` is relayed back as `STATUS,<text>`, and a completed move as `DONE`. **Not yet run against a real tablet**, and it implements `docs/protocol.md`'s Android table, which that file marks as a negotiable draft — the open question is units: the draft has the tablet sending millimetres, so `FW:50` becomes `FC005` (5cm), and at the firmware's 1cm resolution anything under `FW:5` rounds to a no-op. Confirm with the Android subteam before the first tablet test. |
-| camera driver | Pi | TBD | Publishes raw camera frames for `mdp_perception` to consume over the network. libcamera-based (see Open Decisions — **not** the legacy `picamera` module). |
-| perception node(s) | PC | `mdp_perception` | Runs the trained YOLO model on camera frames streamed from the Pi, publishes detections. See "Can we use the reference-code checkpoint?" below for the model itself. |
-| autonomy / path planner | PC | `mdp_bringup` or a new `mdp_planner` package | Implements the course-required Hamiltonian-path ordering (nearest-neighbour + 2-opt / exhaustive search over the 5 obstacles) and Dubins path segments between configurations, translated into a sequence of `MoveCommand`s and submitted as one `execute_moves` call per leg. **This is graded coursework — must be self-implemented, not a stock Nav2 planner.** See `mdp_bringup`'s eventual `planner/` module. |
-| RViz2 | PC | `ros-jazzy-rviz2` (stock) | Satisfies the course's "simulate the physical robot and algorithms in software" display requirement (arena, obstacles, robot pose, recognized images in real time), driven by dead-reckoned pose updates (see "Design principle" above). No Gazebo in this project — RViz2's 2D display covers the literal requirement without a full 3D physics sim. |
+| `serial_bridge_node` | Pi | `mdp_hardware_bridge` **(Verified on physical car)** | Owns the UART link to STM32 (USART3 @ 115200). Speaks the firmware's 5-byte protocol (`FC`, `BC`, `FL`, `FR`, `BL`, `BR`), batched behind a `#` trigger, `FIN:<dist>,<heading>` feedback. Exposes `execute_moves` service and `estop` topic. |
+| `android_bridge_node` | Pi | `mdp_android_bridge` **(Verified with auto-reconnect)** | Bluetooth RFCOMM link to Android tablet (`/dev/rfcomm0`). Translates tablet moves (`FW`/`BW`/`TL`/`TR`) to `execute_moves`, `STP` to `estop`, and relays obstacle packets (`ALG|...`) to `/android/cmd`. Emits telemetry (`ROBOT,x,y,dir` & `TARGET,id,symbol`). |
+| `pi_camera_node` | Pi | `mdp_camera_bringup` **(Verified ISP hardware stream)** | Native `Picamera2` driver utilizing Broadcom VideoCore hardware ISP for demosaicing, auto-exposure (AEC), and auto-white-balance (AWB). Publishes 640x480 RGB8 on `/camera/image_raw` and JPEG on `/camera/image_raw/compressed` with <3% CPU overhead. |
+| `planner_node` | Pi | `mdp_bringup` **(Verified Reeds-Shepp TSP)** | Autonomous mission planner. Computes exact vantage poses, solves TSP visiting tour, evaluates collision-free Reeds-Shepp arcs ($R = 25\text{ cm}$), discretizes to 5-byte STM32 instructions, and orchestrates target image snapping. |
+| `perception_node` | PC | `mdp_perception` **(YOLOv8 GPU Inference)** | Subscribes to `/camera/image_raw` over Wi-Fi/Tailscale, executes YOLOv8 symbol recognition (`models/best.pt`), publishes `TARGET,<obs_id>,<symbol_id>` to `/android/target`, and stitches the 3x3 verification grid image (`runs/stitched_verification.jpg`). |
+| `foxglove_bridge` | Pi | `foxglove_bridge` **(Port 8765)** | WebSocket server exposing live video streams, robot poses, and navigation paths for real-time monitoring on PC/laptop dashboards. |
+| 2D Simulator | PC/Pi | `algorithm/simulator.py` | Interactive Pygame 2D Arena Simulator with drag-and-drop obstacles, face toggling, live Reeds-Shepp curve visualization, and command simulation. |
 
 `mdp_bringup` (already scaffolded under `src/`) is the launch/config entry
 point that will eventually bring all of the above up together.

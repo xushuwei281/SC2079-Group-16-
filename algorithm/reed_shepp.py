@@ -409,7 +409,7 @@ def _get_candidates(x, y, phi):
     globally shortest (which may plow through an obstacle).
     """
     out = []
-    for total, kind_id, params in (_csc(x, y, phi) + _ccc(x, y, phi)
+    for kind_id, total, params in (_csc(x, y, phi) + _ccc(x, y, phi)
                                    + _cccc(x, y, phi) + _ccsc(x, y, phi)
                                    + _ccscc(x, y, phi)):
         t, u, v, w, xx = params
@@ -452,7 +452,7 @@ def reeds_shepp_path(start: Config, goal: Config,
     out = []
     for kind, p, _ in wps:
         if kind in ('F', 'B'):
-            out.append((kind, p * r, r))
+            out.append((kind, abs(p) * r, r))
         else:
             out.append((kind, p, r))
     return length * r, out
@@ -494,6 +494,55 @@ def _to_config(p) -> Config:
     return Config.from_tuple(p)
 
 
+def waypoints_to_poses(start: Config, waypoints: List[Tuple]) -> List[Tuple[float, float, float]]:
+    """Expand a Reeds-Shepp waypoint list into world-space poses.
+
+    Waypoints are the (kind, param, radius) tuples produced by _build / the
+    public reeds_shepp_path.  Starting from ``start`` (x, y, theta) each
+    primitive is integrated: a straight 'F'/'B' translates along the current
+    heading, an 'L'/'R' turn follows its arc.  The returned list always
+    opens with the start pose and closes with the goal pose, so callers can
+    sample it for collision checks without re-deriving the kinematics.
+
+    Returns a list of (x, y, theta) tuples in the same units as the poses.
+    """
+    x, y = start.x, start.y
+    theta = start.theta
+    out = [(x, y, theta)]
+    for kind, p, rad in waypoints:
+        if kind == 'F':
+            x += abs(p) * math.cos(theta)
+            y += abs(p) * math.sin(theta)
+        elif kind == 'B':
+            x -= abs(p) * math.cos(theta)
+            y -= abs(p) * math.sin(theta)
+        else:
+            if kind == 'L':
+                x += rad * (math.sin(theta + p) - math.sin(theta))
+                y += rad * (-math.cos(theta + p) + math.cos(theta))
+                theta = normalize_angle(theta + p)
+            else:  # 'R'
+                x += rad * (-math.sin(theta - p) + math.sin(theta))
+                y += rad * (math.cos(theta - p) - math.cos(theta))
+                theta = normalize_angle(theta - p)
+        out.append((x, y, theta))
+    return out
+
+
+def reeds_shepp_path_poses(start: Config, goal: Config,
+                           radius: Optional[float] = None
+                           ) -> Tuple[float, List[Tuple[float, float, float]]]:
+    """Like :func:`reeds_shepp_path` but the path is returned as a list of
+    world-space (x, y, theta) poses ready for collision sampling.
+
+    Returns (length, poses); poses is [] if no curve is feasible.
+    """
+    length, wps = reeds_shepp_path(start, goal, radius)
+    if math.isinf(length):
+        return math.inf, []
+    return length, waypoints_to_poses(start, wps)
+
+
 def _turning_radius() -> float:
     try:
         from arena import TURNING_RADIUS_CM
@@ -526,26 +575,8 @@ def _verify() -> None:
         length, wps = reeds_shepp_path(s, g, r)
         if math.isinf(length):
             continue
-        # walk the waypoints in start's local frame
-        x = y = theta = 0.0
-        for kind, p, rad in wps:
-            if kind in ('F', 'B'):
-                x += p * math.cos(theta)
-                y += p * math.sin(theta)
-            else:
-                if kind == 'L':
-                    x += rad * (math.sin(theta + p) - math.sin(theta))
-                    y += rad * (-math.cos(theta + p) + math.cos(theta))
-                    theta = normalize_angle(theta + p)
-                else:  # 'R'
-                    x += rad * (-math.sin(theta - p) + math.sin(theta))
-                    y += rad * (math.cos(theta - p) - math.cos(theta))
-                    theta = normalize_angle(theta - p)
-        c = math.cos(s.theta)
-        sn = math.sin(s.theta)
-        ex = s.x + c * x - sn * y
-        ey = s.y + sn * x + c * y
-        etheta = normalize_angle(s.theta + theta)
+        poses = waypoints_to_poses(s, wps)
+        ex, ey, etheta = poses[-1]
         assert (abs(ex - g.x) < 1e-3 and abs(ey - g.y) < 1e-3
                 and abs(normalize_angle(etheta - g.theta)) < 1e-3), \
             f"Reeds-Shepp self-check failed for {s} -> {g}: " \

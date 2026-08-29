@@ -35,15 +35,15 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 import serial
 import serial.tools.list_ports
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, String
 import tf2_ros
 
 from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves
 
 # Confirmed valid 2-char command codes from the firmware's comm_task
-# switch statement (stm32/src/main.c).
-_VALID_COMMANDS = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU"}
+# switch statement (stm32/Core/Src/main.c).
+_VALID_COMMANDS = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU", "GC", "G0", "TO"}
 
 # Firmware queue capacity: instrList[40][5] (stm32/src/main.c). The '#'
 # trigger is NOT stored by the firmware, so all 40 slots take real moves.
@@ -67,9 +67,9 @@ class SerialBridgeNode(Node):
     def __init__(self):
         super().__init__("serial_bridge_node")
 
-        # Configured serial port: explicit path (e.g. /dev/ttyACM0, /dev/ttySTM32)
+        # Configured serial port: explicit path (e.g. /dev/ttyACM1, /dev/ttySTM32)
         # or 'auto' to auto-detect from available devices.
-        self.declare_parameter("serial_port", "/dev/ttyACM0")
+        self.declare_parameter("serial_port", "/dev/ttyACM1")
         self.declare_parameter("baud_rate", 115200)
         # How long to wait for FIN/BUS/FUL after triggering a batch.
         # Move batches are physically blocking on the STM32 side (real
@@ -81,6 +81,9 @@ class SerialBridgeNode(Node):
         self.declare_parameter("publish_tf", True)
         self.declare_parameter("odom_frame_id", "odom")
         self.declare_parameter("base_frame_id", "base_link")
+        self.declare_parameter("initial_x", 0.20)
+        self.declare_parameter("initial_y", 0.20)
+        self.declare_parameter("initial_yaw", math.pi / 2.0)
 
         self._configured_port = self.get_parameter("serial_port").value
         self._baud = self.get_parameter("baud_rate").value
@@ -90,11 +93,14 @@ class SerialBridgeNode(Node):
         self._publish_tf = self.get_parameter("publish_tf").value
         self._odom_frame_id = self.get_parameter("odom_frame_id").value
         self._base_frame_id = self.get_parameter("base_frame_id").value
+        self._initial_x = float(self.get_parameter("initial_x").value)
+        self._initial_y = float(self.get_parameter("initial_y").value)
+        self._initial_yaw = float(self.get_parameter("initial_yaw").value)
 
-        # Robot dead-reckoning state (in meters and radians)
-        self._x: float = 0.0
-        self._y: float = 0.0
-        self._yaw: float = 0.0
+        # Robot dead-reckoning state (in meters and radians, start zone center by default)
+        self._x: float = self._initial_x
+        self._y: float = self._initial_y
+        self._yaw: float = self._initial_yaw
 
         self._serial: Optional[serial.Serial] = None
         self._active_port: Optional[str] = None
@@ -115,6 +121,9 @@ class SerialBridgeNode(Node):
 
         self._estop_sub = self.create_subscription(
             Empty, "estop", self._on_estop, 10, callback_group=callback_group
+        )
+        self._cmd_sub = self.create_subscription(
+            String, "/android/cmd", self._on_android_cmd, 10, callback_group=callback_group
         )
         self._service = self.create_service(
             ExecuteMoves,
@@ -224,6 +233,17 @@ class SerialBridgeNode(Node):
                 self.get_logger().error(f"Failed to write E-STOP to STM32: {exc}")
                 self._close_serial_locked()
 
+    def _on_android_cmd(self, msg: String) -> None:
+        raw = msg.data.strip().upper()
+        if raw == "RESET" or raw.startswith("ALG|"):
+            self._x = self._initial_x
+            self._y = self._initial_y
+            self._yaw = self._initial_yaw
+            self.get_logger().info(
+                f"Pose reset to start zone: x={self._x:.3f}m, y={self._y:.3f}m, yaw={math.degrees(self._yaw):.1f}°"
+            )
+            self._publish_current_pose()
+
     def _handle_execute_moves(self, request, response):
         if self._busy.is_set():
             response.success = False
@@ -233,6 +253,15 @@ class SerialBridgeNode(Node):
         if len(request.commands) > _MAX_BATCH:
             response.success = False
             response.status = f"TOO_MANY ({len(request.commands)} > {_MAX_BATCH})"
+            return response
+
+        # Pre-validate and encode all commands
+        try:
+            encoded_packets = [self._encode(mc.command, mc.value) for mc in request.commands]
+        except ValueError as exc:
+            self.get_logger().warn(f"Invalid command in request: {exc}")
+            response.success = False
+            response.status = f"INVALID_CMD ({exc})"
             return response
 
         if not self._try_connect():
@@ -251,8 +280,8 @@ class SerialBridgeNode(Node):
                         return response
                     try:
                         self._serial.reset_input_buffer()
-                        for mc in request.commands:
-                            self._serial.write(self._encode(mc.command, mc.value))
+                        for pkt in encoded_packets:
+                            self._serial.write(pkt)
                             self._serial.flush()
                             time.sleep(0.015)
                         # Trigger packet -- starts execution of everything just queued.
@@ -294,6 +323,13 @@ class SerialBridgeNode(Node):
         we use the real sensor-fused distance and gyro heading. Otherwise,
         we fall back to nominal kinematics from the commanded list.
         """
+        if any(mc.command in {"G0", "GC"} for mc in commands):
+            self._x = self._initial_x
+            self._y = self._initial_y
+            self._yaw = self._initial_yaw
+            self._publish_current_pose()
+            return
+
         if status.startswith("FIN:"):
             payload = status[4:].strip()
             try:
@@ -306,9 +342,11 @@ class SerialBridgeNode(Node):
                 if is_backward and dist_m > 0:
                     dist_m = -dist_m
 
-                self._x += dist_m * math.cos(measured_yaw)
-                self._y += dist_m * math.sin(measured_yaw)
-                self._yaw = measured_yaw
+                # STM32 gyro heading is relative to the calibrated G0 baseline (North = initial_yaw)
+                world_yaw = self._initial_yaw + measured_yaw
+                self._x += dist_m * math.cos(world_yaw)
+                self._y += dist_m * math.sin(world_yaw)
+                self._yaw = world_yaw
             except Exception as exc:
                 self.get_logger().warn(f"Failed to parse sensor feedback from {status!r}: {exc}")
                 self._accumulate_nominal(commands)
@@ -317,8 +355,10 @@ class SerialBridgeNode(Node):
 
         # Normalize yaw to (-pi, pi]
         self._yaw = (self._yaw + math.pi) % (2.0 * math.pi) - math.pi
+        self._publish_current_pose()
 
-        # Publish PoseStamped
+    def _publish_current_pose(self) -> None:
+        """Publish PoseStamped and broadcast TF transform for the current pose."""
         now = self.get_clock().now().to_msg()
         pose_msg = PoseStamped()
         pose_msg.header.stamp = now

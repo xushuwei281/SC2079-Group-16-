@@ -1,0 +1,88 @@
+"""Master robot bringup launch file for SC2079 MDP (Runs on Raspberry Pi).
+
+Launches all hardware-bound and autonomous mission nodes in one command:
+1. serial_bridge_node (STM32 motor & gyro UART link)
+2. android_bridge_node (Bluetooth RFCOMM link to Android remote tablet)
+3. v4l2_camera_node (Pi Camera v2.1 RGB8 640x480 video streamer)
+4. planner_node (Autonomous Reeds-Shepp TSP path planner & mission orchestrator)
+"""
+
+import os
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    # Package share directories
+    camera_bringup_dir = get_package_share_directory("mdp_camera_bringup")
+
+    # Launch arguments
+    stm32_port_arg = DeclareLaunchArgument(
+        "stm32_port",
+        default_value="/dev/ttyACM1",
+        description="Serial device for STM32 UART link",
+    )
+    rfcomm_device_arg = DeclareLaunchArgument(
+        "rfcomm_device",
+        default_value="/dev/rfcomm0",
+        description="RFCOMM device for Android Bluetooth link",
+    )
+
+    # 1. STM32 Serial Hardware Bridge Node
+    hardware_bridge = Node(
+        package="mdp_hardware_bridge",
+        executable="serial_bridge_node",
+        name="serial_bridge_node",
+        parameters=[{"serial_port": LaunchConfiguration("stm32_port")}],
+        output="screen",
+    )
+
+    # 2. Android Bluetooth Bridge Node
+    android_bridge = Node(
+        package="mdp_android_bridge",
+        executable="android_bridge_node",
+        name="android_bridge_node",
+        parameters=[{"rfcomm_device": LaunchConfiguration("rfcomm_device")}],
+        output="screen",
+    )
+
+    # 3. Pi Camera Driver (Includes v4l2-compat.so LD_PRELOAD)
+    camera_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(camera_bringup_dir, "launch", "camera.launch.py")
+        )
+    )
+
+    # 4. Autonomous Mission & Path Planner Node
+    planner = Node(
+        package="mdp_bringup",
+        executable="planner_node",
+        name="planner_node",
+        parameters=[{"turning_radius_cm": 31.0, "camera_view_dist_cm": 25.0}],
+        output="screen",
+    )
+
+    # 5. Foxglove Studio WebSocket Bridge (Port 8765)
+    foxglove = Node(
+        package="foxglove_bridge",
+        executable="foxglove_bridge",
+        name="foxglove_bridge",
+        parameters=[{"port": 8765, "address": "0.0.0.0"}],
+        output="screen",
+    )
+
+    return LaunchDescription(
+        [
+            stm32_port_arg,
+            rfcomm_device_arg,
+            hardware_bridge,
+            android_bridge,
+            camera_launch,
+            planner,
+            foxglove,
+        ]
+    )

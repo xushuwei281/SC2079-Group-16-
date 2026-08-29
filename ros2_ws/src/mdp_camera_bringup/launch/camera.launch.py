@@ -22,33 +22,16 @@ V4L2_COMPAT_SO = "/usr/libexec/aarch64-linux-gnu/libcamera/v4l2-compat.so"
 
 
 def generate_launch_description():
-    default_params = os.path.join(
-        get_package_share_directory("mdp_camera_bringup"), "config", "camera.yaml"
-    )
-
     return LaunchDescription(
         [
-            DeclareLaunchArgument(
-                "params",
-                default_value=default_params,
-                description="Path to the camera parameter file",
-            ),
             Node(
-                package="v4l2_camera",
-                executable="v4l2_camera_node",
+                package="mdp_camera_bringup",
+                executable="pi_camera_node",
                 name="camera",
                 output="screen",
-                parameters=[LaunchConfiguration("params")],
-                # Pin the topic names to the contract in ARCHITECTURE.md —
-                # without this the node publishes bare /image_raw, and
-                # image_transport computes the compressed name independently
-                # of the raw remap, so it needs its own.
-                remappings=[
-                    ("image_raw", "/camera/image_raw"),
-                    ("camera_info", "/camera/camera_info"),
-                    ("image_raw/compressed", "/camera/image_raw/compressed"),
+                parameters=[
+                    {"width": 640, "height": 480, "fps": 15.0, "frame_id": "camera_link"}
                 ],
-                additional_env={"LD_PRELOAD": V4L2_COMPAT_SO},
             ),
         ]
     )

@@ -22,6 +22,8 @@ setup(
     description="Launch and configuration for the Pi camera driver (v4l2_camera over the libcamera-V4L2 compat layer)",
     license="Apache-2.0",
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "pi_camera_node = mdp_camera_bringup.pi_camera_node:main",
+        ],
     },
 )
