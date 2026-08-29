@@ -18,6 +18,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
     IncludeLaunchDescription,
+    SetEnvironmentVariable,
     TimerAction,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -26,6 +27,23 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    # Locate Zenoh local client config
+    config_candidates = [
+        os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), "../../../config/zenoh_client_local.json5"
+            )
+        ),
+        "/home/mdp/dev/SC2079-Group-16/ros2_ws/config/zenoh_client_local.json5",
+    ]
+    zenoh_cfg = config_candidates[0]
+    for cp in config_candidates:
+        if os.path.exists(cp):
+            zenoh_cfg = cp
+            break
+
+    set_zenoh_env = SetEnvironmentVariable("ZENOH_SESSION_CONFIG_URI", zenoh_cfg)
+
     # Package share directories
     camera_bringup_dir = get_package_share_directory("mdp_camera_bringup")
 
@@ -95,6 +113,7 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            set_zenoh_env,
             zenoh_router,
             stm32_port_arg,
             rfcomm_device_arg,

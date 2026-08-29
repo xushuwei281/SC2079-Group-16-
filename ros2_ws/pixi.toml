@@ -132,6 +132,9 @@ planner = { cmd = "ros2 run mdp_bringup planner_node", description = "Start the 
 camera = { cmd = "ros2 launch mdp_camera_bringup camera.launch.py", description = "Start the Pi camera driver" }
 foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", description = "Start the Foxglove websocket bridge (ws://mdp.local:8765)" }
 
+[feature.pi.activation.env]
+ZENOH_SESSION_CONFIG_URI = "config/zenoh_client_local.json5"
+
 # ----------------------------------------------------------------------------
 # pc — compute-heavy nodes: YOLO perception, the Hamiltonian+Dubins planner,
 # RViz2. Builds the whole workspace, including the Pi's packages, so the
@@ -140,6 +143,9 @@ foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", des
 [feature.pc]
 platforms = ["osx-arm64", "linux-64"]
 
+[feature.pc.activation.env]
+ZENOH_SESSION_CONFIG_URI = "config/zenoh_client_pc.json5"
+
 [feature.pc.dependencies]
 ros-jazzy-rviz2 = ">=14.1.20,<15"
 ros-jazzy-cv-bridge = ">=4.1.0,<5"
@@ -147,6 +153,7 @@ ros-jazzy-vision-msgs = ">=4.1.1,<5"
 ros-jazzy-xacro = ">=2.1.1,<3"
 ros-jazzy-robot-state-publisher = ">=3.3.3,<4"
 ros-jazzy-joint-state-publisher = ">=2.4.1,<3"
+ros-jazzy-foxglove-bridge = "*"
 
 [feature.pc.pypi-dependencies]
 # Pulls torch + torchvision, and on linux-64 the entire NVIDIA CUDA stack.
@@ -156,7 +163,8 @@ ultralytics = ">=8.4.127, <9"
 [feature.pc.tasks]
 build = { cmd = "colcon build", description = "Build the full workspace" }
 test = { cmd = "colcon test", description = "Test the full workspace" }
-perception = { cmd = "ZENOH_SESSION_CONFIG_URI=config/zenoh_client_pc.json5 ros2 run mdp_perception perception_node", description = "Start the YOLO target detection and verification stitcher node" }
+perception = { cmd = "ros2 run mdp_perception perception_node", description = "Start the YOLO target detection and verification stitcher node" }
+foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", description = "Start local Foxglove websocket bridge on PC" }
 
 [environments]
 pi = ["common", "pi"]
