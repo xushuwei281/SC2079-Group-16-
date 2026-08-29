@@ -94,6 +94,7 @@ scripts = ["install/setup.bash"]
 # that drifts and costs an evening.
 ROS_DOMAIN_ID = "16"
 RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
+ZENOH_ROUTER_CHECK_ATTEMPTS = "10"
 
 # ----------------------------------------------------------------------------
 # pi — hardware-bound nodes: UART to the STM32, Bluetooth to the tablet,
@@ -155,7 +156,7 @@ ultralytics = ">=8.4.127, <9"
 [feature.pc.tasks]
 build = { cmd = "colcon build", description = "Build the full workspace" }
 test = { cmd = "colcon test", description = "Test the full workspace" }
-perception = { cmd = "ros2 run mdp_perception perception_node", description = "Start the YOLO target detection and verification stitcher node" }
+perception = { cmd = "ZENOH_SESSION_CONFIG_URI=config/zenoh_client_pc.json5 ros2 run mdp_perception perception_node", description = "Start the YOLO target detection and verification stitcher node" }
 
 [environments]
 pi = ["common", "pi"]
