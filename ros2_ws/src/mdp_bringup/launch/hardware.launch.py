@@ -1,10 +1,14 @@
-"""Master robot bringup launch file for SC2079 MDP (Runs on Raspberry Pi).
+"""Low-level hardware bringup launch file for SC2079 MDP (Runs on Raspberry Pi).
 
-Launches all hardware-bound and autonomous mission nodes in one command:
-1. serial_bridge_node (STM32 motor & gyro UART link)
-2. android_bridge_node (Bluetooth RFCOMM link to Android remote tablet)
-3. v4l2_camera_node (Pi Camera v2.1 RGB8 640x480 video streamer)
-4. planner_node (Autonomous Reeds-Shepp TSP path planner & mission orchestrator)
+Launches all essential low-level hardware & communication components 100% required
+for the car to move, be controlled via Android tablet, stream camera video, and communicate
+over Zenoh/Tailscale (without running the autonomous planner):
+
+1. zenoh_router (rmw_zenohd on port 7447 for cross-machine Tailscale/Wi-Fi communication)
+2. serial_bridge_node (STM32 motor, servo, gyro UART link)
+3. android_bridge_node (Bluetooth RFCOMM link to Android remote tablet)
+4. pi_camera_node (Pi Camera v2.1 hardware ISP video streamer)
+5. foxglove_bridge (Port 8765 WebSocket live telemetry and video stream)
 """
 
 import os
@@ -64,16 +68,7 @@ def generate_launch_description():
         )
     )
 
-    # 5. Autonomous Mission & Path Planner Node
-    planner = Node(
-        package="mdp_bringup",
-        executable="planner_node",
-        name="planner_node",
-        parameters=[{"turning_radius_cm": 31.0, "camera_view_dist_cm": 25.0}],
-        output="screen",
-    )
-
-    # 6. Foxglove Studio WebSocket Bridge (Port 8765)
+    # 5. Foxglove Studio WebSocket Bridge (Port 8765)
     foxglove = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -90,7 +85,6 @@ def generate_launch_description():
             hardware_bridge,
             android_bridge,
             camera_launch,
-            planner,
             foxglove,
         ]
     )
