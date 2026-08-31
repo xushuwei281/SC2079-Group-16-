@@ -29,3 +29,6 @@ stm32/.pio/
 .DS_Store
 .vscode/
 .idea/
+
+# Runtime output (perception verification grid, etc.)
+ros2_ws/runs/

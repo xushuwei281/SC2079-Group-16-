@@ -1,28 +1,37 @@
 // PC-side Zenoh client config for when the Mac and Pi are on the SAME local
-// network (e.g. NTU Secure, a shared hotspot) instead of reaching each other
-// over Tailscale. Same mode:"client" / SHM-disabled setup as
-// zenoh_client_pc.json5 — the only difference is the endpoint IP, since a LAN
-// DHCP lease won't match the Pi's Tailscale IP.
+// network (e.g. a personal router/hotspot, or NTU Secure if it turns out to
+// allow multicast) instead of reaching each other over Tailscale. Same
+// mode:"client" / SHM-disabled setup as zenoh_client_pc.json5 — the only
+// difference is the endpoint, which uses the Pi's mDNS hostname (mdp.local)
+// instead of an IP, so it keeps working across DHCP lease changes without
+// editing this file every time you join a new network.
 //
-// UPDATE THE IP BELOW each time you join a new LAN: on the Pi, run
-// `hostname -I` (or `ip -4 addr show wlan0`) and take its LAN address (the
-// 192.168.x.x / 10.x.x.x one — NOT the 100.x.x.x Tailscale address).
+// Zenoh's tcp/<host>:<port> locator accepts a hostname; the OS resolves it
+// (macOS does this natively for .local names via mDNS/Bonjour, no extra
+// setup needed — verify with `dscacheutil -q host -a name mdp.local`).
 //
-// If the Pi is unreachable even on the same SSID (ping fails both ways),
-// the network likely enforces client/AP isolation and this won't work no
-// matter what IP you plug in — fall back to zenoh_client_pc.json5 over
-// Tailscale (accepting the DERP-relay throughput penalty) or to a private
-// hotspot instead.
+// If mdp.local doesn't resolve, or resolves but the Pi is still unreachable
+// (ping fails both ways), the network enforces client/AP isolation or blocks
+// multicast, and neither this nor a hardcoded IP will help — fall back to
+// zenoh_client_pc.json5 over Tailscale (accepting the DERP-relay throughput
+// penalty) or to a private hotspot instead.
 {
   mode: "client",
   connect: {
     endpoints: [
-      "tcp/192.168.1.100:7447" // <-- REPLACE with the Pi's current LAN IP
+      "tcp/mdp.local:7447"
     ]
   },
   transport: {
     shared_memory: {
-      enabled: false
+      enabled: false,
+      // See config/zenoh_client_local.json5 for why this nested override is
+      // needed on top of the outer `enabled: false` -- it's a separate SHM
+      // pathway that only kicks in above a 3072-byte threshold and silently
+      // drops large messages sent from macOS.
+      transport_optimization: {
+        enabled: false
+      }
     }
   }
 }

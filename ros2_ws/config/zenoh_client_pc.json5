@@ -7,7 +7,14 @@
   },
   transport: {
     shared_memory: {
-      enabled: false
+      enabled: false,
+      // See config/zenoh_client_local.json5 for why this nested override is
+      // needed on top of the outer `enabled: false` -- it's a separate SHM
+      // pathway that only kicks in above a 3072-byte threshold and silently
+      // drops large messages sent from macOS.
+      transport_optimization: {
+        enabled: false
+      }
     }
   }
 }

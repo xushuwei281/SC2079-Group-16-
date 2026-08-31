@@ -62,12 +62,21 @@ class TargetDetector:
 
     def _load_model(self) -> None:
         """Load YOLO model weights (supports PyTorch .pt, ONNX, TensorRT)."""
-        if not os.path.exists(self.model_path):
-            # Try searching relative to repo root
-            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-            alt_path = os.path.join(repo_root, self.model_path)
-            if os.path.exists(alt_path):
-                self.model_path = alt_path
+        if not os.path.exists(self.model_path) and not os.path.isabs(self.model_path):
+            # pixi tasks run with cwd=ros2_ws/, but models/ lives at the repo
+            # root (one level up) -- not under ros2_ws/. __file__-relative
+            # search doesn't help either: when running the *installed*
+            # package (the normal `ros2 run` path), __file__ points into
+            # ros2_ws/install/mdp_perception/lib/.../site-packages/, which
+            # has no fixed relationship to the repo root.
+            candidates = [
+                os.path.join(os.getcwd(), "..", self.model_path),  # cwd=ros2_ws/ -> repo root
+                os.path.join(os.getcwd(), self.model_path),  # cwd already at repo root
+            ]
+            for candidate in candidates:
+                if os.path.exists(candidate):
+                    self.model_path = os.path.abspath(candidate)
+                    break
 
         try:
             from ultralytics import YOLO

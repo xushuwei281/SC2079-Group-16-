@@ -18,7 +18,7 @@ import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from mdp_perception.detector import TargetDetector
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, Image
@@ -47,7 +47,15 @@ class PerceptionNode(Node):
         self._last_detect_time = 0.0
         self._detect_cooldown = 1.0  # Cooldown between reporting the same obstacle
 
-        callback_group = ReentrantCallbackGroup()
+        # _on_image runs YOLO inference and is not safe to re-enter
+        # concurrently (the model isn't thread-safe, and overlapping
+        # invocations under load starve the annotated-image publish while
+        # the cheap /android/target publish still gets through -- looks
+        # exactly like a delivery bug from the outside). Mutually exclusive
+        # keeps frames processing one at a time; excess frames get dropped
+        # by the depth=1 QoS instead of piling up as concurrent threads.
+        image_callback_group = MutuallyExclusiveCallbackGroup()
+        status_callback_group = ReentrantCallbackGroup()
 
         # Publishers
         self._target_pub = self.create_publisher(String, "/android/target", 10)
@@ -56,10 +64,10 @@ class PerceptionNode(Node):
 
         # Subscribers
         self._image_sub = self.create_subscription(
-            Image, "/camera/image_raw", self._on_image, 1, callback_group=callback_group
+            Image, "/camera/image_raw", self._on_image, 1, callback_group=image_callback_group
         )
         self._status_sub = self.create_subscription(
-            String, "/android/status", self._on_status, 10, callback_group=callback_group
+            String, "/android/status", self._on_status, 10, callback_group=status_callback_group
         )
 
         self.get_logger().info("Perception node running on PC GPU. Listening on /camera/image_raw...")

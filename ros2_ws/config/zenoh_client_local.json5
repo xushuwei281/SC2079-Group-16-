@@ -7,7 +7,22 @@
   },
   transport: {
     shared_memory: {
-      enabled: false
+      enabled: false,
+      // shared_memory.enabled only disables the top-level SHM feature.
+      // transport_optimization is a SEPARATE, independently-toggled SHM
+      // pathway that still defaults to enabled for any message over its
+      // 3072-byte threshold -- e.g. every camera Image message. Confirmed
+      // via `RUST_LOG=zenoh=debug`: publisher config dumps as
+      // `ShmConf { enabled: false, transport_optimization:
+      // LargeMessageTransportOpt { enabled: true, ... } }`. Left on, this
+      // silently drops large messages published from macOS specifically
+      // (POSIX SHM provider creation fails there) while working fine when
+      // Linux/the Pi is the sender -- exactly the asymmetry that made
+      // /perception/image_annotated (published from the Mac) never arrive
+      // anywhere, while /camera/image_raw (published from the Pi) worked.
+      transport_optimization: {
+        enabled: false
+      }
     }
   }
 }
