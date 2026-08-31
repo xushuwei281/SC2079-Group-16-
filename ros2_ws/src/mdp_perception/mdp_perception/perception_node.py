@@ -21,6 +21,7 @@ from mdp_perception.detector import TargetDetector
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
 
@@ -59,7 +60,21 @@ class PerceptionNode(Node):
 
         # Publishers
         self._target_pub = self.create_publisher(String, "/android/target", 10)
-        self._annotated_pub = self.create_publisher(Image, "/perception/image_annotated", 10)
+        # BEST_EFFORT + CompressedImage: this is a high-rate visualization
+        # stream (Foxglove only -- nothing else in the graph subscribes to
+        # it), not control data, so dropping a stale frame under load is
+        # correct and cheap frames matter more than perfect delivery.
+        # Publishing raw BGR8 (~921KB/frame at 640x480) blows straight
+        # through foxglove_bridge's default 10MB send_buffer_limit after
+        # ~10 frames' worth of backlog -- it then drops the client
+        # connection outright, which looks exactly like "frames stopped
+        # dead after some fixed count" rather than gradual lag. The
+        # camera's own /camera/image_raw/compressed (JPEG, ~30-80KB/frame)
+        # never hits this because it's an order of magnitude smaller;
+        # matching that pattern here fixes it the same way.
+        self._annotated_pub = self.create_publisher(
+            CompressedImage, "/perception/image_annotated", qos_profile_sensor_data
+        )
         self._status_pub = self.create_publisher(String, "/android/status", 10)
 
         # Subscribers
@@ -132,7 +147,7 @@ class PerceptionNode(Node):
         # Publish annotated stream for visualization
         annotated = self._detector.draw_detections(frame, detections)
         try:
-            annotated_msg = self._bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
+            annotated_msg = self._bridge.cv2_to_compressed_imgmsg(annotated, dst_format="jpg")
             annotated_msg.header = msg.header
             self._annotated_pub.publish(annotated_msg)
         except Exception:
