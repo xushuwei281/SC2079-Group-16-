@@ -112,8 +112,19 @@ class TargetDetector:
                 conf = float(box.conf[0].item())
                 raw_name = str(self._model.names.get(cls_id, str(cls_id))).lower()
 
-                # Map class to official MDP symbol ID
-                symbol_id = _LABEL_TO_SYMBOL_ID.get(raw_name, 10 + cls_id)
+                # Map class to official MDP symbol ID. models/best.pt's own
+                # class names ARE the official IDs already (class 0 ->
+                # "11", class 1 -> "12", ... class 29 -> "40") -- use that
+                # directly. _LABEL_TO_SYMBOL_ID exists for a model trained
+                # with raw character labels ("a", "1", "up", ...) instead;
+                # it never matches this model's names, so every detection
+                # silently fell through to the `10 + cls_id` fallback,
+                # which is off by one for every class (e.g. class 0 -> 10
+                # instead of 11).
+                if raw_name.isdigit() and 11 <= int(raw_name) <= 40:
+                    symbol_id = int(raw_name)
+                else:
+                    symbol_id = _LABEL_TO_SYMBOL_ID.get(raw_name, 10 + cls_id)
 
                 xyxy = box.xyxy[0].cpu().numpy().astype(int)
                 x1, y1, x2, y2 = xyxy[0], xyxy[1], xyxy[2], xyxy[3]
