@@ -34,10 +34,22 @@ for _p in [
 
 try:
     from arena import Config, Obstacle, default_arena
-    from planner import FullMissionPlan, PlanLeg, plan_mission
+    from planner import (
+        FullMissionPlan,
+        PlanLeg,
+        discretize_waypoints,
+        plan_mission,
+        sample_reeds_shepp_path,
+    )
 except ImportError:
     from algorithm.arena import Config, Obstacle, default_arena
-    from algorithm.planner import FullMissionPlan, PlanLeg, plan_mission
+    from algorithm.planner import (
+        FullMissionPlan,
+        PlanLeg,
+        discretize_waypoints,
+        plan_mission,
+        sample_reeds_shepp_path,
+    )
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
@@ -56,7 +68,7 @@ class PlannerNode(Node):
     def __init__(self) -> None:
         super().__init__("planner_node")
 
-        self.declare_parameter("turning_radius_cm", 31.0)
+        self.declare_parameter("turning_radius_cm", 42.0)
         self.declare_parameter("camera_view_dist_cm", 25.0)
         self.declare_parameter("auto_start", False)
 
@@ -149,7 +161,8 @@ class PlannerNode(Node):
         self._current_plan = plan_mission(
             self._obstacles,
             start_pose=self._current_pose,
-            radius=self._radius
+            radius=self._radius,
+            d_view=self._view_dist
         )
 
         self.get_logger().info(
@@ -224,14 +237,23 @@ class PlannerNode(Node):
             )
             self._status_pub.publish(String(data=f"Navigating to Obs {leg.obstacle_id}"))
 
-            # Build ExecuteMoves request (prepends G0 to zero gyro baseline)
-            req = ExecuteMoves.Request()
-            g0_mc = MoveCommand()
-            g0_mc.command = "G0"
-            g0_mc.value = 0
-            req.commands.append(g0_mc)
+            # Dynamically re-plan trajectory from actual live resting pose to target vantage pose
+            current_start = self._current_pose
+            length, wps, sampled_poses, method = sample_reeds_shepp_path(
+                current_start, leg.vantage_pose, radius=self._radius
+            )
+            cmds, raw_cmds = discretize_waypoints(wps)
+            if not cmds:
+                cmds = leg.commands  # fallback to nominal commands if already in vicinity
 
-            for code, val in leg.commands:
+            self.get_logger().info(
+                f"Leg {i+1} planned from ({current_start.x:.1f}, {current_start.y:.1f}, {math.degrees(current_start.theta):.0f}°): "
+                f"{' -> '.join(raw_cmds or [f'{c}{v:03d}' for c, v in cmds])}"
+            )
+
+            # Build ExecuteMoves request
+            req = ExecuteMoves.Request()
+            for code, val in cmds:
                 mc = MoveCommand()
                 mc.command = code
                 mc.value = val

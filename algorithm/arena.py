@@ -19,9 +19,9 @@ from typing import Dict, List, Optional, Tuple
 # --- Course constants (Algorithms briefing) ---------------------------------
 ARENA_SIZE_CM = 200          # 2.0m x 2.0m
 START_ZONE_CM = 40           # 40cm x 40cm at the bottom-left corner
-ROBOT_W_CM = 20
-ROBOT_H_CM = 21
-TURNING_RADIUS_CM = 31.0     # calibrated 31cm conservative physical turning radius
+ROBOT_W_CM = 19              # 19cm width (transverse)
+ROBOT_H_CM = 23              # 23cm length (longitudinal)
+TURNING_RADIUS_CM = 42.0     # calibrated 42.0cm physical turning radius (84cm diameter)
 OBSTACLE_SIZE_CM = 10        # 10cm x 10cm footprint
 IMAGE_RECOG_DIST_CM = 20     # ideal camera distance to an obstacle
 
@@ -113,7 +113,7 @@ def point_collides_obstacle(px: float, py: float, ob: Obstacle,
 
 def collides_any(px: float, py: float, arena: Optional[Dict] = None) -> Optional[Obstacle]:
     a = arena or default_arena()
-    # Robot footprint is 20x21cm; treat it as its centre point for the cheap
+    # Robot footprint is 19x23cm; treat it as its centre point for the cheap
     # check here (the planner adds proper footprint clearance via the 30cm
     # padded planning footprint from the briefing).
     for ob in a["obstacles"]:
@@ -124,7 +124,7 @@ def collides_any(px: float, py: float, arena: Optional[Dict] = None) -> Optional
 
 # ----------------------------------------------------------------------------
 # Oriented footprint collision.  The cheap point check above treats the robot
-# as a point; the planner and simulator need the real 20x21cm body, so the
+# as a point; the planner and simulator need the real 19x23cm body, so the
 # robot is modelled as an oriented rectangle and tested against each 10x10
 # obstacle with a separating-axis test.  This is the briefing's "30cm padded
 # planning footprint" done properly (Minkowski sum of robot + obstacle) rather

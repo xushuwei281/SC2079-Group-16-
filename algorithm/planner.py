@@ -56,6 +56,7 @@ class PlanLeg:
     commands: List[Tuple[str, int]]
     raw_strings: List[str]
     distance_cm: float
+    method: str = "reeds_shepp"
 
 
 @dataclass
@@ -76,23 +77,27 @@ def compute_vantage_pose(
     obstacle: Obstacle,
     d_view: float = DEFAULT_VIEW_DIST_CM,
     half_obs: float = OBSTACLE_SIZE_CM / 2.0,
+    half_robot: float = ROBOT_H_CM / 2.0,
     arena: Optional[Dict] = None
 ) -> Config:
     """Compute the vantage pose (x, y, theta) where the robot's front camera
     faces directly at the target image on the specified obstacle face (N/S/E/W).
     
-    If arena is provided, adapts view distance (18cm to 30cm) to ensure the
+    d_view: desired clearance distance (cm) from the robot front bumper / camera
+            to the physical obstacle surface (defaults to DEFAULT_VIEW_DIST_CM = 25.0 cm).
+    
+    If arena is provided, adapts view distance (20cm to 35cm) to ensure the
     vantage pose does not collide with other obstacles or walls.
     """
     face = (obstacle.face or "N").upper()
     ox, oy = obstacle.x, obstacle.y
 
     # Try nominal distance first, then adapt if obstructed
-    candidate_dists = [d_view, 22.0, 20.0, 28.0, 30.0, 18.0]
+    candidate_dists = [d_view, 25.0, 28.0, 22.0, 30.0, 20.0, 35.0]
     best_config = None
 
     for d in candidate_dists:
-        dist = d + half_obs
+        dist = d + half_obs + half_robot
         if face == "N":
             vx, vy, vtheta = ox, oy + dist, -math.pi / 2.0
         elif face == "S":
@@ -108,7 +113,7 @@ def compute_vantage_pose(
         vy = max(15.0, min(ARENA_SIZE_CM - 15.0, vy))
         cfg = to_config(vx, vy, vtheta)
 
-        if arena is None or robot_collides_any(vx, vy, vtheta, arena, safety_margin=1.0) is None:
+        if arena is None or robot_collides_any(vx, vy, vtheta, arena, safety_margin=2.0) is None:
             return cfg
         if best_config is None:
             best_config = cfg
@@ -177,7 +182,7 @@ def sample_reeds_shepp_path(
     radius: float = TURNING_RADIUS_CM,
     arena: Optional[Dict] = None,
     step_cm: float = 2.0
-) -> Tuple[float, List[Tuple[str, float, float]], List[Tuple[float, float, float]]]:
+) -> Tuple[float, List[Tuple[str, float, float]], List[Tuple[float, float, float]], str]:
     """Generate fine-grained sampled (x, y, theta) poses along a collision-free Reeds-Shepp or A* fallback path."""
     from planning import plan_drive
     a = arena or default_arena()
@@ -185,42 +190,45 @@ def sample_reeds_shepp_path(
 
     length = res["length"]
     waypoints = res["waypoints"]
+    method = res.get("method", "reeds_shepp")
 
     if math.isinf(length) or not waypoints:
-        return math.inf, [], []
+        return math.inf, [], [], "none"
 
-    sampled_poses: List[Tuple[float, float, float]] = [(start.x, start.y, start.theta)]
-    curr_x, curr_y = start.x, start.y
-    curr_theta = start.theta
+    sampled_poses = res.get("poses", [])
+    if not sampled_poses:
+        sampled_poses = [(start.x, start.y, start.theta)]
+        curr_x, curr_y = start.x, start.y
+        curr_theta = start.theta
 
-    for kind, param, rad in waypoints:
-        if kind in ("F", "B"):
-            # Linear translation
-            dist = abs(param)
-            sgn = 1.0 if kind == "F" else -1.0
-            num_steps = max(1, int(math.ceil(dist / step_cm)))
-            ds = dist / num_steps
-            for _ in range(num_steps):
-                curr_x += sgn * ds * math.cos(curr_theta)
-                curr_y += sgn * ds * math.sin(curr_theta)
-                sampled_poses.append((curr_x, curr_y, curr_theta))
-        else:
-            # Arc turn (param is angle in radians)
-            angle = param
-            num_steps = max(1, int(math.ceil((abs(angle) * rad) / step_cm)))
-            d_th = angle / num_steps
-            for _ in range(num_steps):
-                if kind == "L":
-                    curr_x += rad * (math.sin(curr_theta + d_th) - math.sin(curr_theta))
-                    curr_y += rad * (-math.cos(curr_theta + d_th) + math.cos(curr_theta))
-                    curr_theta = normalize_angle(curr_theta + d_th)
-                else:  # 'R'
-                    curr_x += rad * (-math.sin(curr_theta - d_th) + math.sin(curr_theta))
-                    curr_y += rad * (math.cos(curr_theta - d_th) - math.cos(curr_theta))
-                    curr_theta = normalize_angle(curr_theta - d_th)
-                sampled_poses.append((curr_x, curr_y, curr_theta))
+        for kind, param, rad in waypoints:
+            if kind in ("F", "B"):
+                # Linear translation
+                dist = abs(param)
+                sgn = 1.0 if kind == "F" else -1.0
+                num_steps = max(1, int(math.ceil(dist / step_cm)))
+                ds = dist / num_steps
+                for _ in range(num_steps):
+                    curr_x += sgn * ds * math.cos(curr_theta)
+                    curr_y += sgn * ds * math.sin(curr_theta)
+                    sampled_poses.append((curr_x, curr_y, curr_theta))
+            else:
+                # Arc turn (param is angle in radians)
+                angle = param
+                num_steps = max(1, int(math.ceil((abs(angle) * rad) / step_cm)))
+                d_th = angle / num_steps
+                for _ in range(num_steps):
+                    if kind == "L":
+                        curr_x += rad * (math.sin(curr_theta + d_th) - math.sin(curr_theta))
+                        curr_y += rad * (-math.cos(curr_theta + d_th) + math.cos(curr_theta))
+                        curr_theta = normalize_angle(curr_theta + d_th)
+                    else:  # 'R'
+                        curr_x += rad * (-math.sin(curr_theta - d_th) + math.sin(curr_theta))
+                        curr_y += rad * (math.cos(curr_theta - d_th) - math.cos(curr_theta))
+                        curr_theta = normalize_angle(curr_theta - d_th)
+                    sampled_poses.append((curr_x, curr_y, curr_theta))
 
-    return length, waypoints, sampled_poses
+    return length, waypoints, sampled_poses, method
 
 
 def is_path_safe(
@@ -291,7 +299,8 @@ def plan_mission(
     start_pose: Optional[Config] = None,
     arena: Optional[Dict] = None,
     radius: float = TURNING_RADIUS_CM,
-    forced_order: Optional[List[int]] = None
+    forced_order: Optional[List[int]] = None,
+    d_view: float = DEFAULT_VIEW_DIST_CM
 ) -> FullMissionPlan:
     """Generate the complete optimal autonomous mission plan visiting all obstacles."""
     if arena is not None:
@@ -305,7 +314,7 @@ def plan_mission(
         return FullMissionPlan(sp, [], 0.0, [], [(sp.x, sp.y, sp.theta)])
 
     # 1. Compute vantage poses for all obstacles
-    vantage_poses = [compute_vantage_pose(ob, arena=a) for ob in obstacles]
+    vantage_poses = [compute_vantage_pose(ob, d_view=d_view, arena=a) for ob in obstacles]
 
     # 2. Solve TSP to get visiting order (or use forced permutation)
     if forced_order is not None:
@@ -323,8 +332,8 @@ def plan_mission(
         target_ob = obstacles[idx]
         target_vantage = vantage_poses[idx]
 
-        # Generate Reeds-Shepp curve
-        length, wps, sampled_poses = sample_reeds_shepp_path(current_pose, target_vantage, radius=radius, arena=a)
+        # Generate Reeds-Shepp curve or A* fallback
+        length, wps, sampled_poses, method = sample_reeds_shepp_path(current_pose, target_vantage, radius=radius, arena=a)
 
         # Discretize waypoints
         cmds, raw_cmds = discretize_waypoints(wps)
@@ -337,7 +346,8 @@ def plan_mission(
             poses=sampled_poses,
             commands=cmds,
             raw_strings=raw_cmds,
-            distance_cm=length
+            distance_cm=length,
+            method=method
         )
 
         legs.append(leg)

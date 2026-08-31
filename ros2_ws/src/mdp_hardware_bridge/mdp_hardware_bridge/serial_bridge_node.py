@@ -33,6 +33,7 @@ import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from sensor_msgs.msg import Range
 import serial
 import serial.tools.list_ports
 from std_msgs.msg import Empty, String
@@ -117,6 +118,9 @@ class SerialBridgeNode(Node):
         callback_group = ReentrantCallbackGroup()
 
         self._pose_pub = self.create_publisher(PoseStamped, "/robot_pose", 10)
+        self._us_pub = self.create_publisher(Range, "/sensors/ultrasonic", 10)
+        self._ir_left_pub = self.create_publisher(Range, "/sensors/ir_left", 10)
+        self._ir_right_pub = self.create_publisher(Range, "/sensors/ir_right", 10)
         self._tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
         self._estop_sub = self.create_subscription(
@@ -323,14 +327,34 @@ class SerialBridgeNode(Node):
         we use the real sensor-fused distance and gyro heading. Otherwise,
         we fall back to nominal kinematics from the commanded list.
         """
-        if any(mc.command in {"G0", "GC"} for mc in commands):
+        # Only re-initialize pose if explicit GC (calibration at start zone) is commanded
+        if any(mc.command == "GC" for mc in commands):
             self._x = self._initial_x
             self._y = self._initial_y
             self._yaw = self._initial_yaw
             self._publish_current_pose()
             return
 
-        if status.startswith("FIN:"):
+        if status.startswith("FIN:POS,"):
+            payload = status[8:].strip()
+            try:
+                parts = payload.split(",")
+                self._x = float(parts[0]) / 100.0
+                self._y = float(parts[1]) / 100.0
+                self._yaw = math.radians(float(parts[2]))
+                if len(parts) >= 6:
+                    us_m = float(parts[3]) / 100.0
+                    ir1_m = float(parts[4]) / 100.0
+                    ir2_m = float(parts[5]) / 100.0
+                    self._publish_sensor_ranges(us_m, ir1_m, ir2_m)
+                elif len(parts) >= 5:
+                    ir1_m = float(parts[3]) / 100.0
+                    ir2_m = float(parts[4]) / 100.0
+                    self._publish_sensor_ranges(0.0, ir1_m, ir2_m)
+            except Exception as exc:
+                self.get_logger().warn(f"Failed to parse POS feedback from {status!r}: {exc}")
+                self._accumulate_nominal(commands)
+        elif status.startswith("FIN:"):
             payload = status[4:].strip()
             try:
                 dist_str, heading_str = payload.split(",")
@@ -356,6 +380,45 @@ class SerialBridgeNode(Node):
         # Normalize yaw to (-pi, pi]
         self._yaw = (self._yaw + math.pi) % (2.0 * math.pi) - math.pi
         self._publish_current_pose()
+
+    def _publish_sensor_ranges(self, us_m: float, ir1_m: float, ir2_m: float) -> None:
+        """Publish sensor_msgs/Range messages for Ultrasonic and IR sensors."""
+        now = self.get_clock().now().to_msg()
+
+        if us_m > 0.0:
+            us = Range()
+            us.header.stamp = now
+            us.header.frame_id = "ultrasonic_link"
+            us.radiation_type = Range.ULTRASOUND
+            us.field_of_view = 0.26  # ~15 degrees cone
+            us.min_range = 0.02
+            us.max_range = 3.00
+            us.range = float(us_m)
+            self._us_pub.publish(us)
+
+        r1 = Range()
+        r1.header.stamp = now
+        r1.header.frame_id = "ir_left_link"
+        r1.radiation_type = Range.INFRARED
+        r1.field_of_view = 0.1
+        r1.min_range = 0.10
+        r1.max_range = 0.80
+        r1.range = float(ir1_m)
+        self._ir_left_pub.publish(r1)
+
+        r2 = Range()
+        r2.header.stamp = now
+        r2.header.frame_id = "ir_right_link"
+        r2.radiation_type = Range.INFRARED
+        r2.field_of_view = 0.1
+        r2.min_range = 0.10
+        r2.max_range = 0.80
+        r2.range = float(ir2_m)
+        self._ir_right_pub.publish(r2)
+
+        self.get_logger().info(
+            f"Sensors: US={us_m*100.0:.1f}cm, IR1={ir1_m*100.0:.1f}cm, IR2={ir2_m*100.0:.1f}cm"
+        )
 
     def _publish_current_pose(self) -> None:
         """Publish PoseStamped and broadcast TF transform for the current pose."""

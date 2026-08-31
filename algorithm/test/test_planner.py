@@ -26,7 +26,7 @@ class TestPathPlanner(unittest.TestCase):
         ob = Obstacle(id=1, x=100, y=100, face="N")
         vp = compute_vantage_pose(ob, d_view=25.0)
         self.assertAlmostEqual(vp.x, 100.0)
-        self.assertAlmostEqual(vp.y, 130.0)  # 100 + 25 + 5
+        self.assertAlmostEqual(vp.y, 141.5)  # 100 + 25 + 5 + 11.5 (front bumper clearance)
         self.assertAlmostEqual(vp.theta, -math.pi / 2.0)
 
     def test_vantage_pose_south_face(self):
@@ -34,14 +34,14 @@ class TestPathPlanner(unittest.TestCase):
         ob = Obstacle(id=2, x=100, y=100, face="S")
         vp = compute_vantage_pose(ob, d_view=25.0)
         self.assertAlmostEqual(vp.x, 100.0)
-        self.assertAlmostEqual(vp.y, 70.0)  # 100 - 25 - 5
+        self.assertAlmostEqual(vp.y, 58.5)  # 100 - 25 - 5 - 11.5 (front bumper clearance)
         self.assertAlmostEqual(vp.theta, math.pi / 2.0)
 
     def test_vantage_pose_east_face(self):
         """East face: target points East -> robot placed East of obstacle facing West (pi)."""
         ob = Obstacle(id=3, x=100, y=100, face="E")
         vp = compute_vantage_pose(ob, d_view=25.0)
-        self.assertAlmostEqual(vp.x, 130.0)  # 100 + 25 + 5
+        self.assertAlmostEqual(vp.x, 141.5)  # 100 + 25 + 5 + 11.5 (front bumper clearance)
         self.assertAlmostEqual(vp.y, 100.0)
         self.assertAlmostEqual(abs(vp.theta), math.pi)
 
@@ -49,7 +49,7 @@ class TestPathPlanner(unittest.TestCase):
         """West face: target points West -> robot placed West of obstacle facing East (0)."""
         ob = Obstacle(id=4, x=100, y=100, face="W")
         vp = compute_vantage_pose(ob, d_view=25.0)
-        self.assertAlmostEqual(vp.x, 70.0)  # 100 - 25 - 5
+        self.assertAlmostEqual(vp.x, 58.5)  # 100 - 25 - 5 - 11.5 (front bumper clearance)
         self.assertAlmostEqual(vp.y, 100.0)
         self.assertAlmostEqual(vp.theta, 0.0)
 
@@ -135,8 +135,8 @@ class TestPathPlanner(unittest.TestCase):
         from planning import plan_drive
         arena = {
             "arena_size": 200,
-            "robot_w": 20,
-            "robot_h": 21,
+            "robot_w": 19,
+            "robot_h": 23,
             "obstacles": [
                 Obstacle(id=1, x=50, y=50),
                 Obstacle(id=2, x=50, y=60),
@@ -146,10 +146,17 @@ class TestPathPlanner(unittest.TestCase):
         start = Config(20.0, 60.0, 0.0)
         goal = Config(80.0, 60.0, 0.0)
         result = plan_drive(start, goal, radius=25.0, arena=arena)
-        self.assertIn(result["method"], ("reeds_shepp", "hybrid_astar", "astar_fallback"))
+        self.assertIn(result["method"], ("astar", "hybrid_astar", "astar_fallback"))
         self.assertNotEqual(result["method"], "none")
         self.assertTrue(len(result["waypoints"]) > 0)
         self.assertTrue(len(result["poses"]) > 0)
+
+    def test_plan_leg_methods_tagged(self):
+        """Verify that mission plan legs are tagged with their derivation algorithm."""
+        arena = default_arena()
+        plan = plan_mission(arena["obstacles"])
+        for leg in plan.legs:
+            self.assertIn(leg.method, ("reeds_shepp", "astar", "hybrid_astar"))
 
 
 if __name__ == "__main__":

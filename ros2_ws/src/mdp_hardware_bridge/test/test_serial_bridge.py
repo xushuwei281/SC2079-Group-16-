@@ -30,7 +30,7 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.node.destroy_node()
 
     def test_valid_command_codes(self):
-        expected = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU"}
+        expected = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU", "GC", "G0", "TO"}
         self.assertEqual(_VALID_COMMANDS, expected)
 
     def test_encode_valid(self):
@@ -139,6 +139,7 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.node._x = 0.0
         self.node._y = 0.0
         self.node._yaw = 0.0
+        self.node._initial_yaw = 0.0
 
         req = ExecuteMoves.Request()
         req.commands = [MoveCommand(command="FC", value=50)]
@@ -162,6 +163,7 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.node._x = 0.0
         self.node._y = 0.0
         self.node._yaw = 0.0
+        self.node._initial_yaw = 0.0
 
         req = ExecuteMoves.Request()
         req.commands = [
@@ -175,7 +177,25 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.status, "FIN")
         self.assertAlmostEqual(self.node._x, 0.50, places=2)
-        self.assertAlmostEqual(self.node._yaw, math.radians(90.0), places=2)
+    @patch("serial.Serial")
+    def test_pos_fin_updates_pose(self, mock_serial_cls):
+        mock_serial = MagicMock()
+        mock_serial.is_open = True
+        # STM32 replies RUN, then FIN:POS,65.4,120.2,89.5,25,18,45 (in cm, degrees, US, IR1, IR2)
+        mock_serial.readline.side_effect = [b"RUN\r\n", b"FIN:POS,65.4,120.2,89.5,25,18,45\r\n"]
+        self.node._serial = mock_serial
+
+        req = ExecuteMoves.Request()
+        req.commands = [MoveCommand(command="FC", value=50)]
+        resp = ExecuteMoves.Response()
+
+        result = self.node._handle_execute_moves(req, resp)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.status, "FIN:POS,65.4,120.2,89.5,25,18,45")
+        self.assertAlmostEqual(self.node._x, 0.654, places=3)
+        self.assertAlmostEqual(self.node._y, 1.202, places=3)
+        self.assertAlmostEqual(self.node._yaw, math.radians(89.5), places=3)
 
 
 if __name__ == "__main__":

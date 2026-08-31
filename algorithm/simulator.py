@@ -54,7 +54,9 @@ OBSTACLE_BORDER = (180, 190, 210)
 FACE_TARGET_COLOR = (245, 60, 60)      # Bright Red for target image face
 FACE_NON_TARGET = (100, 110, 130)
 
-PATH_COLOR = (0, 220, 140)             # Emerald Green for trajectory
+PATH_REEDS_COLOR = (0, 220, 140)       # Emerald Green for Reeds-Shepp curve
+PATH_ASTAR_COLOR = (255, 140, 30)       # Vivid Orange for A* fallback trajectory
+PATH_COLOR = PATH_REEDS_COLOR          # Default alias
 PATH_REVERSE_COLOR = (255, 170, 0)     # Amber for reverse moves
 VANTAGE_MARKER_COLOR = (0, 180, 255)   # Cyan for camera stopping point
 
@@ -70,19 +72,26 @@ HIGHLIGHT_COLOR = (255, 200, 0)
 
 
 class ArenaSimulator:
-    def __init__(self, width: int = 1100, height: int = 800) -> None:
+    def __init__(self, width: int = 1200, height: int = 820) -> None:
         pygame.init()
         pygame.display.set_caption("SC2079 MDP — Autonomous Path Planner Simulator")
         self.screen = pygame.display.set_mode((width, height))
         self.clock = pygame.time.Clock()
-        self.font_sm = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 13)
-        self.font_md = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 16, bold=True)
-        self.font_lg = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 20, bold=True)
+
+        # Enhanced Typography System
+        self.font_xs = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 13)
+        self.font_sm = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 15)
+        self.font_sm_bold = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 15, bold=True)
+        self.font_md = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 17, bold=True)
+        self.font_lg = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 21, bold=True)
+        self.font_xl = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 25, bold=True)
+        self.font_mono = pygame.font.SysFont("DejaVu Sans Mono, Consolas, Courier New, monospace", 14)
+        self.font_obs = pygame.font.SysFont("DejaVu Sans, Arial, sans-serif", 15, bold=True)
 
         # Arena Display Dimensions
-        self.arena_px = 700  # 700x700 pixels for 200x200 cm arena
-        self.arena_origin = (50, 50)  # Top-left corner of arena box
-        self.scale = self.arena_px / ARENA_SIZE_CM  # 3.5 px per cm
+        self.arena_px = 720  # 720x720 pixels for 200x200 cm arena
+        self.arena_origin = (45, 50)  # Top-left corner of arena box
+        self.scale = self.arena_px / ARENA_SIZE_CM  # 3.6 px per cm
 
         # Initialize Arena State
         arena_dict = default_arena()
@@ -102,14 +111,19 @@ class ArenaSimulator:
         self.anim_speed = 3  # Poses per frame
 
         # Pre-rendered Static UI Surfaces
-        self.start_zone_label = self.font_sm.render("START ZONE", True, START_BORDER_COLOR)
-        self.title_surface = self.font_lg.render("SC2079 Path Planner", True, TEXT_WHITE)
+        self.start_zone_label = self.font_sm_bold.render("START ZONE", True, START_BORDER_COLOR)
+        self.title_surface = self.font_xl.render("SC2079 Path Planner", True, TEXT_WHITE)
         self.cmd_header_surface = self.font_md.render("--- 5-BYTE UART COMMANDS ---", True, TEXT_ACCENT)
         self.status_anim_surface = self.font_md.render("Status: ANIMATING", True, TEXT_ACCENT)
         self.status_ready_surface = self.font_md.render("Status: PAUSED / READY", True, HIGHLIGHT_COLOR)
 
+        # Algorithm Color Legend Surfaces
+        self.legend_header_surface = self.font_md.render("--- PATH ALGORITHM KEY ---", True, TEXT_GRAY)
+        self.legend_reeds_surface = self.font_sm_bold.render("Reeds-Shepp (Direct)", True, PATH_REEDS_COLOR)
+        self.legend_astar_surface = self.font_sm_bold.render("A* Search (Fallback)", True, PATH_ASTAR_COLOR)
+
+        help_header = self.font_md.render("--- CONTROLS ---", True, TEXT_GRAY)
         help_box = [
-            "--- CONTROLS ---",
             "Left Drag: Move Obstacle",
             "Right Click: Change Face (N/E/S/W)",
             "Middle Click: Delete Obstacle",
@@ -118,6 +132,7 @@ class ArenaSimulator:
             "C / ENTER: Compute Optimal Path",
             "SPACE: Play/Pause | R: Reset",
         ]
+        self.help_header_surface = help_header
         self.help_surfaces = [self.font_sm.render(line, True, TEXT_GRAY) for line in help_box]
         self.obs_label_cache: Dict[int, pygame.Surface] = {}
 
@@ -130,17 +145,17 @@ class ArenaSimulator:
         self.status_random_surface = self.font_md.render("Status: RANDOM PERM (Sub-optimal)", True, (80, 210, 255))
 
         # Interactive Button Geometry & Surfaces
-        self.btn_rect = pygame.Rect(780, 136, 270, 34)
-        self.btn_add_rect = pygame.Rect(780, 176, 130, 28)
-        self.btn_del_rect = pygame.Rect(920, 176, 130, 28)
-        self.btn_perm_rect = pygame.Rect(780, 210, 270, 28)
+        self.btn_rect = pygame.Rect(800, 168, 360, 36)
+        self.btn_add_rect = pygame.Rect(800, 210, 175, 30)
+        self.btn_del_rect = pygame.Rect(985, 210, 175, 30)
+        self.btn_perm_rect = pygame.Rect(800, 248, 360, 30)
 
         self.btn_idle_text = self.font_md.render("COMPUTE OPTIMAL PATH (C)", True, TEXT_WHITE)
         self.btn_stale_text = self.font_md.render("RECOMPUTE PATH (C)", True, TEXT_WHITE)
         self.btn_busy_text = self.font_md.render("COMPUTING...", True, TEXT_WHITE)
-        self.btn_add_text = self.font_sm.render("+ ADD (A)", True, TEXT_WHITE)
-        self.btn_del_text = self.font_sm.render("- REMOVE (D)", True, TEXT_WHITE)
-        self.btn_perm_text = self.font_sm.render("SAMPLE RANDOM PERMUTATION (P)", True, TEXT_WHITE)
+        self.btn_add_text = self.font_sm_bold.render("+ ADD (A)", True, TEXT_WHITE)
+        self.btn_del_text = self.font_sm_bold.render("- REMOVE (D)", True, TEXT_WHITE)
+        self.btn_perm_text = self.font_sm_bold.render("SAMPLE RANDOM PERMUTATION (P)", True, TEXT_WHITE)
 
         # Cached Plan Text Surfaces
         self.cached_metrics_surfaces: List[pygame.Surface] = []
@@ -159,16 +174,22 @@ class ArenaSimulator:
 
     def _update_text_surfaces(self, plan: FullMissionPlan, total_perms: int) -> None:
         """Render cached UI text surfaces on the main Pygame thread."""
+        num_rs = sum(1 for leg in plan.legs if getattr(leg, "method", "reeds_shepp") == "reeds_shepp")
+        num_astar = sum(1 for leg in plan.legs if getattr(leg, "method", "reeds_shepp") in ("astar", "hybrid_astar", "astar_fallback"))
+
         metrics = [
-            self.font_sm.render(f"Total Distance: {plan.total_distance_cm:.1f} cm", True, TEXT_WHITE),
+            self.font_sm_bold.render(f"Total Distance: {plan.total_distance_cm:.1f} cm", True, TEXT_WHITE),
             self.font_sm.render(f"TSP Orders: {total_perms} evaluated", True, TEXT_WHITE),
-            self.font_sm.render(f"Obstacles Visited: {len(plan.legs)}", True, TEXT_WHITE),
+            self.font_sm.render(f"Obstacles Visited: {len(plan.legs)} ({num_rs} Reeds, {num_astar} A*)", True, TEXT_WHITE),
         ]
         cmds = []
         for i, leg in enumerate(plan.legs):
-            t_surf = self.font_sm.render(f"Leg {i+1} -> Obs {leg.obstacle_id} ({leg.target_face}):", True, HIGHLIGHT_COLOR)
+            is_astar = getattr(leg, "method", "reeds_shepp") in ("astar", "hybrid_astar", "astar_fallback")
+            method_tag = "[A* Fallback]" if is_astar else "[Reeds-Shepp]"
+            header_color = PATH_ASTAR_COLOR if is_astar else HIGHLIGHT_COLOR
+            t_surf = self.font_sm_bold.render(f"Leg {i+1} -> Obs {leg.obstacle_id} ({leg.target_face}) {method_tag}:", True, header_color)
             c_str = " ".join(leg.raw_strings)
-            c_surf = self.font_sm.render(c_str, True, TEXT_WHITE)
+            c_surf = self.font_mono.render(c_str, True, TEXT_WHITE)
             cmds.append((t_surf, c_surf))
 
         self.cached_metrics_surfaces = metrics
@@ -176,7 +197,7 @@ class ArenaSimulator:
 
     def get_obs_label(self, obs_id: int) -> pygame.Surface:
         if obs_id not in self.obs_label_cache:
-            self.obs_label_cache[obs_id] = self.font_sm.render(f"O{obs_id}", True, TEXT_WHITE)
+            self.obs_label_cache[obs_id] = self.font_obs.render(f"O{obs_id}", True, TEXT_WHITE)
         return self.obs_label_cache[obs_id]
 
     def add_obstacle(self, wx: Optional[float] = None, wy: Optional[float] = None) -> None:
@@ -396,16 +417,19 @@ class ArenaSimulator:
         sz_px = int(START_ZONE_CM * self.scale)
         pygame.draw.rect(self.screen, START_ZONE_COLOR, (start_sx, start_sy, sz_px, sz_px))
         pygame.draw.rect(self.screen, START_BORDER_COLOR, (start_sx, start_sy, sz_px, sz_px), 2)
-        self.screen.blit(self.start_zone_label, (start_sx + 8, start_sy + sz_px - 20))
+        self.screen.blit(self.start_zone_label, (start_sx + 8, start_sy + sz_px - 22))
 
     def draw_trajectory(self) -> None:
         if not self.plan or not self.plan.legs:
             return
 
         for leg in self.plan.legs:
+            is_astar = getattr(leg, "method", "reeds_shepp") in ("astar", "hybrid_astar", "astar_fallback")
+            leg_color = PATH_ASTAR_COLOR if is_astar else PATH_REEDS_COLOR
+
             if len(leg.poses) > 1:
                 points = [self.world_to_screen(p[0], p[1]) for p in leg.poses]
-                pygame.draw.lines(self.screen, PATH_COLOR, False, points, 3)
+                pygame.draw.lines(self.screen, leg_color, False, points, 3)
 
             # Draw Vantage Pose
             vx, vy = self.world_to_screen(leg.vantage_pose.x, leg.vantage_pose.y)
@@ -441,7 +465,8 @@ class ArenaSimulator:
 
             # Cached Obstacle Label
             lbl = self.get_obs_label(ob.id)
-            self.screen.blit(lbl, (cx - 8, cy - 8))
+            lbl_rect = lbl.get_rect(center=(cx, cy))
+            self.screen.blit(lbl, lbl_rect)
 
     def draw_robot(self, x: float, y: float, theta: float) -> None:
         c, s = math.cos(theta), math.sin(theta)
@@ -467,8 +492,8 @@ class ArenaSimulator:
         pygame.draw.circle(self.screen, ROBOT_HEAD_COLOR, (fx, fy), 4)
 
     def draw_sidebar(self) -> None:
-        sb_x = 780
-        sb_y = 25
+        sb_x = 800
+        sb_y = 20
 
         # Cached Title & Status
         self.screen.blit(self.title_surface, (sb_x, sb_y))
@@ -482,11 +507,11 @@ class ArenaSimulator:
             status_surf = self.status_anim_surface
         else:
             status_surf = self.status_ready_surface
-        self.screen.blit(status_surf, (sb_x, sb_y + 26))
+        self.screen.blit(status_surf, (sb_x, sb_y + 32))
 
         # Cached Metrics Panel
         for i, m_surf in enumerate(self.cached_metrics_surfaces):
-            self.screen.blit(m_surf, (sb_x, sb_y + 54 + i * 18))
+            self.screen.blit(m_surf, (sb_x, sb_y + 64 + i * 22))
 
         # Interactive Compute Button
         mouse_pos = pygame.mouse.get_pos()
@@ -536,22 +561,39 @@ class ArenaSimulator:
         self.screen.blit(self.btn_perm_text, self.btn_perm_text.get_rect(center=self.btn_perm_rect.center))
 
         # Cached Instructions / Help
-        help_y = 246
+        help_y = 290
+        self.screen.blit(self.help_header_surface, (sb_x, help_y))
+        help_y += 22
         for h_surf in self.help_surfaces:
             self.screen.blit(h_surf, (sb_x, help_y))
-            help_y += 16
+            help_y += 18
+
+        # Algorithm Color Legend
+        legend_y = help_y + 8
+        self.screen.blit(self.legend_header_surface, (sb_x, legend_y))
+        legend_y += 22
+
+        # Reeds-Shepp indicator line
+        pygame.draw.line(self.screen, PATH_REEDS_COLOR, (sb_x + 4, legend_y + 8), (sb_x + 28, legend_y + 8), 3)
+        self.screen.blit(self.legend_reeds_surface, (sb_x + 36, legend_y))
+        legend_y += 20
+
+        # A* indicator line
+        pygame.draw.line(self.screen, PATH_ASTAR_COLOR, (sb_x + 4, legend_y + 8), (sb_x + 28, legend_y + 8), 3)
+        self.screen.blit(self.legend_astar_surface, (sb_x + 36, legend_y))
+        legend_y += 24
 
         # Cached Command Stream Output
         if self.cached_cmd_surfaces:
-            cmd_y = help_y + 10
+            cmd_y = legend_y + 4
             self.screen.blit(self.cmd_header_surface, (sb_x, cmd_y))
             cmd_y += 22
 
             for leg_title_surf, cmd_str_surf in self.cached_cmd_surfaces:
                 self.screen.blit(leg_title_surf, (sb_x, cmd_y))
-                cmd_y += 16
+                cmd_y += 18
                 self.screen.blit(cmd_str_surf, (sb_x + 10, cmd_y))
-                cmd_y += 20
+                cmd_y += 22
 
     def run(self) -> None:
         running = True

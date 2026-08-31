@@ -78,6 +78,7 @@ clean = { cmd = "rm -rf build install log", description = "Remove colcon build a
 sim = { cmd = "python3 ../algorithm/simulator.py", description = "Launch the interactive 2D arena simulator" }
 planner = { cmd = "python3 ../algorithm/planner.py", description = "Run the CLI path planning algorithm demo" }
 test-algo = { cmd = "python3 -m unittest discover -s ../algorithm/test -p 'test_*.py'", description = "Run algorithm unit tests" }
+test-bridge = { cmd = "python3 -m unittest discover -s src/mdp_hardware_bridge/test -p 'test_*.py' && python3 -m unittest discover -s src/mdp_android_bridge/test -p 'test_*.py'", description = "Run hardware & Android bridge unit tests" }
 # -u ZENOH_SESSION_CONFIG_URI: this task is shared by pi/pc, both of whose
 # activation scripts point that var at a mode:"client" config (client sessions
 # only connect, they never listen). The router process needs mode:"router" with

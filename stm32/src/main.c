@@ -42,8 +42,8 @@
 //for servo
 #define PWM_PERIOD  1600
 #define SERVOCENTER 146      /* was ~71.5 when tim8 prescale is 320 */
-#define SERVOLEFT   101
-#define SERVORIGHT  215
+#define SERVOLEFT   101      /* delta = 45 from center (146 - 45) -> ~84cm radius */
+#define SERVORIGHT  206      /* calibrated mechanical offset -> ~84cm radius */
 #define SERVOMIN     94
 #define SERVOMAX    231
 //testing servo center:
@@ -144,7 +144,7 @@ uint32_t gyroLastTick = 0;
 char gyroMsg[32];
 float    gyroDrift    = 0.0f;    /* residual walk, deg/s */
 uint32_t gyroBadReads = 0;       /* diagnostic counter   */
-char     oled_display[6][16];    /* shared display buffer */
+char     oled_display[6][24];    /* shared display buffer (16 chars visible on screen) */
 //for motor
 int     motorCorrection = 0;
 uint8_t motor_pid = 0;
@@ -159,6 +159,22 @@ int8_t   move_dir = 'C';                /* C:Center  L:Left  R:Right */
 //Servo
 uint16_t target_pwmVal_servo = SERVOCENTER;
 uint16_t pwmVal_servo        = SERVOCENTER;
+
+/* Analog IR sensors on H1: PA2/pin 9 and PA3/pin 11. */
+volatile uint16_t irSensor1Raw = 0;
+volatile uint16_t irSensor2Raw = 0;
+volatile uint16_t ir1_cm = 0;
+volatile uint16_t ir2_cm = 0;
+
+/* Ultrasonic sensor HC-SR04: PC7 Trig, PB15 Echo */
+volatile uint16_t us_cm = 0;
+volatile uint32_t us_raw_us = 0;
+
+/* 2D Pose Estimation (Odometry + Gyro Z Fusion) */
+float robot_x_cm = 20.0f;               /* Start zone center (20cm, 20cm), East=0, North=+90deg */
+float robot_y_cm = 20.0f;
+static float prev_enc_left  = 0.0f;
+static float prev_enc_right = 0.0f;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -183,6 +199,87 @@ void comm_task(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void IR_ADC_Init(void)
+{
+   GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+   __HAL_RCC_GPIOA_CLK_ENABLE();
+   __HAL_RCC_ADC1_CLK_ENABLE();
+
+   /* PA2 = ADC1_IN2, PA3 = ADC1_IN3. Analog mode disables digital pulls. */
+   GPIO_InitStruct.Pin = GPIO_PIN_2 | GPIO_PIN_3;
+   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+   GPIO_InitStruct.Pull = GPIO_NOPULL;
+   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+   ADC->CCR = (ADC->CCR & ~ADC_CCR_ADCPRE) | ADC_CCR_ADCPRE_0; /* PCLK2 / 4 */
+   ADC1->CR1 = 0;
+   ADC1->CR2 = ADC_CR2_ADON;
+   ADC1->SMPR2 = (ADC1->SMPR2 & ~(ADC_SMPR2_SMP2 | ADC_SMPR2_SMP3)) |
+                 (ADC_SMPR2_SMP2_2 | ADC_SMPR2_SMP2_1 | ADC_SMPR2_SMP2_0) |
+                 (ADC_SMPR2_SMP3_2 | ADC_SMPR2_SMP3_1 | ADC_SMPR2_SMP3_0);
+}
+
+static uint16_t IR_ADC_Read(uint32_t channel)
+{
+   ADC1->SQR1 = 0;                    /* one conversion */
+   ADC1->SQR3 = channel & 0x1FU;
+   ADC1->SR = 0;
+   ADC1->CR2 |= ADC_CR2_SWSTART;
+   while ((ADC1->SR & ADC_SR_EOC) == 0U) { }
+   return (uint16_t)ADC1->DR;
+}
+
+static uint16_t IR_RawToCm(uint16_t raw)
+{
+   if (raw < 100) raw = 100;
+   float v = (raw * 3.3f) / 4095.0f;
+   if (v < 0.1f) v = 0.1f;
+   float d = 27.09039f * powf(v, -1.00210f);
+   if (d > 80.0f) d = 80.0f;
+   if (d < 10.0f) d = 10.0f;
+   return (uint16_t)(d + 0.5f);
+}
+
+static void HCSR04_Init(void)
+{
+   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_RESET);
+}
+
+static uint16_t HCSR04_ReadCm(uint32_t *raw_us)
+{
+   /* 1. Send 10 µs trigger pulse on PC10 (TRIG) */
+   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_SET);
+   for (volatile int d = 0; d < 300; d++) { __NOP(); }
+   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_RESET);
+
+   /* 2. Wait for PC12 (ECHO) to go HIGH with safe iteration timeout (~3 ms) */
+   uint32_t wait_timeout = 0;
+   while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_12) == GPIO_PIN_RESET) {
+       if (++wait_timeout > 40000) {
+           if (raw_us) *raw_us = 0;
+           return 0;
+       }
+   }
+
+   /* 3. Count duration while PC12 (ECHO) is HIGH (max ~30 ms = ~5m) */
+   uint32_t pulse_count = 0;
+   while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_12) == GPIO_PIN_SET) {
+       pulse_count++;
+       if (pulse_count > 300000) {
+           break;
+       }
+   }
+
+   /* Approximate loop time at 168MHz: ~14 cycles (~0.083 µs) per count */
+   uint32_t echo_us = (pulse_count * 5) / 6;
+   if (raw_us) *raw_us = echo_us;
+
+   float dist_cm = (float)echo_us * 0.0343f / 2.0f;
+   if (dist_cm > 300.0f) dist_cm = 300.0f;
+   return (uint16_t)(dist_cm + 0.5f);
+}
+
 //Encoder
 static int32_t encoderA(void) { return (int32_t)__HAL_TIM_GET_COUNTER(&htim2); }
 static int32_t encoderB(void) { return -(int16_t)__HAL_TIM_GET_COUNTER(&htim3); }
@@ -196,6 +293,8 @@ static void encodersZero(void)
 {
    __HAL_TIM_SET_COUNTER(&htim2, 0);
    __HAL_TIM_SET_COUNTER(&htim3, 0);
+   prev_enc_left  = 0.0f;
+   prev_enc_right = 0.0f;
 }
 static void setMotorA(int16_t speed)
 {
@@ -266,7 +365,9 @@ int main(void)
   MX_TIM3_Init();
   MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
- OLED_Init();
+  IR_ADC_Init();
+  HCSR04_Init();
+  OLED_Init();
  ICM20948_init(&hi2c2,
                0,
                GYRO_FULL_SCALE_250DPS,
@@ -858,6 +959,20 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(Buzzer_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure Ultrasonic TRIG Pin : PC10 */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_RESET);
+  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure Ultrasonic ECHO Pin : PC12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   /* USER CODE END MX_GPIO_Init_2 */
 }
@@ -880,6 +995,8 @@ static void MotorsOff(void)
     __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);
     __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_1, 0);
     __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_2, 0);
+    target_pwmVal_servo = SERVOCENTER;
+    pwmVal_servo        = SERVOCENTER;
     htim8.Instance->CCR2 = SERVOCENTER;
 
     /* CRITICAL: otherwise motor() re-drives them 40 ms later */
@@ -923,10 +1040,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
        /* no ACK - the RPi protocol does not expect one */
    }
 
-   snprintf(oled_display[0], sizeof(oled_display[0]), "Rx:%.5s       ", (char *)pkt);
-   snprintf(oled_display[3], sizeof(oled_display[3]), "N%-3d R%d E%d C%-4lu",
-            (int)instrLen, (int)runRequested, (int)estopFlag,
-            (unsigned long)rxCount);
+   snprintf(oled_display[0], sizeof(oled_display[0]), "Rx:%.5s N%-2d C%-4lu",
+            (char *)pkt, (int)instrLen, (unsigned long)rxCount);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -1136,15 +1251,32 @@ void StartDefaultTask(void *argument)
     bytes, so it must never sit inside a control loop. */
  for(;;)
  {
-   OLED_ShowString(0,  0, (uint8_t *)oled_display[0]);
-   OLED_ShowString(0, 10, (uint8_t *)oled_display[1]);
-   OLED_ShowString(0, 20, (uint8_t *)oled_display[2]);
-   OLED_ShowString(0, 30, (uint8_t *)oled_display[3]);
-   OLED_ShowString(0, 40, (uint8_t *)oled_display[4]);
-   OLED_ShowString(0, 50, (uint8_t *)oled_display[5]);
-   OLED_Refresh_Gram();
-   osDelay(400);
- }
+    irSensor1Raw = IR_ADC_Read(2U); /* PA2 / ADC1_IN2 */
+    irSensor2Raw = IR_ADC_Read(3U); /* PA3 / ADC1_IN3 */
+
+    ir1_cm = IR_RawToCm(irSensor1Raw);
+    ir2_cm = IR_RawToCm(irSensor2Raw);
+
+    uint32_t raw_echo = 0;
+    us_cm = HCSR04_ReadCm(&raw_echo);
+    us_raw_us = raw_echo;
+
+    snprintf(oled_display[3], sizeof(oled_display[3]),
+             "US :%2ucm R:%-4lu", (unsigned int)us_cm, (unsigned long)us_raw_us);
+    snprintf(oled_display[4], sizeof(oled_display[4]),
+             "I1 :%2ucm R:%-4u", (unsigned int)ir1_cm, (unsigned int)irSensor1Raw);
+    snprintf(oled_display[5], sizeof(oled_display[5]),
+             "I2 :%2ucm R:%-4u", (unsigned int)ir2_cm, (unsigned int)irSensor2Raw);
+
+    OLED_ShowString(0,  0, (uint8_t *)oled_display[0]);
+    OLED_ShowString(0, 10, (uint8_t *)oled_display[1]);
+    OLED_ShowString(0, 20, (uint8_t *)oled_display[2]);
+    OLED_ShowString(0, 30, (uint8_t *)oled_display[3]);
+    OLED_ShowString(0, 40, (uint8_t *)oled_display[4]);
+    OLED_ShowString(0, 50, (uint8_t *)oled_display[5]);
+    OLED_Refresh_Gram();
+    osDelay(200);
+  }
   /* USER CODE END 5 */
 }
 
@@ -1163,10 +1295,25 @@ void encoder_task(void *argument)
 		      left_dist  = distA();
 		      right_dist = distB();
 
+		      /* 2D Dead Reckoning: distance increment over last 10ms */
+		      float dL = left_dist  - prev_enc_left;
+		      float dR = right_dist - prev_enc_right;
+		      prev_enc_left  = left_dist;
+		      prev_enc_right = right_dist;
+
+		      float delta_s = 0.5f * (dL + dR);
+
+		      /* In arena convention: East=0 rad, North=+90 deg. Car starts facing North (angleNow=0 -> 90 deg). */
+		      float world_angle_deg = 90.0f + angleNow;
+		      float world_angle_rad = world_angle_deg * (3.1415926535f / 180.0f);
+
+		      robot_x_cm += delta_s * cosf(world_angle_rad);
+		      robot_y_cm += delta_s * sinf(world_angle_rad);
+
 		      motorCorrection = motor_pid_correction(left_dist, right_dist);
 
 		      snprintf(oled_display[1], sizeof(oled_display[1]),
-		               "L:%-5d R:%-5d", (int)left_dist, (int)right_dist);
+		               "X:%-3d Y:%-3d A:%-3d", (int)robot_x_cm, (int)robot_y_cm, (int)world_angle_deg);
 
 		      osDelay(10);
 		  }
@@ -1399,18 +1546,23 @@ void gyro_task(void *argument)
 * @retval None
 */
 /* USER CODE END Header_comm_task */
-/* Telemetry for the RPi: FIN:<dist>,<heading> with no float printf. */
+/* Telemetry for the RPi: FIN:POS,<x_cm>,<y_cm>,<world_heading_deg>,<us_cm>,<ir1_cm>,<ir2_cm> */
 static void sendFin(void)
 {
-    char buf[32];
-    int d10 = (int)(batchDist * 10.0f);
-    int h10 = (int)(angleNow  * 10.0f);
-    int ad  = d10 < 0 ? -d10 : d10;
+    char buf[64];
+    int x10 = (int)(robot_x_cm * 10.0f);
+    int y10 = (int)(robot_y_cm * 10.0f);
+    float world_deg = 90.0f + angleNow;
+    int h10 = (int)(world_deg   * 10.0f);
+    int ax  = x10 < 0 ? -x10 : x10;
+    int ay  = y10 < 0 ? -y10 : y10;
     int ah  = h10 < 0 ? -h10 : h10;
 
-    int n = snprintf(buf, sizeof(buf), "FIN:%s%d.%d,%s%d.%d\r\n",
-                     d10 < 0 ? "-" : "", ad / 10, ad % 10,
-                     h10 < 0 ? "-" : "", ah / 10, ah % 10);
+    int n = snprintf(buf, sizeof(buf), "FIN:POS,%s%d.%d,%s%d.%d,%s%d.%d,%u,%u,%u\r\n",
+                     x10 < 0 ? "-" : "", ax / 10, ax % 10,
+                     y10 < 0 ? "-" : "", ay / 10, ay % 10,
+                     h10 < 0 ? "-" : "", ah / 10, ah % 10,
+                     (unsigned int)us_cm, (unsigned int)ir1_cm, (unsigned int)ir2_cm);
     HAL_UART_Transmit(&huart3, (uint8_t *)buf, n, 100);
 }
 

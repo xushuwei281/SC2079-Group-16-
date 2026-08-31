@@ -139,16 +139,12 @@ Show The String
 **************************************************************************/
 void OLED_ShowString(uint8_t x,uint8_t y,const uint8_t *p)
 {
-#define MAX_CHAR_POSX 122
-#define MAX_CHAR_POSY 58          
-    while(*p!='\0')
-    {       
-        if(x>MAX_CHAR_POSX){x=0;y+=16;}
-        if(y>MAX_CHAR_POSY){y=x=0;OLED_Clear();}
-        OLED_ShowChar(x,y,*p,12,1);	 
+    while(*p!='\0' && x <= 120 && y <= 58)
+    {
+        OLED_ShowChar(x,y,*p,12,1);
         x+=8;
         p++;
-    }  
+    }
 }	 
 
 void OLED_Init(void)

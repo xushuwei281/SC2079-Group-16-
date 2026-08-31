@@ -205,12 +205,12 @@ def hybrid_astar(start: Config, goal: Config,
                  radius: float = TURNING_RADIUS_CM,
                  max_nodes: int = 1500,
                  step: float = 2.0
-                 ) -> Tuple[float, List[Tuple], List[Tuple[float, float, float]]]:
+                 ) -> Tuple[float, List[Tuple], List[Tuple[float, float, float]], str]:
     """Kinematic Hybrid A* search in SE(2) respecting Ackermann turning constraints (R = 25cm)."""
     # 1. Try direct collision-free Reeds-Shepp curve first
     direct_len, direct_wps = reeds_shepp_path_with_obstacles(start, goal, radius, arena, step=step)
     if not math.isinf(direct_len) and direct_wps:
-        return direct_len, direct_wps, sample_waypoints_to_poses(start, direct_wps, step=step)
+        return direct_len, direct_wps, sample_waypoints_to_poses(start, direct_wps, step=step), "reeds_shepp"
 
     xy_step = 5.0
     th_step = math.pi / 8.0  # 22.5 degrees
@@ -253,7 +253,7 @@ def hybrid_astar(start: Config, goal: Config,
         if not math.isinf(rs_len) and rs_wps:
             total_wps = cur_wps + rs_wps
             total_poses = sample_waypoints_to_poses(start, total_wps, step=step)
-            return g + rs_len, total_wps, total_poses
+            return g + rs_len, total_wps, total_poses, "astar"
 
         for kind, param in actions:
             wp = (kind, param, radius)
@@ -283,7 +283,7 @@ def hybrid_astar(start: Config, goal: Config,
             count += 1
             heapq.heappush(open_heap, (next_g + next_h, count, next_g, next_cfg, cur_wps + [wp]))
 
-    return math.inf, [], []
+    return math.inf, [], [], "none"
 
 
 # ---------------------------------------------------------------------------
@@ -303,10 +303,10 @@ def plan_drive(start: Config, goal: Config,
     r = radius if radius is not None else _turning_radius()
     a = arena or default_arena()
 
-    length, wps, poses = hybrid_astar(start, goal, a, radius=r, step=step)
+    length, wps, poses, method = hybrid_astar(start, goal, a, radius=r, step=step)
     if not math.isinf(length) and wps:
         return {
-            "method": "hybrid_astar" if len(wps) > 5 else "reeds_shepp",
+            "method": method,
             "length": length,
             "waypoints": wps,
             "poses": poses,
@@ -317,8 +317,6 @@ def plan_drive(start: Config, goal: Config,
         "waypoints": [],
         "poses": [],
     }
-    return {"method": "none", "length": math.inf,
-            "waypoints": [], "poses": []}
 
 
 def plan_drive_poses(start: Config, goal: Config,

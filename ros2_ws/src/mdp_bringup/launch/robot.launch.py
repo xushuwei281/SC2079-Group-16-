@@ -74,6 +74,11 @@ def generate_launch_description():
         default_value="/dev/rfcomm0",
         description="RFCOMM device for Android Bluetooth link",
     )
+    turning_radius_arg = DeclareLaunchArgument(
+        "turning_radius_cm",
+        default_value="42.0",
+        description="Turning radius in cm for Reeds-Shepp path planner",
+    )
 
     # 1. Zenoh Router Daemon (Port 7447 for cross-machine Tailscale/Wi-Fi communication)
     zenoh_router = ExecuteProcess(
@@ -113,7 +118,10 @@ def generate_launch_description():
         package="mdp_bringup",
         executable="planner_node",
         name="planner_node",
-        parameters=[{"turning_radius_cm": 31.0, "camera_view_dist_cm": 25.0}],
+        parameters=[{
+            "turning_radius_cm": LaunchConfiguration("turning_radius_cm"),
+            "camera_view_dist_cm": 25.0,
+        }],
         output="screen",
     )
 
@@ -144,6 +152,7 @@ def generate_launch_description():
             zenoh_router,
             stm32_port_arg,
             rfcomm_device_arg,
+            turning_radius_arg,
             delayed_nodes,
         ]
     )
