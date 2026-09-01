@@ -167,6 +167,15 @@ ros-jazzy-foxglove-bridge = "*"
 # This is the dependency that made splitting the environments worth doing.
 ultralytics = ">=8.4.127, <9"
 
+# ONNX export (`model.export(format="onnx")`). Ultralytics tries to
+# pip-install these on demand when missing, but this environment has no
+# `pip` binary -- pixi's pypi-dependencies resolve through uv instead, so
+# they need to be declared here rather than left to Ultralytics' runtime
+# auto-install.
+onnx = ">=1.12.0, <2"
+onnxruntime = "*"
+onnxslim = ">=0.1.82"
+
 [feature.pc.tasks]
 build = { cmd = "colcon build", description = "Build the full workspace" }
 test = { cmd = "colcon test", description = "Test the full workspace" }
