@@ -24,6 +24,19 @@ byte to the screen).
 | RPi → Android | `STATUS,<text>` | `STATUS,moving` | free-text status update |
 | RPi → Android | `DONE` | `DONE` | last movement command completed |
 
+**Implementation note:** `android_bridge_node`
+(`ros2_ws/src/mdp_android_bridge/`) opens `/dev/rfcomm0` via `pyserial` —
+see `ros2_ws/bluetooth-setup/` for the one-time pairing + persistent
+`rfcomm watch` listener this needs on the Pi side (systemd-managed, so the
+Pi is always ready for a connection without a human running commands
+first). Distance-unit handling: a linear move (`FC`/`BC`) value is divided
+by 10 (treated as mm→cm) when it's `>= 100` or when the node's
+`distance_in_mm` parameter is set; smaller values are passed through as
+already being centimetres. `TL`/`TR` map to the STM32's forward-turn codes
+(`FL`/`FR`); there is currently no way to request a backward turn
+(`BL`/`BR`) from the Android app — extend `android_bridge_node`'s
+`_MOVEMENT_MAP` if that's ever needed.
+
 ## Raspberry Pi ↔ STM32 (UART/serial, 115200 baud)
 
 Fixed **5-byte packets** for instructions, trigger, and e-stop. Handshake lines (`RUN\r\n`, `FIN:<dist>,<heading>\r\n`, `BUS\r\n`, `FUL\r\n`) for execution status and telemetry.

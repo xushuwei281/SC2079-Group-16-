@@ -28,7 +28,14 @@ for f in /sys/class/rfkill/rfkill*/name; do
     fi
 done
 
-bluetoothctl power on
+# Idempotency: on this BlueZ version, `bluetoothctl power on` against an
+# already-powered adapter returns `org.bluez.Error.Busy` instead of a no-op
+# success -- fatal under `set -e`. Confirmed on the team's Pi: the adapter
+# comes up already powered (e.g. still connected to a previously-paired
+# tablet), which made this unit fail on every boot after the first.
+if [ "$(bluetoothctl show | awk -F': ' '/Powered:/ {print $2}')" != "yes" ]; then
+    bluetoothctl power on
+fi
 
 # sdptool add has no built-in idempotency guard -- re-running it blindly
 # would register a duplicate SP record every boot, so check first.

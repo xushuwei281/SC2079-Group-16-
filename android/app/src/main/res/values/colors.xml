@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="background">#FFFFFF</color>
+    <color name="status_background">#F0F0F0</color>
+    <color name="stop_red">#D32F2F</color>
+</resources>

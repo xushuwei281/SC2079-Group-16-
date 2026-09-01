@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MDP Robot Controller</string>
+    <string name="paired_devices_label">Paired devices</string>
+    <string name="refresh_button">Refresh</string>
+    <string name="not_connected">Not connected</string>
+    <string name="connected_prefix">Connected:</string>
+    <string name="disconnect_button">Disconnect</string>
+    <string name="distance_label">Distance (mm)</string>
+    <string name="angle_label">Angle (deg)</string>
+    <string name="default_distance">100</string>
+    <string name="default_angle">90</string>
+    <string name="forward_button">Forward</string>
+    <string name="backward_button">Backward</string>
+    <string name="turn_left_button">Turn Left</string>
+    <string name="turn_right_button">Turn Right</string>
+    <string name="stop_button">STOP</string>
+    <string name="status_label">Status</string>
+</resources>
