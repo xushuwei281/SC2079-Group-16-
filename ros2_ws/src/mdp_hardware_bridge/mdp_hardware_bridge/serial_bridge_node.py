@@ -111,6 +111,7 @@ class SerialBridgeNode(Node):
         # e-stop can always preempt a batch that's mid-execution.
         self._write_lock = threading.Lock()
         self._busy = threading.Event()
+        self._estop_event = threading.Event()
 
         # The service call blocks for a long time (real motion), so it
         # needs its own thread -- otherwise a running call would starve
@@ -225,7 +226,8 @@ class SerialBridgeNode(Node):
         return f"{command}{value:03d}".encode("ascii")
 
     def _on_estop(self, _msg: Empty) -> None:
-        self.get_logger().warn("E-STOP requested")
+        self.get_logger().warn("E-STOP requested: Halting motors and aborting active batch")
+        self._estop_event.set()
         with self._write_lock:
             if self._serial is None or not self._serial.is_open:
                 self.get_logger().error("E-STOP requested but STM32 is not connected")
@@ -250,9 +252,13 @@ class SerialBridgeNode(Node):
 
     def _handle_execute_moves(self, request, response):
         if self._busy.is_set():
-            response.success = False
-            response.status = "BUSY_LOCAL"
-            return response
+            # If an E-stop was active, clear it so new move can proceed
+            if self._estop_event.is_set():
+                self._busy.clear()
+            else:
+                response.success = False
+                response.status = "BUSY_LOCAL"
+                return response
 
         if len(request.commands) > _MAX_BATCH:
             response.success = False
@@ -274,9 +280,15 @@ class SerialBridgeNode(Node):
             return response
 
         self._busy.set()
+        self._estop_event.clear()
         try:
             status = ""
             for _ in range(_BUS_RETRIES):
+                if self._estop_event.is_set():
+                    response.success = False
+                    response.status = "ESTOPPED"
+                    return response
+
                 with self._write_lock:
                     if self._serial is None or not self._serial.is_open:
                         response.success = False
@@ -299,6 +311,10 @@ class SerialBridgeNode(Node):
                         return response
 
                 status = self._read_status_line(deadline_sec=5.0)
+                if status == "ESTOP":
+                    response.success = False
+                    response.status = "ESTOPPED"
+                    return response
                 if status == "BUS":
                     # Firmware was mid-batch; our packets were rejected
                     # (not queued), so resending the whole batch is safe.
@@ -312,12 +328,18 @@ class SerialBridgeNode(Node):
                 return response
 
             status = self._read_status_line(deadline_sec=self._batch_timeout_sec)
+            if status == "ESTOP":
+                response.success = False
+                response.status = "ESTOPPED"
+                return response
+
             response.success = status.startswith("FIN")
             response.status = status or "TIMEOUT"
             if response.success:
                 self._update_and_publish_pose(status, request.commands)
         finally:
             self._busy.clear()
+            self._estop_event.clear()
         return response
 
     def _update_and_publish_pose(self, status: str, commands: list[MoveCommand]) -> None:
@@ -479,6 +501,9 @@ class SerialBridgeNode(Node):
         buf = b""
         deadline = time.monotonic() + deadline_sec
         while time.monotonic() < deadline:
+            if self._estop_event.is_set():
+                return "ESTOP"
+
             with self._write_lock:
                 if self._serial is None or not self._serial.is_open:
                     return ""

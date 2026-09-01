@@ -72,13 +72,14 @@ ros-jazzy-rmw-zenoh-cpp = "*"
 
 [feature.common.pypi-dependencies]
 pygame = ">=2.5.0"
+onnxruntime = ">=1.17.0"
 
 [feature.common.tasks]
 clean = { cmd = "rm -rf build install log", description = "Remove colcon build artifacts (build, install, log)" }
 sim = { cmd = "python3 ../algorithm/simulator.py", description = "Launch the interactive 2D arena simulator" }
 planner = { cmd = "python3 ../algorithm/planner.py", description = "Run the CLI path planning algorithm demo" }
 test-algo = { cmd = "python3 -m unittest discover -s ../algorithm/test -p 'test_*.py'", description = "Run algorithm unit tests" }
-test-bridge = { cmd = "python3 -m unittest discover -s src/mdp_hardware_bridge/test -p 'test_*.py' && python3 -m unittest discover -s src/mdp_android_bridge/test -p 'test_*.py'", description = "Run hardware & Android bridge unit tests" }
+test-bridge = { cmd = "env RMW_IMPLEMENTATION=rmw_fastrtps_cpp python3 -m unittest discover -s src/mdp_hardware_bridge/test -p 'test_*.py' && env RMW_IMPLEMENTATION=rmw_fastrtps_cpp python3 -m unittest discover -s src/mdp_android_bridge/test -p 'test_*.py'", description = "Run hardware & Android bridge unit tests" }
 # -u ZENOH_SESSION_CONFIG_URI: this task is shared by pi/pc, both of whose
 # activation scripts point that var at a mode:"client" config (client sessions
 # only connect, they never listen). The router process needs mode:"router" with
@@ -105,8 +106,7 @@ ZENOH_ROUTER_CHECK_ATTEMPTS = "10"
 
 # ----------------------------------------------------------------------------
 # pi — hardware-bound nodes: UART to the STM32, Bluetooth to the tablet,
-# camera capture. No inference, no visualization. This environment is meant to
-# stay small; that is the entire point of it.
+# camera capture, and on-device ONNX perception.
 # ----------------------------------------------------------------------------
 [feature.pi]
 platforms = ["linux-aarch64"]
@@ -115,12 +115,7 @@ platforms = ["linux-aarch64"]
 # Camera driver: v4l2_camera running against Raspberry Pi's official
 # libcamera-V4L2 adaptation layer (LD_PRELOAD of
 # /usr/libexec/aarch64-linux-gnu/libcamera/v4l2-compat.so, set in
-# mdp_camera_bringup's launch file). camera_ros was tried first (2026-08-26)
-# but its conda libcamera (0.5.2) cannot drive Debian trixie's newer kernel
-# media graph (system libcamera is 0.7.2+rpt) — the IPA proxy init times out
-# regardless of tuning-file fixes. The compat layer runs SYSTEM libcamera and
-# exposes the IMX219 as an ordinary V4L2 device offering RGB3/640x480, so
-# perception gets rgb8 frames with no conversion step.
+# mdp_camera_bringup's launch file).
 ros-jazzy-v4l2-camera = "*"
 
 # Foxglove Studio websocket bridge (default ws://<pi>:8765) for live
@@ -128,14 +123,15 @@ ros-jazzy-v4l2-camera = "*"
 ros-jazzy-foxglove-bridge = "*"
 
 [feature.pi.tasks]
-# Explicit list of what runs on the robot. When you add a new hardware-bound
-# package, add it here too — otherwise it silently never gets built on the Pi.
-build = { cmd = "colcon build --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_camera_bringup mdp_bringup", description = "Build only the packages that run on the Pi" }
-test = { cmd = "colcon test --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_camera_bringup mdp_bringup", description = "Test only the packages that run on the Pi" }
-robot = { cmd = "ros2 launch mdp_bringup robot.launch.py", description = "Start full autonomous robot stack (Zenoh, STM32 bridge, Android Bluetooth, Camera, Planner, Foxglove)" }
+# Explicit list of what runs on the robot.
+build = { cmd = "colcon build --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_camera_bringup mdp_bringup mdp_perception", description = "Build all robot packages (including on-board perception)" }
+test = { cmd = "colcon test --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_camera_bringup mdp_bringup mdp_perception", description = "Test robot packages" }
+robot = { cmd = "ros2 launch mdp_bringup robot.launch.py", description = "Start full autonomous robot stack (Zenoh, STM32, Android, Camera, Planner, Perception, Foxglove)" }
+robot-no-cv = { cmd = "ros2 launch mdp_bringup robot.launch.py run_perception:=false", description = "Start autonomous stack WITHOUT on-board perception (runs perception on laptop or off)" }
 hardware = { cmd = "ros2 launch mdp_bringup hardware.launch.py", description = "Start essential low-level hardware stack (Zenoh, STM32 UART, Android Bluetooth, Camera, Foxglove)" }
 teleop = { cmd = "ros2 launch mdp_bringup teleop.launch.py", description = "Start manual teleop stack (Zenoh, STM32 UART, Android Bluetooth)" }
 planner = { cmd = "ros2 run mdp_bringup planner_node", description = "Start the autonomous path planner on the Pi" }
+perception = { cmd = "ros2 run mdp_perception perception_node", description = "Start local ONNX target detection on the Pi" }
 camera = { cmd = "ros2 launch mdp_camera_bringup camera.launch.py", description = "Start the Pi camera driver" }
 foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", description = "Start the Foxglove websocket bridge (ws://mdp.local:8765)" }
 
@@ -163,9 +159,7 @@ ros-jazzy-joint-state-publisher = ">=2.4.1,<3"
 ros-jazzy-foxglove-bridge = "*"
 
 [feature.pc.pypi-dependencies]
-# Pulls torch + torchvision, and on linux-64 the entire NVIDIA CUDA stack.
-# This is the dependency that made splitting the environments worth doing.
-ultralytics = ">=8.4.127, <9"
+ultralytics = ">=8.4.127,<9"
 
 # ONNX export (`model.export(format="onnx")`). Ultralytics tries to
 # pip-install these on demand when missing, but this environment has no
@@ -185,6 +179,7 @@ perception = { cmd = "ros2 run mdp_perception perception_node", description = "S
 # of reaching each other over Tailscale's DERP relay. Update the IP in
 # config/zenoh_client_pc_lan.json5 to the Pi's current LAN address first.
 perception-lan = { cmd = "ZENOH_SESSION_CONFIG_URI=config/zenoh_client_pc_lan.json5 ros2 run mdp_perception perception_node", description = "Start perception using the same-LAN Zenoh config instead of Tailscale" }
+export-onnx = { cmd = "python3 -c \"from ultralytics import YOLO; YOLO('../models/best.pt').export(format='onnx', imgsz=640, opset=12)\"", description = "Export models/best.pt to ONNX format for Pi edge inference" }
 foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", description = "Start local Foxglove websocket bridge on PC" }
 
 [environments]

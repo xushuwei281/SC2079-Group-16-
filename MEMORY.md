@@ -59,6 +59,11 @@ Distance matrix confirmed symmetric with zero diagonal.
 and `mdp_bringup/planner_core.py` so the offline sim and live run can't
 drift apart.
 
+## STM32 Firmware (`stm32/`)
+
+- **FreeRTOS Stack Sizing**: `defaultTask` stack was increased from 512B (`128 * 4`) to 2048B (`512 * 4`) and `MotorTask` to 1024B (`256 * 4`). The 512B stack previously overflowed during `snprintf` + floating-point operations and FPU context saving, causing hard MCU lockups.
+- **HC-SR04 Ultrasonic Driver**: Uses hardware timer `TIM6` (1 tick = 1 µs at 16 MHz HSI) instead of software loops. Wrapped with `vTaskSuspendAll()` / `xTaskResumeAll()` during echo pulse measurement to prevent ~1 ms FreeRTOS preemption jitter (which created an artificial 19 cm measurement floor). Includes pre-trigger check to avoid hanging when ECHO is stuck HIGH from blind-zone (< 2 cm) reflections.
+
 ## Repo map
 
 - `algorithm/` — this package.  `requirements.txt`: numpy>=1.24, pygame>=2.0,

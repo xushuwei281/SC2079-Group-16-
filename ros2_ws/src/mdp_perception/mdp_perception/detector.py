@@ -42,18 +42,25 @@ _LABEL_TO_SYMBOL_ID: Dict[str, int] = {
 
 
 class TargetDetector:
-    """YOLO Target Detection and Verification Grid Builder."""
+    """YOLO Target Detection and Verification Grid Builder (Supports ONNXRuntime and PyTorch)."""
 
     def __init__(
         self,
-        model_path: str = "models/best.pt",
+        model_path: str = "models/best.onnx",
         conf_threshold: float = 0.50,
-        iou_threshold: float = 0.45
+        iou_threshold: float = 0.45,
     ) -> None:
         self.model_path = model_path
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
-        self._model = None
+        self._onnx_session = None
+        self._input_name = None
+        self._pt_model = None
+        self._class_names = [
+            "1", "2", "3", "4", "5", "6", "7", "8", "9",
+            "a", "b", "c", "circle", "d", "down", "e", "f", "g", "h",
+            "left", "right", "s", "t", "target", "u", "up", "v", "w", "x", "y", "z"
+        ]
 
         # Recognized Targets Stored for Verification Grid: {obstacle_id: (crop_img, symbol_id, conf)}
         self.recognized_crops: Dict[int, Tuple[np.ndarray, int, float]] = {}
@@ -61,30 +68,134 @@ class TargetDetector:
         self._load_model()
 
     def _load_model(self) -> None:
-        """Load YOLO model weights (supports PyTorch .pt, ONNX, TensorRT)."""
-        if not os.path.exists(self.model_path) and not os.path.isabs(self.model_path):
-            # pixi tasks run with cwd=ros2_ws/, but models/ lives at the repo
-            # root (one level up) -- not under ros2_ws/. __file__-relative
-            # search doesn't help either: when running the *installed*
-            # package (the normal `ros2 run` path), __file__ points into
-            # ros2_ws/install/mdp_perception/lib/.../site-packages/, which
-            # has no fixed relationship to the repo root.
-            candidates = [
-                os.path.join(os.getcwd(), "..", self.model_path),  # cwd=ros2_ws/ -> repo root
-                os.path.join(os.getcwd(), self.model_path),  # cwd already at repo root
-            ]
-            for candidate in candidates:
-                if os.path.exists(candidate):
-                    self.model_path = os.path.abspath(candidate)
-                    break
+        """Load YOLO model weights (supports ONNX via onnxruntime and PyTorch .pt via ultralytics)."""
+        candidates = []
+        if os.path.isabs(self.model_path):
+            candidates.append(self.model_path)
+        else:
+            base_name = os.path.splitext(self.model_path)[0]
+            # Try ONNX first (lightweight), then PyTorch .pt
+            for ext in [".onnx", ".pt"]:
+                p = base_name + ext
+                candidates.extend([
+                    os.path.abspath(os.path.join(os.getcwd(), p)),
+                    os.path.abspath(os.path.join(os.getcwd(), "..", p)),
+                    os.path.abspath(os.path.join("/home/mdp/dev/SC2079-Group-16", p)),
+                ])
 
+        found_path = None
+        for c in candidates:
+            if os.path.exists(c):
+                found_path = c
+                break
+
+        if found_path is None:
+            print(f"[TargetDetector] Warning: Model file not found in candidates: {candidates[:3]}. Running in mock mode.")
+            return
+
+        self.model_path = found_path
+
+        # 1. Try ONNX Runtime (fast, lean edge inference on Pi)
+        if found_path.endswith(".onnx"):
+            try:
+                import onnxruntime as ort
+                opts = ort.SessionOptions()
+                opts.intra_op_num_threads = 4
+                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                self._onnx_session = ort.InferenceSession(found_path, sess_options=opts, providers=["CPUExecutionProvider"])
+                self._input_name = self._onnx_session.get_inputs()[0].name
+                print(f"[TargetDetector] Successfully loaded ONNX model via ONNXRuntime from {found_path}")
+                return
+            except Exception as exc:
+                print(f"[TargetDetector] Failed to load ONNX with onnxruntime: {exc}")
+
+        # 2. Try Ultralytics PyTorch fallback (if available, e.g. on laptop/PC)
         try:
             from ultralytics import YOLO
-            self._model = YOLO(self.model_path)
-            print(f"[TargetDetector] Successfully loaded YOLO weights from {self.model_path}")
+            self._pt_model = YOLO(found_path)
+            print(f"[TargetDetector] Successfully loaded PyTorch model via Ultralytics from {found_path}")
         except Exception as exc:
-            print(f"[TargetDetector] Warning: Could not load YOLO model ({exc}). Running in mock mode.")
-            self._model = None
+            print(f"[TargetDetector] Warning: Could not load model ({exc}). Running in mock mode.")
+
+    def _infer_onnx(self, frame: np.ndarray) -> List[Tuple[str, int, float, Tuple[int, int, int, int]]]:
+        """Pure-NumPy YOLOv8 ONNX inference pipeline."""
+        orig_h, orig_w = frame.shape[:2]
+        img_size = 640
+
+        # Letterbox resize maintaining aspect ratio
+        scale = min(img_size / orig_h, img_size / orig_w)
+        nw, nh = int(round(orig_w * scale)), int(round(orig_h * scale))
+        resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
+        top_pad = (img_size - nh) // 2
+        bottom_pad = img_size - nh - top_pad
+        left_pad = (img_size - nw) // 2
+        right_pad = img_size - nw - left_pad
+
+        padded = cv2.copyMakeBorder(resized, top_pad, bottom_pad, left_pad, right_pad, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+
+        # BGR -> RGB, HWC -> CHW, normalize [0, 1]
+        blob = padded[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
+        blob = np.expand_dims(blob, axis=0)
+
+        # Run ONNX session
+        outputs = self._onnx_session.run(None, {self._input_name: blob})[0]  # Shape: (1, 4+num_classes, 8400)
+        predictions = outputs[0].T  # Shape: (8400, 4+num_classes)
+
+        boxes = []
+        confidences = []
+        class_ids = []
+
+        scores_matrix = predictions[:, 4:]
+        max_scores = np.max(scores_matrix, axis=1)
+        valid_mask = max_scores >= self.conf_threshold
+
+        valid_preds = predictions[valid_mask]
+        if len(valid_preds) == 0:
+            return []
+
+        valid_scores = scores_matrix[valid_mask]
+        valid_cls = np.argmax(valid_scores, axis=1)
+        valid_conf = np.max(valid_scores, axis=1)
+
+        for i in range(len(valid_preds)):
+            cx, cy, w, h = valid_preds[i, 0], valid_preds[i, 1], valid_preds[i, 2], valid_preds[i, 3]
+            # Convert cx, cy, w, h in padded image to unpadded original coordinates
+            x1 = int(round((cx - w / 2.0 - left_pad) / scale))
+            y1 = int(round((cy - h / 2.0 - top_pad) / scale))
+            bw = int(round(w / scale))
+            bh = int(round(h / scale))
+
+            # Clamp
+            x1 = max(0, min(orig_w - 1, x1))
+            y1 = max(0, min(orig_h - 1, y1))
+            bw = max(1, min(orig_w - x1, bw))
+            bh = max(1, min(orig_h - y1, bh))
+
+            boxes.append([x1, y1, bw, bh])
+            confidences.append(float(valid_conf[i]))
+            class_ids.append(int(valid_cls[i]))
+
+        # Non-Maximum Suppression
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, self.conf_threshold, self.iou_threshold)
+
+        detections = []
+        if len(indices) > 0:
+            for idx in indices.flatten():
+                cid = class_ids[idx]
+                conf = confidences[idx]
+                bx, by, bw, bh = boxes[idx]
+                x1, y1, x2, y2 = bx, by, bx + bw, by + bh
+
+                raw_name = self._class_names[cid] if cid < len(self._class_names) else str(cid)
+                if raw_name.isdigit() and 11 <= int(raw_name) <= 40:
+                    symbol_id = int(raw_name)
+                else:
+                    symbol_id = _LABEL_TO_SYMBOL_ID.get(raw_name, 10 + cid)
+
+                detections.append((raw_name, symbol_id, conf, (x1, y1, x2, y2)))
+
+        return detections
 
     def predict(
         self,
@@ -95,43 +206,37 @@ class TargetDetector:
         Returns:
             List of (class_name, symbol_id, confidence, (x1, y1, x2, y2))
         """
-        if self._model is None:
-            return []
+        if self._onnx_session is not None:
+            return self._infer_onnx(frame)
 
-        results = self._model.predict(
-            source=frame,
-            conf=self.conf_threshold,
-            iou=self.iou_threshold,
-            verbose=False
-        )
+        if self._pt_model is not None:
+            results = self._pt_model.predict(
+                source=frame,
+                conf=self.conf_threshold,
+                iou=self.iou_threshold,
+                verbose=False
+            )
 
-        detections = []
-        for r in results:
-            for box in r.boxes:
-                cls_id = int(box.cls[0].item())
-                conf = float(box.conf[0].item())
-                raw_name = str(self._model.names.get(cls_id, str(cls_id))).lower()
+            detections = []
+            for r in results:
+                for box in r.boxes:
+                    cls_id = int(box.cls[0].item())
+                    conf = float(box.conf[0].item())
+                    raw_name = str(self._pt_model.names.get(cls_id, str(cls_id))).lower()
 
-                # Map class to official MDP symbol ID. models/best.pt's own
-                # class names ARE the official IDs already (class 0 ->
-                # "11", class 1 -> "12", ... class 29 -> "40") -- use that
-                # directly. _LABEL_TO_SYMBOL_ID exists for a model trained
-                # with raw character labels ("a", "1", "up", ...) instead;
-                # it never matches this model's names, so every detection
-                # silently fell through to the `10 + cls_id` fallback,
-                # which is off by one for every class (e.g. class 0 -> 10
-                # instead of 11).
-                if raw_name.isdigit() and 11 <= int(raw_name) <= 40:
-                    symbol_id = int(raw_name)
-                else:
-                    symbol_id = _LABEL_TO_SYMBOL_ID.get(raw_name, 10 + cls_id)
+                    if raw_name.isdigit() and 11 <= int(raw_name) <= 40:
+                        symbol_id = int(raw_name)
+                    else:
+                        symbol_id = _LABEL_TO_SYMBOL_ID.get(raw_name, 10 + cls_id)
 
-                xyxy = box.xyxy[0].cpu().numpy().astype(int)
-                x1, y1, x2, y2 = xyxy[0], xyxy[1], xyxy[2], xyxy[3]
+                    xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                    x1, y1, x2, y2 = xyxy[0], xyxy[1], xyxy[2], xyxy[3]
 
-                detections.append((raw_name, symbol_id, conf, (x1, y1, x2, y2)))
+                    detections.append((raw_name, symbol_id, conf, (x1, y1, x2, y2)))
 
-        return detections
+            return detections
+
+        return []
 
     def draw_detections(
         self,

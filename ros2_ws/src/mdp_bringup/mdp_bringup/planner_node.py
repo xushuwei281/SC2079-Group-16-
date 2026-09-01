@@ -59,6 +59,7 @@ from nav_msgs.msg import Path
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
 
 
@@ -71,10 +72,16 @@ class PlannerNode(Node):
         self.declare_parameter("turning_radius_cm", 42.0)
         self.declare_parameter("camera_view_dist_cm", 25.0)
         self.declare_parameter("auto_start", False)
+        self.declare_parameter("enable_collision_avoidance", True)
+        self.declare_parameter("safety_stop_dist_cm", 12.0)
+        self.declare_parameter("recovery_backup_cm", 8.0)
 
-        self._radius = self.get_parameter("turning_radius_cm").value
-        self._view_dist = self.get_parameter("camera_view_dist_cm").value
-        self._auto_start = self.get_parameter("auto_start").value
+        self._radius = float(self.get_parameter("turning_radius_cm").value)
+        self._view_dist = float(self.get_parameter("camera_view_dist_cm").value)
+        self._auto_start = bool(self.get_parameter("auto_start").value)
+        self._enable_avoidance = bool(self.get_parameter("enable_collision_avoidance").value)
+        self._safety_dist_cm = float(self.get_parameter("safety_stop_dist_cm").value)
+        self._recovery_backup_cm = float(self.get_parameter("recovery_backup_cm").value)
 
         self._obstacles: List[Obstacle] = []
         self._current_plan: Optional[FullMissionPlan] = None
@@ -82,12 +89,19 @@ class PlannerNode(Node):
         self._is_executing = False
         self._mission_thread: Optional[threading.Thread] = None
 
+        # Live sensor distance tracking (in meters)
+        self._us_range_m = float("inf")
+        self._ir_left_range_m = float("inf")
+        self._ir_right_range_m = float("inf")
+        self._proximity_alert = False
+
         callback_group = ReentrantCallbackGroup()
 
         # Publishers
         self._status_pub = self.create_publisher(String, "/android/status", 10)
         self._target_pub = self.create_publisher(String, "/android/target", 10)
         self._path_pub = self.create_publisher(Path, "/planner/path", 10)
+        self._estop_pub = self.create_publisher(Empty, "/estop", 10)
 
         # Subscribers
         self._cmd_sub = self.create_subscription(
@@ -99,13 +113,46 @@ class PlannerNode(Node):
         self._estop_sub = self.create_subscription(
             Empty, "/estop", self._on_estop, 10, callback_group=callback_group
         )
+        self._us_sub = self.create_subscription(
+            Range, "/sensors/ultrasonic", self._on_us_range, 10, callback_group=callback_group
+        )
+        self._ir_left_sub = self.create_subscription(
+            Range, "/sensors/ir_left", self._on_ir_left_range, 10, callback_group=callback_group
+        )
+        self._ir_right_sub = self.create_subscription(
+            Range, "/sensors/ir_right", self._on_ir_right_range, 10, callback_group=callback_group
+        )
 
         # Service Client to STM32 Hardware Bridge
         self._move_client = self.create_client(
             ExecuteMoves, "/execute_moves", callback_group=callback_group
         )
 
-        self.get_logger().info("Planner node initialized and ready for obstacle input.")
+        self.get_logger().info(
+            f"Planner node initialized. Collision avoidance: {'ON' if self._enable_avoidance else 'OFF'} "
+            f"(threshold: {self._safety_dist_cm} cm)"
+        )
+
+    def _on_us_range(self, msg: Range) -> None:
+        """Track front ultrasonic range."""
+        if msg.min_range <= msg.range <= msg.max_range:
+            self._us_range_m = msg.range
+        else:
+            self._us_range_m = float("inf")
+
+    def _on_ir_left_range(self, msg: Range) -> None:
+        """Track front-left IR sensor range."""
+        if msg.min_range <= msg.range <= msg.max_range:
+            self._ir_left_range_m = msg.range
+        else:
+            self._ir_left_range_m = float("inf")
+
+    def _on_ir_right_range(self, msg: Range) -> None:
+        """Track front-right IR sensor range."""
+        if msg.min_range <= msg.range <= msg.max_range:
+            self._ir_right_range_m = msg.range
+        else:
+            self._ir_right_range_m = float("inf")
 
     def _on_pose(self, msg: PoseStamped) -> None:
         """Update robot pose from the odometry/gyro fusion topic."""
@@ -237,40 +284,96 @@ class PlannerNode(Node):
             )
             self._status_pub.publish(String(data=f"Navigating to Obs {leg.obstacle_id}"))
 
-            # Dynamically re-plan trajectory from actual live resting pose to target vantage pose
-            current_start = self._current_pose
-            length, wps, sampled_poses, method = sample_reeds_shepp_path(
-                current_start, leg.vantage_pose, radius=self._radius
-            )
-            cmds, raw_cmds = discretize_waypoints(wps)
-            if not cmds:
-                cmds = leg.commands  # fallback to nominal commands if already in vicinity
+            leg_success = False
+            max_retries = 3
 
-            self.get_logger().info(
-                f"Leg {i+1} planned from ({current_start.x:.1f}, {current_start.y:.1f}, {math.degrees(current_start.theta):.0f}°): "
-                f"{' -> '.join(raw_cmds or [f'{c}{v:03d}' for c, v in cmds])}"
-            )
+            for attempt in range(max_retries):
+                if not self._is_executing:
+                    break
 
-            # Build ExecuteMoves request
-            req = ExecuteMoves.Request()
-            for code, val in cmds:
-                mc = MoveCommand()
-                mc.command = code
-                mc.value = val
-                req.commands.append(mc)
+                # 1. Dynamically plan trajectory from current live resting pose to target vantage pose
+                current_start = self._current_pose
+                length, wps, sampled_poses, method = sample_reeds_shepp_path(
+                    current_start, leg.vantage_pose, radius=self._radius
+                )
+                cmds, raw_cmds = discretize_waypoints(wps)
+                if not cmds and attempt == 0:
+                    cmds = leg.commands  # fallback to nominal commands if already in vicinity
 
-            if req.commands:
-                # Call /execute_moves synchronously
+                if not cmds:
+                    self.get_logger().info("Already at vantage pose.")
+                    leg_success = True
+                    break
+
+                self.get_logger().info(
+                    f"Leg {i+1} (Attempt {attempt+1}) planned from ({current_start.x:.1f}, {current_start.y:.1f}, {math.degrees(current_start.theta):.0f}°): "
+                    f"{' -> '.join(raw_cmds or [f'{c}{v:03d}' for c, v in cmds])}"
+                )
+
+                # Update live path in Foxglove
+                sub_plan = FullMissionPlan(legs=[], total_distance_cm=length, all_commands=cmds, all_poses=sampled_poses)
+                self._publish_ros_path(sub_plan)
+
+                # Build ExecuteMoves request
+                req = ExecuteMoves.Request()
+                for code, val in cmds:
+                    mc = MoveCommand()
+                    mc.command = code
+                    mc.value = val
+                    req.commands.append(mc)
+
+                # Execute with active sensor proximity monitoring
                 future = self._move_client.call_async(req)
+                interrupted_by_sensor = False
+
                 while rclpy.ok() and not future.done():
                     if not self._is_executing:
                         break
+
+                    # Active Proximity Safety Guard
+                    if self._enable_avoidance:
+                        min_dist_m = min(self._us_range_m, self._ir_left_range_m, self._ir_right_range_m)
+                        if min_dist_m < (self._safety_dist_cm / 100.0):
+                            self.get_logger().warn(
+                                f"⚠️ PROXIMITY ALERT! Obstacle detected at {min_dist_m*100.0:.1f} cm (< {self._safety_dist_cm} cm). Triggering safety stop."
+                            )
+                            self._estop_pub.publish(Empty())
+                            interrupted_by_sensor = True
+                            break
+
                     time.sleep(0.05)
 
-                if not future.done() or not future.result().success:
-                    self.get_logger().error(f"Leg {i+1} execution failed or cancelled.")
-                    self._status_pub.publish(String(data=f"Leg {i+1} Failed"))
+                if interrupted_by_sensor:
+                    self._status_pub.publish(String(data=f"Obstacle Alert: Replanning Leg {i+1}..."))
+                    time.sleep(0.3)  # Wait for motors to come to a complete stop
+
+                    # Execute safe reverse recovery to gain turning clearance
+                    if self._recovery_backup_cm > 0:
+                        self.get_logger().info(f"Executing {self._recovery_backup_cm:.0f} cm reverse recovery move...")
+                        backup_req = ExecuteMoves.Request()
+                        mc = MoveCommand()
+                        mc.command = "BC"
+                        mc.value = int(self._recovery_backup_cm)
+                        backup_req.commands.append(mc)
+                        backup_future = self._move_client.call_async(backup_req)
+                        while rclpy.ok() and not backup_future.done():
+                            time.sleep(0.05)
+                        time.sleep(0.5)  # Allow odometry to settle
+
+                    self.get_logger().info(f"Recovered pose: ({self._current_pose.x:.1f}, {self._current_pose.y:.1f}). Re-planning leg {i+1}...")
+                    continue  # Retry loop to re-plan trajectory from new resting pose
+
+                if future.done() and future.result() and future.result().success:
+                    leg_success = True
                     break
+                else:
+                    self.get_logger().error(f"Leg {i+1} move failed or was cancelled.")
+                    break
+
+            if not leg_success:
+                self.get_logger().error(f"Leg {i+1} could not be completed.")
+                self._status_pub.publish(String(data=f"Leg {i+1} Failed"))
+                break
 
             self.get_logger().info(f"Leg {i+1} completed! At vantage pose for Obstacle {leg.obstacle_id}.")
             self._status_pub.publish(String(data=f"At Obs {leg.obstacle_id}: Capturing Image"))

@@ -32,7 +32,7 @@ class PerceptionNode(Node):
     def __init__(self) -> None:
         super().__init__("perception_node")
 
-        self.declare_parameter("model_path", "models/best.pt")
+        self.declare_parameter("model_path", "models/best.onnx")
         self.declare_parameter("conf_threshold", 0.50)
         self.declare_parameter("output_dir", "runs")
 

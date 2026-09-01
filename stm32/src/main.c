@@ -22,6 +22,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "FreeRTOS.h"
+#include "task.h"
 #include "oled.h"
 #include "ICM20948.h"
 #include <stdio.h>
@@ -99,7 +101,7 @@ UART_HandleTypeDef huart3;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 /* Definitions for EncoderTask */
@@ -113,7 +115,7 @@ const osThreadAttr_t EncoderTask_attributes = {
 osThreadId_t MotorTaskHandle;
 const osThreadAttr_t MotorTask_attributes = {
   .name = "MotorTask",
-  .stack_size = 128 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal2,
 };
 /* Definitions for GyroTask */
@@ -166,7 +168,7 @@ volatile uint16_t irSensor2Raw = 0;
 volatile uint16_t ir1_cm = 0;
 volatile uint16_t ir2_cm = 0;
 
-/* Ultrasonic sensor HC-SR04: PC7 Trig, PB15 Echo */
+/* Ultrasonic sensor HC-SR04: PC10 Trig, PC12 Echo */
 volatile uint16_t us_cm = 0;
 volatile uint32_t us_raw_us = 0;
 
@@ -241,42 +243,101 @@ static uint16_t IR_RawToCm(uint16_t raw)
    return (uint16_t)(d + 0.5f);
 }
 
+/* IR1 calibration from measured ADC points: 3100->10 cm, 2250->15 cm,
+   1800->20 cm, 1176->30 cm. ADC values decrease as distance increases. */
+static uint16_t IR1_RawToCm(uint16_t raw)
+{
+   float calibrated_cm;
+
+   if (raw >= 3100U)
+   {
+      calibrated_cm = 10.0f;
+   }
+   else if (raw >= 2250U)
+   {
+      calibrated_cm = 10.0f + (3100U - raw) * (5.0f / 850.0f);
+   }
+   else if (raw >= 1800U)
+   {
+      calibrated_cm = 15.0f + (2250U - raw) * (5.0f / 450.0f);
+   }
+   else if (raw >= 1176U)
+   {
+      calibrated_cm = 20.0f + (1800U - raw) * (10.0f / 624.0f);
+   }
+   else
+   {
+      /* Beyond the calibrated 30 cm point, retain the generic curve and
+         offset it to meet this calibration continuously at 1176 ADC. */
+      calibrated_cm = IR_RawToCm(raw) + 1.0f;
+      if (calibrated_cm > 80.0f) calibrated_cm = 80.0f;
+   }
+
+   return (uint16_t)(calibrated_cm + 0.5f);
+}
+
 static void HCSR04_Init(void)
 {
    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_RESET);
+   HAL_TIM_Base_Start(&htim6);
 }
 
 static uint16_t HCSR04_ReadCm(uint32_t *raw_us)
 {
-   /* 1. Send 10 µs trigger pulse on PC10 (TRIG) */
-   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_SET);
-   for (volatile int d = 0; d < 300; d++) { __NOP(); }
-   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_RESET);
-
-   /* 2. Wait for PC12 (ECHO) to go HIGH with safe iteration timeout (~3 ms) */
-   uint32_t wait_timeout = 0;
-   while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_12) == GPIO_PIN_RESET) {
-       if (++wait_timeout > 40000) {
+   /* 0. Ensure ECHO (PC12) is LOW before triggering.
+         If ECHO was held HIGH by an out-of-range/blind-zone event, wait up to 2 ms to clear. */
+   uint16_t t_clear = (uint16_t)__HAL_TIM_GET_COUNTER(&htim6);
+   while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_12) == GPIO_PIN_SET) {
+       if ((uint16_t)(__HAL_TIM_GET_COUNTER(&htim6) - t_clear) > 2000) {
            if (raw_us) *raw_us = 0;
-           return 0;
+           return 0; // Sensor stuck HIGH, skip this cycle
        }
    }
 
-   /* 3. Count duration while PC12 (ECHO) is HIGH (max ~30 ms = ~5m) */
-   uint32_t pulse_count = 0;
+   /* Lock task scheduler during pulse measurement to prevent ~1ms task preemption jitter */
+   vTaskSuspendAll();
+
+   /* 1. Send 10 µs trigger pulse on PC10 (TRIG) */
+   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_SET);
+   uint16_t trig_start = (uint16_t)__HAL_TIM_GET_COUNTER(&htim6);
+   while ((uint16_t)(__HAL_TIM_GET_COUNTER(&htim6) - trig_start) < 12) { }
+   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10, GPIO_PIN_RESET);
+
+   /* 2. Wait for PC12 (ECHO) to go HIGH (timeout ~6 ms = 6000 µs) */
+   uint16_t wait_start = (uint16_t)__HAL_TIM_GET_COUNTER(&htim6);
+   while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_12) == GPIO_PIN_RESET) {
+       if ((uint16_t)(__HAL_TIM_GET_COUNTER(&htim6) - wait_start) > 6000) {
+           xTaskResumeAll();
+           if (raw_us) *raw_us = 0;
+           return 0; // Trigger timeout
+       }
+   }
+
+   /* 3. Count duration while PC12 (ECHO) is HIGH (max 25 ms = 25000 µs / ~430 cm) */
+   uint16_t echo_start = (uint16_t)__HAL_TIM_GET_COUNTER(&htim6);
+   uint8_t timed_out = 0;
    while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_12) == GPIO_PIN_SET) {
-       pulse_count++;
-       if (pulse_count > 300000) {
+       if ((uint16_t)(__HAL_TIM_GET_COUNTER(&htim6) - echo_start) > 25000) {
+           timed_out = 1;
            break;
        }
    }
+   uint16_t echo_us = (uint16_t)(__HAL_TIM_GET_COUNTER(&htim6) - echo_start);
 
-   /* Approximate loop time at 168MHz: ~14 cycles (~0.083 µs) per count */
-   uint32_t echo_us = (pulse_count * 5) / 6;
-   if (raw_us) *raw_us = echo_us;
+   xTaskResumeAll();
 
-   float dist_cm = (float)echo_us * 0.0343f / 2.0f;
-   if (dist_cm > 300.0f) dist_cm = 300.0f;
+   /* If timed out (> 25 ms / ~4.3m), this was a lost echo, not a valid 400cm reading */
+   if (timed_out) {
+       if (raw_us) *raw_us = 0;
+       return 0;
+   }
+
+   if (raw_us) *raw_us = (uint32_t)echo_us;
+
+   /* 4. Convert duration to distance: speed of sound = 0.0343 cm/µs.
+         Round trip distance = (echo_us * 0.0343) / 2 = echo_us / 58.2 */
+   float dist_cm = (float)echo_us / 58.2f;
+   if (dist_cm > 400.0f) dist_cm = 400.0f;
    return (uint16_t)(dist_cm + 0.5f);
 }
 
@@ -1254,7 +1315,7 @@ void StartDefaultTask(void *argument)
     irSensor1Raw = IR_ADC_Read(2U); /* PA2 / ADC1_IN2 */
     irSensor2Raw = IR_ADC_Read(3U); /* PA3 / ADC1_IN3 */
 
-    ir1_cm = IR_RawToCm(irSensor1Raw);
+    ir1_cm = IR1_RawToCm(irSensor1Raw);
     ir2_cm = IR_RawToCm(irSensor2Raw);
 
     uint32_t raw_echo = 0;
@@ -1262,11 +1323,11 @@ void StartDefaultTask(void *argument)
     us_raw_us = raw_echo;
 
     snprintf(oled_display[3], sizeof(oled_display[3]),
-             "US :%2ucm R:%-4lu", (unsigned int)us_cm, (unsigned long)us_raw_us);
+             "US :%-3ucm R:%-5lu ", (unsigned int)us_cm, (unsigned long)us_raw_us);
     snprintf(oled_display[4], sizeof(oled_display[4]),
-             "I1 :%2ucm R:%-4u", (unsigned int)ir1_cm, (unsigned int)irSensor1Raw);
+             "I1 :%-3ucm R:%-5u ", (unsigned int)ir1_cm, (unsigned int)irSensor1Raw);
     snprintf(oled_display[5], sizeof(oled_display[5]),
-             "I2 :%2ucm R:%-4u", (unsigned int)ir2_cm, (unsigned int)irSensor2Raw);
+             "I2 :%-3ucm R:%-5u ", (unsigned int)ir2_cm, (unsigned int)irSensor2Raw);
 
     OLED_ShowString(0,  0, (uint8_t *)oled_display[0]);
     OLED_ShowString(0, 10, (uint8_t *)oled_display[1]);

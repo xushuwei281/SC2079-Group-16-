@@ -17,6 +17,7 @@ from launch.actions import (
     SetEnvironmentVariable,
     TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -79,6 +80,11 @@ def generate_launch_description():
         default_value="42.0",
         description="Turning radius in cm for Reeds-Shepp path planner",
     )
+    run_perception_arg = DeclareLaunchArgument(
+        "run_perception",
+        default_value="true",
+        description="Launch local YOLO perception node on the Pi",
+    )
 
     # 1. Zenoh Router Daemon (Port 7447 for cross-machine Tailscale/Wi-Fi communication)
     zenoh_router = ExecuteProcess(
@@ -125,7 +131,42 @@ def generate_launch_description():
         output="screen",
     )
 
-    # 6. Foxglove Studio WebSocket Bridge (Port 8765)
+    # 6. Optional On-Device YOLO Perception Node
+    perception = Node(
+        package="mdp_perception",
+        executable="perception_node",
+        name="perception_node",
+        condition=IfCondition(LaunchConfiguration("run_perception")),
+        output="screen",
+    )
+
+    # 7. Static Sensor Transforms (TF base_link -> ultrasonic_link, ir_left_link, ir_right_link)
+    tf_ultrasonic = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="tf_ultrasonic",
+        arguments=["--x", "0.10", "--y", "0.0", "--z", "0.05",
+                   "--yaw", "0", "--pitch", "0", "--roll", "0",
+                   "--frame-id", "base_link", "--child-frame-id", "ultrasonic_link"],
+    )
+    tf_ir_left = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="tf_ir_left",
+        arguments=["--x", "0.08", "--y", "0.06", "--z", "0.04",
+                   "--yaw", "0.52", "--pitch", "0", "--roll", "0",
+                   "--frame-id", "base_link", "--child-frame-id", "ir_left_link"],
+    )
+    tf_ir_right = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="tf_ir_right",
+        arguments=["--x", "0.08", "--y", "-0.06", "--z", "0.04",
+                   "--yaw", "-0.52", "--pitch", "0", "--roll", "0",
+                   "--frame-id", "base_link", "--child-frame-id", "ir_right_link"],
+    )
+
+    # 8. Foxglove Studio WebSocket Bridge (Port 8765)
     foxglove = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -142,6 +183,10 @@ def generate_launch_description():
             android_bridge,
             camera_launch,
             planner,
+            perception,
+            tf_ultrasonic,
+            tf_ir_left,
+            tf_ir_right,
             foxglove,
         ],
     )
@@ -153,6 +198,7 @@ def generate_launch_description():
             stm32_port_arg,
             rfcomm_device_arg,
             turning_radius_arg,
+            run_perception_arg,
             delayed_nodes,
         ]
     )

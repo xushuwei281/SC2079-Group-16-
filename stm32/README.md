@@ -64,3 +64,16 @@ documents flashing with FlyMcu (Windows only) instead of `stm32flash`.
 Same underlying protocol and same auto-download circuit, different tool.
 That guide also covers power sequencing: disconnect the 12V supply
 before flashing, USB power only, reconnect 12V afterward.
+
+## Sensor Drivers & FreeRTOS Stability Notes
+
+### 1. FreeRTOS Task Stack Sizes & MCU Lockups
+- **Symptom:** The STM32 randomly froze, crashed, or hit a HardFault when formatting strings or updating the OLED.
+- **Root Cause:** `defaultTask` was initially configured with only `128 * 4` (512 bytes) of stack. On Cortex-M4 with hardware FPU (`-mfloat-abi=hard -mfpu=fpv4-sp-d16`), saving FPU/core context on interrupts and calling `snprintf()` with floating point and 64-bit numbers easily consumed >500 bytes, causing silent FreeRTOS stack overflows.
+- **Fix:** `defaultTask` stack size increased to `512 * 4` (2048 bytes) and `MotorTask` to `256 * 4` (1024 bytes).
+
+### 2. Ultrasonic Sensor (HC-SR04) Implementation
+- **Hardware Timer Timing:** Uses `TIM6` (clocked at 1 MHz via prescaler 15 from 16 MHz HSI) for true 1 µs hardware timing. Software loop counting was inaccurate due to compiler optimizations and CPU clock differences.
+- **Scheduler Locking:** Calls `vTaskSuspendAll()` / `xTaskResumeAll()` during echo pulse measurement to prevent higher-priority tasks (`GyroTask`, `EncoderTask`, `MotorTask`) and the 1 ms SysTick from preempting the measurement loop and creating artificial 1 ms (~17-19 cm) measurement floors.
+- **Stuck-HIGH / Blind-Zone Protection:** HC-SR04 modules latch `ECHO` HIGH for ~38 ms if an obstacle is < 2 cm away or missed. The driver verifies `ECHO` is LOW before triggering, and returns `0` on timeout rather than calculating false 400 cm readings.
+- **Pinout:** `PC10` (TRIG), `PC12` (ECHO).

@@ -95,13 +95,13 @@ class PiCameraNode(Node):
 
         now = self.get_clock().now().to_msg()
 
-        # 1. Publish Raw RGB8 Image
+        # 1. Publish Raw BGR8 Image
         img_msg = Image()
         img_msg.header.stamp = now
         img_msg.header.frame_id = self._frame_id
         img_msg.height = FRAME_H
         img_msg.width = FRAME_W
-        img_msg.encoding = "rgb8"
+        img_msg.encoding = "bgr8"
         img_msg.is_bigendian = 0
         img_msg.step = FRAME_W * 3
         img_msg.data = raw_bytes
@@ -109,8 +109,7 @@ class PiCameraNode(Node):
 
         # 2. Publish Compressed JPEG Image
         if self._compressed_pub.get_subscription_count() > 0:
-            frame_rgb = np.frombuffer(raw_bytes, dtype=np.uint8).reshape((FRAME_H, FRAME_W, 3))
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            frame_bgr = np.frombuffer(raw_bytes, dtype=np.uint8).reshape((FRAME_H, FRAME_W, 3))
             success, encoded_jpg = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             if success:
                 comp_msg = CompressedImage()

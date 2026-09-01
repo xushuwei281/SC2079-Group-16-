@@ -30,13 +30,23 @@ def main():
 
     picam2 = Picamera2()
     config = picam2.create_preview_configuration(
-        main={"size": (640, 480), "format": "RGB888"}
+        main={"size": (640, 480), "format": "BGR888"}
     )
     picam2.configure(config)
+    try:
+        picam2.set_controls({
+            "AwbEnable": True,
+            "AeEnable": True,
+            "Saturation": 1.0,
+            "Contrast": 1.0,
+            "Sharpness": 1.0,
+        })
+    except Exception as e:
+        print(f"[CameraDaemon] Control warning: {e}")
     picam2.start()
 
-    time.sleep(0.5)  # Let AEC/AWB stabilize
-    print("[CameraDaemon] Picamera2 Hardware ISP streaming active.")
+    time.sleep(1.5)  # Let AEC/AWB fully converge
+    print("[CameraDaemon] Picamera2 Hardware ISP streaming active (BGR888, natural color balance).")
 
     try:
         while True:
