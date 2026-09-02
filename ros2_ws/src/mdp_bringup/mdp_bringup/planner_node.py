@@ -75,6 +75,7 @@ class PlannerNode(Node):
         self.declare_parameter("enable_collision_avoidance", True)
         self.declare_parameter("safety_stop_dist_cm", 12.0)
         self.declare_parameter("recovery_backup_cm", 8.0)
+        self.declare_parameter("recognition_timeout_s", 3.0)
 
         self._radius = float(self.get_parameter("turning_radius_cm").value)
         self._view_dist = float(self.get_parameter("camera_view_dist_cm").value)
@@ -82,12 +83,14 @@ class PlannerNode(Node):
         self._enable_avoidance = bool(self.get_parameter("enable_collision_avoidance").value)
         self._safety_dist_cm = float(self.get_parameter("safety_stop_dist_cm").value)
         self._recovery_backup_cm = float(self.get_parameter("recovery_backup_cm").value)
+        self._recognition_timeout_s = float(self.get_parameter("recognition_timeout_s").value)
 
         self._obstacles: List[Obstacle] = []
         self._current_plan: Optional[FullMissionPlan] = None
         self._current_pose = Config(20.0, 20.0, math.pi / 2.0)
         self._is_executing = False
         self._mission_thread: Optional[threading.Thread] = None
+        self._recognized_targets: dict[int, int] = {}
 
         # Live sensor distance tracking (in meters)
         self._us_range_m = float("inf")
@@ -99,13 +102,19 @@ class PlannerNode(Node):
 
         # Publishers
         self._status_pub = self.create_publisher(String, "/android/status", 10)
-        self._target_pub = self.create_publisher(String, "/android/target", 10)
         self._path_pub = self.create_publisher(Path, "/planner/path", 10)
         self._estop_pub = self.create_publisher(Empty, "/estop", 10)
 
         # Subscribers
         self._cmd_sub = self.create_subscription(
             String, "/android/cmd", self._on_cmd, 10, callback_group=callback_group
+        )
+        # perception_node is the sole publisher of recognition results on
+        # /android/target (it tracks "At Obs <id>" status and reports the
+        # real YOLO symbol there); the planner only consumes it here to
+        # avoid two nodes racing to publish onto the same topic.
+        self._target_sub = self.create_subscription(
+            String, "/android/target", self._on_target, 10, callback_group=callback_group
         )
         self._pose_sub = self.create_subscription(
             PoseStamped, "/robot_pose", self._on_pose, 10, callback_group=callback_group
@@ -163,6 +172,29 @@ class PlannerNode(Node):
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         yaw_rad = math.atan2(siny_cosp, cosy_cosp)
         self._current_pose = Config(x_cm, y_cm, yaw_rad)
+
+    def _on_target(self, msg: String) -> None:
+        """Record a recognition result reported by perception_node."""
+        parts = msg.data.split(",")
+        if len(parts) != 2:
+            return
+        try:
+            obs_id = int(parts[0])
+            symbol_id = int(parts[1])
+        except ValueError:
+            return
+        self._recognized_targets[obs_id] = symbol_id
+
+    def _wait_for_recognition(self, obstacle_id: int, timeout_s: float) -> Optional[int]:
+        """Poll for perception_node's recognition result for this obstacle."""
+        self._recognized_targets.pop(obstacle_id, None)
+        deadline = time.time() + timeout_s
+        while self._is_executing and time.time() < deadline:
+            symbol_id = self._recognized_targets.get(obstacle_id)
+            if symbol_id is not None:
+                return symbol_id
+            time.sleep(0.05)
+        return self._recognized_targets.get(obstacle_id)
 
     def _on_estop(self, msg: Empty) -> None:
         """Emergency stop handler."""
@@ -378,13 +410,22 @@ class PlannerNode(Node):
             self.get_logger().info(f"Leg {i+1} completed! At vantage pose for Obstacle {leg.obstacle_id}.")
             self._status_pub.publish(String(data=f"At Obs {leg.obstacle_id}: Capturing Image"))
 
-            # Pause for photo & recognition (2 seconds)
-            time.sleep(1.5)
-
-            # In live run, perception node resolves symbol ID; default to simulated recognition ID
-            recognized_symbol = 10 + leg.obstacle_id  # e.g., Obs 1 -> Symbol 11
-            self._target_pub.publish(String(data=f"{leg.obstacle_id},{recognized_symbol}"))
-            self.get_logger().info(f"Reported Target: Obstacle {leg.obstacle_id} -> Symbol {recognized_symbol}")
+            # Wait for perception_node to report a real recognition result
+            # for this obstacle (it publishes on /android/target once it
+            # sees a confident detection while we're parked at this vantage
+            # pose).
+            recognized_symbol = self._wait_for_recognition(
+                leg.obstacle_id, timeout_s=self._recognition_timeout_s
+            )
+            if recognized_symbol is not None:
+                self.get_logger().info(
+                    f"Recognized Target: Obstacle {leg.obstacle_id} -> Symbol {recognized_symbol}"
+                )
+            else:
+                self.get_logger().warn(
+                    f"No recognition result for Obstacle {leg.obstacle_id} "
+                    f"within {self._recognition_timeout_s:.1f}s."
+                )
 
         if self._is_executing:
             self.get_logger().info("=== ALL TARGETS VISITED SUCCESSFULLY ===")
