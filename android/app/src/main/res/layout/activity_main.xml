@@ -73,92 +73,18 @@
                 android:text="@string/disconnect_button" />
         </LinearLayout>
 
-        <LinearLayout
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginBottom="12dp">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical"
-                android:layout_marginEnd="8dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/distance_label" />
-
-                <EditText
-                    android:id="@+id/distanceInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="number"
-                    android:text="@string/default_distance" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/angle_label" />
-
-                <EditText
-                    android:id="@+id/angleInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="number"
-                    android:text="@string/default_angle" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <TableLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:layout_marginBottom="12dp"
-            android:stretchColumns="0,1,2">
+            android:gravity="center">
 
-            <TableRow>
-
-                <Button
-                    android:id="@+id/turnLeftButton"
-                    android:layout_margin="4dp"
-                    android:text="@string/turn_left_button" />
-
-                <Button
-                    android:id="@+id/forwardButton"
-                    android:layout_margin="4dp"
-                    android:text="@string/forward_button" />
-
-                <Button
-                    android:id="@+id/turnRightButton"
-                    android:layout_margin="4dp"
-                    android:text="@string/turn_right_button" />
-            </TableRow>
-
-            <TableRow>
-
-                <View
-                    android:layout_width="0dp"
-                    android:layout_height="0dp" />
-
-                <Button
-                    android:id="@+id/backwardButton"
-                    android:layout_margin="4dp"
-                    android:text="@string/backward_button" />
-
-                <View
-                    android:layout_width="0dp"
-                    android:layout_height="0dp" />
-            </TableRow>
-        </TableLayout>
+            <com.sc2079.group16.controller.JoystickView
+                android:id="@+id/joystick"
+                android:layout_width="240dp"
+                android:layout_height="240dp" />
+        </FrameLayout>
 
         <Button
             android:id="@+id/stopButton"

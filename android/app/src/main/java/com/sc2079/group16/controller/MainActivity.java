@@ -9,11 +9,12 @@ import android.bluetooth.BluetoothManager;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.View;
 import android.widget.ArrayAdapter;
-import android.widget.EditText;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -40,8 +41,27 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private View controlPanel;
     private TextView connectedDeviceLabel;
     private TextView statusTextView;
-    private EditText distanceInput;
-    private EditText angleInput;
+    private JoystickView joystickView;
+
+    // ---- Joystick -> discrete move translation ----------------------------
+    // The STM32 firmware has no continuous-velocity primitive -- every move
+    // is one discrete, blocking maneuver (see mdp_hardware_bridge). The
+    // joystick fakes continuous control by repeatedly issuing small moves
+    // while held, pacing itself off each move's actual completion (DONE / a
+    // terminal STATUS) rather than a fixed timer, so it never outruns
+    // /execute_moves's one-call-at-a-time arbitration on the Pi.
+    private static final float JOYSTICK_DEADZONE = 0.15f;
+    private static final double STRAIGHT_ANGLE_DEG = 20.0; // within this of dead-ahead/dead-astern -> FC/BC
+    private static final int MIN_STEP_DIST_CM = 2;
+    private static final int MAX_STEP_DIST_CM = 8; // stays < 100 so android_bridge_node's mm-heuristic never fires
+    private static final int MIN_STEP_TURN_DEG = 2; // the "2-degree interval" ask -- FL/FR/BL/BR already support this
+    private static final int MAX_STEP_TURN_DEG = 20;
+    private static final long JOYSTICK_POLL_MS = 70;
+    private static final long MOVE_STUCK_TIMEOUT_MS = 4000; // recover if a response never arrives
+
+    private final Handler joystickHandler = new Handler(Looper.getMainLooper());
+    private boolean moveInFlight = false;
+    private long lastMoveSentAt = 0L;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -54,15 +74,10 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         connectedDeviceLabel = findViewById(R.id.connectedDeviceLabel);
         statusTextView = findViewById(R.id.statusText);
         statusTextView.setMovementMethod(new ScrollingMovementMethod());
-        distanceInput = findViewById(R.id.distanceInput);
-        angleInput = findViewById(R.id.angleInput);
+        joystickView = findViewById(R.id.joystick);
 
         findViewById(R.id.refreshButton).setOnClickListener(v -> refreshDeviceList());
         findViewById(R.id.disconnectButton).setOnClickListener(v -> disconnect());
-        findViewById(R.id.forwardButton).setOnClickListener(v -> sendMove("FW", distanceInput));
-        findViewById(R.id.backwardButton).setOnClickListener(v -> sendMove("BW", distanceInput));
-        findViewById(R.id.turnLeftButton).setOnClickListener(v -> sendMove("TL", angleInput));
-        findViewById(R.id.turnRightButton).setOnClickListener(v -> sendMove("TR", angleInput));
         findViewById(R.id.stopButton).setOnClickListener(v -> linkService.sendLine("STP"));
 
         deviceListView.setOnItemClickListener(
@@ -74,6 +89,8 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         bluetoothAdapter = btManager != null ? btManager.getAdapter() : null;
 
         ensurePermissionThenListDevices();
+
+        joystickHandler.post(this::joystickTick);
     }
 
     private void ensurePermissionThenListDevices() {
@@ -151,23 +168,64 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         showDevicePicker();
     }
 
-    private void sendMove(String kind, EditText valueInput) {
-        String raw = valueInput.getText().toString().trim();
-        appendStatus(kind + " pressed (input: \"" + raw + "\")");
-        if (raw.isEmpty()) {
-            appendStatus(kind + " not sent: no value entered");
-            Toast.makeText(this, "Enter a value first", Toast.LENGTH_SHORT).show();
+    /** Runs every {@link #JOYSTICK_POLL_MS} for the life of the Activity; a
+     * held-still joystick produces no touch events, so this polls its
+     * current position rather than reacting to callbacks. */
+    private void joystickTick() {
+        joystickHandler.postDelayed(this::joystickTick, JOYSTICK_POLL_MS);
+
+        if (controlPanel.getVisibility() != View.VISIBLE) {
             return;
         }
+
+        if (moveInFlight) {
+            if (System.currentTimeMillis() - lastMoveSentAt > MOVE_STUCK_TIMEOUT_MS) {
+                moveInFlight = false; // no DONE/STATUS ever arrived -- don't wedge the joystick
+            } else {
+                return; // previous step still executing; let it finish
+            }
+        }
+
+        float right = joystickView.getStickRight();
+        float forward = joystickView.getStickForward();
+        float magnitude = (float) Math.hypot(right, forward);
+        if (magnitude < JOYSTICK_DEADZONE) {
+            return;
+        }
+        magnitude = Math.min(magnitude, 1f);
+
+        double angleFromForwardDeg = Math.toDegrees(Math.atan2(right, forward));
+        String command;
         int value;
-        try {
-            value = Integer.parseInt(raw);
-        } catch (NumberFormatException e) {
-            appendStatus(kind + " not sent: \"" + raw + "\" is not a number");
-            Toast.makeText(this, "Not a number", Toast.LENGTH_SHORT).show();
-            return;
+        if (Math.abs(angleFromForwardDeg) <= 90.0) {
+            if (Math.abs(angleFromForwardDeg) <= STRAIGHT_ANGLE_DEG) {
+                command = "FC";
+                value = scaleStep(magnitude, MIN_STEP_DIST_CM, MAX_STEP_DIST_CM);
+            } else {
+                command = angleFromForwardDeg > 0 ? "FR" : "FL";
+                value = scaleStep(magnitude, MIN_STEP_TURN_DEG, MAX_STEP_TURN_DEG);
+            }
+        } else {
+            double deviationFromBack = 180.0 - Math.abs(angleFromForwardDeg);
+            if (deviationFromBack <= STRAIGHT_ANGLE_DEG) {
+                command = "BC";
+                value = scaleStep(magnitude, MIN_STEP_DIST_CM, MAX_STEP_DIST_CM);
+            } else {
+                command = right > 0 ? "BR" : "BL";
+                value = scaleStep(magnitude, MIN_STEP_TURN_DEG, MAX_STEP_TURN_DEG);
+            }
         }
-        linkService.sendLine(kind + ":" + value);
+
+        moveInFlight = true;
+        lastMoveSentAt = System.currentTimeMillis();
+        linkService.sendLine(command + ":" + value);
+    }
+
+    /** Maps a deflection in [DEADZONE, 1] onto [min, max]. */
+    private int scaleStep(float magnitude, int min, int max) {
+        float t = (magnitude - JOYSTICK_DEADZONE) / (1f - JOYSTICK_DEADZONE);
+        t = Math.max(0f, Math.min(1f, t));
+        return Math.round(min + t * (max - min));
     }
 
     private void showDevicePicker() {
@@ -210,11 +268,18 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     @Override
     public void onStatusLine(String text) {
         appendStatus("STATUS: " + text);
+        // "Moving ..." is an ack sent the instant a move is dispatched, before
+        // it actually completes -- every other STATUS line here is terminal
+        // (a failure/rejection), so it's the joystick loop's cue to proceed.
+        if (!text.startsWith("Moving")) {
+            moveInFlight = false;
+        }
     }
 
     @Override
     public void onDone() {
         appendStatus("DONE");
+        moveInFlight = false;
     }
 
     @Override
@@ -230,6 +295,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         // shown, so appendStatus() alone would be silently invisible.
         Toast.makeText(this, "Disconnected: " + reason, Toast.LENGTH_LONG).show();
         appendStatus("Disconnected (" + reason + ")");
+        moveInFlight = false; // don't carry stale in-flight state into the next connection
         showDevicePicker();
     }
 
