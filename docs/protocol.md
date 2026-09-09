@@ -29,13 +29,22 @@ byte to the screen).
 see `ros2_ws/bluetooth-setup/` for the one-time pairing + persistent
 `rfcomm watch` listener this needs on the Pi side (systemd-managed, so the
 Pi is always ready for a connection without a human running commands
-first). Distance-unit handling: a linear move (`FC`/`BC`) value is divided
-by 10 (treated as mm→cm) when it's `>= 100` or when the node's
-`distance_in_mm` parameter is set; smaller values are passed through as
-already being centimetres. `TL`/`TR` map to the STM32's forward-turn codes
-(`FL`/`FR`); there is currently no way to request a backward turn
-(`BL`/`BR`) from the Android app — extend `android_bridge_node`'s
-`_MOVEMENT_MAP` if that's ever needed.
+first).
+
+- **1-Deep Move Queueing & Streaming Debounce:** When direction buttons are held
+  on Android, commands are streamed every ~50–60 ms. If a move is currently in
+  flight, `android_bridge_node` buffers the latest command in `_pending_move` and
+  suppresses noisy `BUSY_LOCAL` status alerts over Bluetooth. Upon completion of
+  the current move, the pending move is immediately dispatched without returning
+  to idle, providing smooth, continuous driving. When the button is released, no
+  further commands arrive, and `DONE` is emitted once the last move completes.
+- **Distance-unit handling:** a linear move (`FC`/`BC`) value is divided
+  by 10 (treated as mm→cm) when it's `>= 100` or when the node's
+  `distance_in_mm` parameter is set; smaller values are passed through as
+  already being centimetres. `TL`/`TR` map to the STM32's forward-turn codes
+  (`FL`/`FR`); backward turns (`BL`/`BR`) are directly supported via two-letter codes.
+- **Emergency Stop:** `STP`, `STOP`, or `Q` immediately flushes any pending move
+  and broadcasts to `/estop`.
 
 ## Raspberry Pi ↔ STM32 (UART/serial, 115200 baud)
 
@@ -53,8 +62,17 @@ Fixed **5-byte packets** for instructions, trigger, and e-stop. Handshake lines 
 | RPi → STM32 | `b"Q\x00\x00\x00\x00"` | `Q\x00...` | **Emergency Stop:** Immediate ISR motor cutoff |
 | STM32 → RPi | `RUN\r\n` | `RUN` | Batch execution started |
 | STM32 → RPi | `FIN:<dist>,<heading>\r\n` | `FIN:50.2,0.4` | Batch completed with measured encoder distance (cm) & gyro heading (deg) |
-| STM32 → RPi | `BUS\r\n` | `BUS` | Rejected: STM32 busy executing a move (Pi retries) |
+| STM32 → RPi | `BUS\r\n` | `BUS` | Rejected: STM32 busy executing a move (evaluated *before* trigger packet `#`) |
 | STM32 → RPi | `FUL\r\n` | `FUL` | Rejected: Command queue full (>40) |
+
+**UART Concurrency & Timing Guarantees:**
+1. **Busy Rejection Priority:** `HAL_UART_RxCpltCallback` evaluates `runRequested == 1` *before* the trigger `#` packet. Both instructions and trigger are rejected with `BUS\r\n` while executing, preventing empty-queue executions.
+2. **Reduced Latencies:**
+   - Post-batch settling delay in `comm_task` is 20 ms (reduced from 200 ms).
+   - Servo arrival throw delay is 80 ms (reduced from 200 ms).
+   - Static friction break delay is 50 ms (reduced from 200 ms).
+   - Post-turn delay is 40 ms (reduced from 200 ms).
+3. **Safety Timeouts:** All straight and turn loops enforce hardware tick timeouts (`timeout_ticks = delta * 80 + 2000 ms`) to prevent infinite MCU hangs if wheels slip.
 
 
 ## Raspberry Pi ↔ Algorithm (PC) (TCP, JSON lines)

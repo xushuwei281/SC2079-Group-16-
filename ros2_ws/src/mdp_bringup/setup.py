@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "planner_node = mdp_bringup.planner_node:main",
+            "fastest_car_node = mdp_bringup.fastest_car_node:main",
         ],
     },
 )

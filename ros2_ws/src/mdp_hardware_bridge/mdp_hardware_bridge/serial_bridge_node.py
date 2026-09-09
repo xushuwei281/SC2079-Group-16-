@@ -51,8 +51,8 @@ _VALID_COMMANDS = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU", "GC", "G0", "
 _MAX_BATCH = 40
 
 # Retries when the firmware answers BUS (a previous batch was still
-# executing when our trigger landed -- e.g. right after a missed FIN).
-_BUS_RETRIES = 3
+# executing or in mechanical settling when our trigger landed).
+_BUS_RETRIES = 10
 
 # Standard candidate device nodes for STM32 USB-CDC / UART
 _DEFAULT_CANDIDATE_PORTS = [
@@ -283,6 +283,10 @@ class SerialBridgeNode(Node):
         self._estop_event.clear()
         try:
             status = ""
+            with self._write_lock:
+                if self._serial is not None and self._serial.is_open:
+                    self._serial.reset_input_buffer()
+
             for _ in range(_BUS_RETRIES):
                 if self._estop_event.is_set():
                     response.success = False
@@ -295,7 +299,6 @@ class SerialBridgeNode(Node):
                         response.status = "DISCONNECTED"
                         return response
                     try:
-                        self._serial.reset_input_buffer()
                         for pkt in encoded_packets:
                             self._serial.write(pkt)
                             self._serial.flush()
@@ -316,9 +319,12 @@ class SerialBridgeNode(Node):
                     response.status = "ESTOPPED"
                     return response
                 if status == "BUS":
-                    # Firmware was mid-batch; our packets were rejected
-                    # (not queued), so resending the whole batch is safe.
-                    time.sleep(1.0)
+                    # Firmware was mid-batch or in mechanical settling;
+                    # wait and drain any trailing response before retrying.
+                    time.sleep(0.08)
+                    with self._write_lock:
+                        if self._serial is not None and self._serial.is_open:
+                            self._serial.reset_input_buffer()
                     continue
                 break
 

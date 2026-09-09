@@ -63,6 +63,31 @@ drift apart.
 
 - **FreeRTOS Stack Sizing**: `defaultTask` stack was increased from 512B (`128 * 4`) to 2048B (`512 * 4`) and `MotorTask` to 1024B (`256 * 4`). The 512B stack previously overflowed during `snprintf` + floating-point operations and FPU context saving, causing hard MCU lockups.
 - **HC-SR04 Ultrasonic Driver**: Uses hardware timer `TIM6` (1 tick = 1 µs at 16 MHz HSI) instead of software loops. Wrapped with `vTaskSuspendAll()` / `xTaskResumeAll()` during echo pulse measurement to prevent ~1 ms FreeRTOS preemption jitter (which created an artificial 19 cm measurement floor). Includes pre-trigger check to avoid hanging when ECHO is stuck HIGH from blind-zone (< 2 cm) reflections.
+- **Flashing Flags & DTR Pin Latch**: In `platformio.ini`, `upload_flags` exit sequence MUST be `-rts,-dtr`. A previous trailing `dtr` (`...:-rts,-dtr,dtr`) left DTR asserted, holding the C30D reset/bootloader circuit and preventing execution of user firmware.
+- **Boot Gyro Calibration**: MCU runs 5.0 seconds of gyro offset and drift calibration at power-on before enabling USART3 interrupt. Any commands sent during the first 5s will be ignored.
+- **UART Busy Priority Check**: In `HAL_UART_RxCpltCallback`, `runRequested == 1` is evaluated *before* `#`. This ensures that incoming trigger packets are rejected with `BUS\r\n` alongside instruction packets when the MCU is busy, preventing empty batches from executing.
+- **Motion Dead Time Reduction**:
+  - Reduced `comm_task` mechanical settling: `osDelay(200)` -> `osDelay(20)`.
+  - Reduced steering servo throw delay: `osDelay(200)` -> `osDelay(80)`.
+  - Reduced static friction break: `osDelay(200)` -> `osDelay(50)`.
+  - Reduced post-stop settling: `osDelay(100)` -> `osDelay(20)`.
+  - Reduced post-turn settling & centering: `200 ms` -> `40 ms`.
+  - Adaptive creep: for commands <= 15 (cm/deg), creep threshold is 2 cm / 1 deg instead of 5 cm / 4 deg.
+  - Motion timeouts: all movement loops include hardware tick timeouts to prevent MCU hangs on wheel slip.
+
+## ROS 2 Bridges & Teleoperation (`ros2_ws/`)
+
+- **1-Deep Move Queue in `android_bridge_node`**: When direction buttons are held on Android (streamed every 50–60 ms), in-flight moves buffer the newest command in `self._pending_move` and suppress noisy `BUSY_LOCAL` status messages. On move completion callback, pending moves chain immediately without returning to idle.
+- **Serial Bridge Retry & Buffer Management**: `serial_bridge_node` flushes the serial input buffer once before the retry loop, and drains residual output with backoff upon receiving `BUS\r\n`, preventing buffer wipes of incoming `RUN\r\n` handshakes.
+- **Checklist C.10 Android Pose Streaming**: `android_bridge_node` maps `/robot_pose` to `ROBOT,<x>,<y>,<dir>` with heading mapped to cardinal `N`/`S`/`E`/`W` and grid cells $[0..19]$.
+- **Task 1 Autonomous Planner & Bull's Eye Orbit Recovery (`planner_node.py`)**: Computes optimal Reeds-Shepp TSP tour from Android `ALG:{...}` layout. If `/perception/sample_target` returns Bull's Eye marker (ID 40) or low confidence, triggers 90° orbit around obstacle footprint to candidate adjacent faces until the true target is confirmed.
+- **Task 2 Fastest Car Reactive Sprint (`fastest_car_node.py`, `task2.launch.py`)**: Autonomous sprint FSM for the unmapped 2-obstacle slalom track. Drives forward using ultrasonic feedback, calls `/perception/sample_target` to classify Left Arrow (39) vs Right Arrow (38), executes calibrated S-curve bypass maneuvers (`slalom_left_cmds`/`slalom_right_cmds`), rounds Obstacle 2, and sprints back into the Carpark. Triggered via tablet "SP" button (`STM:sp`) or `pixi run -e pi task2`.
+- **Operating Mode Switching**:
+  - **Checklist Mode**: `pixi run -e pi teleop` (manual driving, sensor tests, C.10 pose streaming).
+  - **Task 1 Mode**: `pixi run -e pi robot` (autonomous exploration, 4-8 obstacles).
+  - **Task 2 Mode**: `pixi run -e pi task2` (fastest car reactive sprint).
+  - **Runtime Switching**: `android_bridge_node` routes `ALG:START` to `planner_node` and `STM:sp`/`SP` to `fastest_car_node` without node restarts.
+
 
 ## Repo map
 

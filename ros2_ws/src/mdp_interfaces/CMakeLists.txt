@@ -7,6 +7,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MoveCommand.msg"
   "srv/ExecuteMoves.srv"
+  "srv/SampleTarget.srv"
 )
 
 ament_package()

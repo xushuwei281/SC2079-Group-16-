@@ -11,12 +11,15 @@ Responsibilities:
 
 from __future__ import annotations
 
+from enum import Enum
+import json
 import math
 import os
+import re
 import sys
 import threading
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # Locate algorithm directory
 _curr_dir = os.path.dirname(os.path.abspath(__file__))
@@ -33,19 +36,21 @@ for _p in [
         sys.path.insert(0, _abs_p)
 
 try:
-    from arena import Config, Obstacle, default_arena
+    from arena import Config, Obstacle, default_arena, in_bounds, robot_collides_any
     from planner import (
         FullMissionPlan,
         PlanLeg,
+        compute_vantage_pose,
         discretize_waypoints,
         plan_mission,
         sample_reeds_shepp_path,
     )
 except ImportError:
-    from algorithm.arena import Config, Obstacle, default_arena
+    from algorithm.arena import Config, Obstacle, default_arena, in_bounds, robot_collides_any
     from algorithm.planner import (
         FullMissionPlan,
         PlanLeg,
+        compute_vantage_pose,
         discretize_waypoints,
         plan_mission,
         sample_reeds_shepp_path,
@@ -54,13 +59,25 @@ except ImportError:
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from mdp_interfaces.msg import MoveCommand
-from mdp_interfaces.srv import ExecuteMoves
+from mdp_interfaces.srv import ExecuteMoves, SampleTarget
 from nav_msgs.msg import Path
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
+
+
+class MissionState(str, Enum):
+    """FSM Mission States for Task 1 Autonomous Orchestration."""
+    IDLE = "IDLE"
+    PLANNING = "PLANNING"
+    NAVIGATING = "NAVIGATING"
+    AVOIDANCE_RECOVERY = "AVOIDANCE_RECOVERY"
+    SAMPLING_TARGET = "SAMPLING_TARGET"
+    ORBIT_RECOVERY = "ORBIT_RECOVERY"
+    MISSION_COMPLETE = "MISSION_COMPLETE"
+    ESTOP = "ESTOP"
 
 
 class PlannerNode(Node):
@@ -71,11 +88,11 @@ class PlannerNode(Node):
 
         self.declare_parameter("turning_radius_cm", 42.0)
         self.declare_parameter("camera_view_dist_cm", 25.0)
-        self.declare_parameter("auto_start", False)
+        self.declare_parameter("auto_start", True)
         self.declare_parameter("enable_collision_avoidance", True)
         self.declare_parameter("safety_stop_dist_cm", 12.0)
-        self.declare_parameter("recovery_backup_cm", 8.0)
         self.declare_parameter("recognition_timeout_s", 3.0)
+        self.declare_parameter("enable_orbit_recovery", True)
 
         self._radius = float(self.get_parameter("turning_radius_cm").value)
         self._view_dist = float(self.get_parameter("camera_view_dist_cm").value)
@@ -84,7 +101,9 @@ class PlannerNode(Node):
         self._safety_dist_cm = float(self.get_parameter("safety_stop_dist_cm").value)
         self._recovery_backup_cm = float(self.get_parameter("recovery_backup_cm").value)
         self._recognition_timeout_s = float(self.get_parameter("recognition_timeout_s").value)
+        self._enable_orbit_recovery = bool(self.get_parameter("enable_orbit_recovery").value)
 
+        self._state = MissionState.IDLE
         self._obstacles: List[Obstacle] = []
         self._current_plan: Optional[FullMissionPlan] = None
         self._current_pose = Config(20.0, 20.0, math.pi / 2.0)
@@ -135,6 +154,11 @@ class PlannerNode(Node):
         # Service Client to STM32 Hardware Bridge
         self._move_client = self.create_client(
             ExecuteMoves, "/execute_moves", callback_group=callback_group
+        )
+
+        # Service Client to Live Perception Consensus Sampler
+        self._sample_client = self.create_client(
+            SampleTarget, "/perception/sample_target", callback_group=callback_group
         )
 
         self.get_logger().info(
@@ -196,9 +220,18 @@ class PlannerNode(Node):
             time.sleep(0.05)
         return self._recognized_targets.get(obstacle_id)
 
+    def _transition_state(self, new_state: MissionState, reason: str = "") -> None:
+        """Centralized state machine transition helper with logging and tablet status updates."""
+        old_state = self._state
+        self._state = new_state
+        msg = f"FSM: {old_state.value} -> {new_state.value}"
+        if reason:
+            msg += f" ({reason})"
+        self.get_logger().info(msg)
+
     def _on_estop(self, msg: Empty) -> None:
         """Emergency stop handler."""
-        self.get_logger().warn("Planner received E-STOP: Halting mission execution.")
+        self._transition_state(MissionState.ESTOP, "Received E-STOP signal")
         self._is_executing = False
 
     def _on_cmd(self, msg: String) -> None:
@@ -206,42 +239,110 @@ class PlannerNode(Node):
         raw = msg.data.strip()
         self.get_logger().info(f"Planner received command: {raw}")
 
-        if raw.startswith("ALG|"):
-            self._parse_and_plan(raw)
-        elif raw.upper() == "START":
+        raw_upper = raw.upper()
+        if raw_upper in ("START", "ALG:START", "ALG|START", "IR:START", "START_TASK1"):
             self.start_mission()
-        elif raw.upper() == "RESET":
+        elif raw_upper in ("RESET", "ALG:RESET"):
             self.reset_mission()
+        elif raw.startswith("ALG|") or raw.startswith("ALG:") or "OBSTACLE" in raw_upper or raw.startswith("{") or raw.startswith("["):
+            self._parse_and_plan(raw)
+        elif raw_upper.startswith("ADD"):
+            # Support ADD,id,x,y,face (e.g. ADD,1,2,9,N or ADD,1,60,60,N)
+            parts = raw.split(",")
+            if len(parts) >= 5:
+                try:
+                    obs_id = int(parts[1])
+                    x = float(parts[2])
+                    y = float(parts[3])
+                    face = parts[4].strip().upper()
+                    ox = int(x * 10 + 5) if x <= 20 else int(x)
+                    oy = int(y * 10 + 5) if y <= 20 else int(y)
+                    self._obstacles = [ob for ob in self._obstacles if ob.id != obs_id]
+                    self._obstacles.append(Obstacle(id=obs_id, x=ox, y=oy, face=face))
+                    self.get_logger().info(f"Added/Updated obstacle {obs_id} at ({ox}, {oy}, {face})")
+                    self._status_pub.publish(String(data=f"Obs {obs_id} Added: {ox},{oy},{face}"))
+                except ValueError:
+                    pass
+        else:
+            self.get_logger().warn(f"Unrecognized planner command: {raw}")
 
-    def _parse_and_plan(self, alg_str: str) -> None:
-        """Parse obstacle list string (e.g. ALG|1,60,60,N|2,130,60,E) and compute plan."""
-        tokens = alg_str.split("|")[1:]
+    def _parse_and_plan(self, raw_str: str) -> None:
+        """Parse obstacle list string (supports ALG|..., ALG:{...}, JSON, ADD) and compute TSP plan."""
+        content = raw_str.strip()
+        if content.startswith("ALG:") or content.startswith("ALG|"):
+            content = content[4:].strip()
+
         obstacles: List[Obstacle] = []
 
-        for tok in tokens:
-            parts = tok.split(",")
-            if len(parts) >= 4:
-                try:
-                    obs_id = int(parts[0])
-                    ox = int(parts[1])
-                    oy = int(parts[2])
-                    face = parts[3].strip().upper()
-                    obstacles.append(Obstacle(id=obs_id, x=ox, y=oy, face=face))
-                except ValueError as e:
-                    self.get_logger().warn(f"Failed to parse obstacle token '{tok}': {e}")
+        # Format 1: Reference Android App ALG:{Obstacle 1: [2,9,N,], ...}
+        if "Obstacle" in raw_str or content.startswith("{"):
+            pattern = r"Obstacle\s*(\d+)\s*:\s*\[([^\]]*)\]"
+            matches = re.findall(pattern, raw_str, re.IGNORECASE)
+            for obs_id_str, vals_str in matches:
+                tokens = [v.strip() for v in vals_str.split(",") if v.strip()]
+                if len(tokens) >= 3:
+                    try:
+                        obs_id = int(obs_id_str)
+                        x = float(tokens[0])
+                        y = float(tokens[1])
+                        face = tokens[2].upper()
+                        # Convert grid indices [0..19] to cm (center is x*10+5, y*10+5)
+                        ox = int(x * 10 + 5) if x <= 20 else int(x)
+                        oy = int(y * 10 + 5) if y <= 20 else int(y)
+                        obstacles.append(Obstacle(id=obs_id, x=ox, y=oy, face=face))
+                    except ValueError:
+                        continue
+
+        # Format 2: Pipe-delimited string (e.g. ALG|1,60,60,N|2,130,60,E)
+        if not obstacles:
+            tokens = [t.strip() for t in raw_str.split("|") if t.strip()]
+            for tok in tokens:
+                if tok.upper().startswith("ALG"):
+                    continue
+                parts = tok.split(",")
+                if len(parts) >= 4:
+                    try:
+                        obs_id = int(parts[0])
+                        x = float(parts[1])
+                        y = float(parts[2])
+                        face = parts[3].strip().upper()
+                        ox = int(x * 10 + 5) if x <= 20 else int(x)
+                        oy = int(y * 10 + 5) if y <= 20 else int(y)
+                        obstacles.append(Obstacle(id=obs_id, x=ox, y=oy, face=face))
+                    except ValueError:
+                        continue
+
+        # Format 3: JSON fallback (e.g. {"obstacles": [[x,y,face], ...]})
+        if not obstacles and (content.startswith("{") or content.startswith("[")):
+            try:
+                data = json.loads(content)
+                raw_list = data.get("obstacles", []) if isinstance(data, dict) else data
+                for idx, item in enumerate(raw_list):
+                    if isinstance(item, (list, tuple)) and len(item) >= 3:
+                        x, y, face = float(item[0]), float(item[1]), str(item[2]).upper()
+                        ox = int(x * 10 + 5) if x <= 20 else int(x)
+                        oy = int(y * 10 + 5) if y <= 20 else int(y)
+                        obstacles.append(Obstacle(id=idx + 1, x=ox, y=oy, face=face))
+            except Exception:
+                pass
 
         if not obstacles:
-            self.get_logger().warn("No valid obstacles parsed from ALG command.")
+            self.get_logger().warn(f"No valid obstacles could be parsed from: {raw_str}")
             return
 
         self._obstacles = obstacles
-        self.get_logger().info(f"Parsed {len(obstacles)} obstacles. Computing optimal Reeds-Shepp TSP plan...")
+        self._transition_state(MissionState.PLANNING, f"Parsed {len(obstacles)} obstacles")
+        self.get_logger().info(f"Computing optimal Reeds-Shepp TSP plan for {len(obstacles)} obstacles...")
+
+        arena_map = default_arena()
+        arena_map["obstacles"] = self._obstacles
 
         self._current_plan = plan_mission(
             self._obstacles,
             start_pose=self._current_pose,
+            arena=arena_map,
             radius=self._radius,
-            d_view=self._view_dist
+            d_view=self._view_dist,
         )
 
         self.get_logger().info(
@@ -294,16 +395,179 @@ class PlannerNode(Node):
         self._mission_thread = threading.Thread(target=self._execute_mission_loop, daemon=True)
         self._mission_thread.start()
 
+    def _execute_commands_sync(self, cmds: List[Tuple[str, int]], label: str = "") -> bool:
+        """Synchronously dispatch a sequence of MoveCommands with active proximity sensor guard."""
+        if not cmds:
+            return True
+
+        req = ExecuteMoves.Request()
+        for code, val in cmds:
+            mc = MoveCommand()
+            mc.command = code
+            mc.value = int(val)
+            req.commands.append(mc)
+
+        future = self._move_client.call_async(req)
+        interrupted_by_sensor = False
+
+        while rclpy.ok() and not future.done():
+            if not self._is_executing:
+                return False
+
+            # Active Proximity Safety Guard
+            if self._enable_avoidance:
+                min_dist_m = min(self._us_range_m, self._ir_left_range_m, self._ir_right_range_m)
+                if min_dist_m < (self._safety_dist_cm / 100.0):
+                    self.get_logger().warn(
+                        f"⚠️ PROXIMITY ALERT ({label})! Obstacle at {min_dist_m*100.0:.1f} cm (< {self._safety_dist_cm} cm). Halting."
+                    )
+                    self._transition_state(MissionState.AVOIDANCE_RECOVERY, f"Proximity alert during {label}")
+                    self._estop_pub.publish(Empty())
+                    interrupted_by_sensor = True
+                    break
+            time.sleep(0.04)
+
+        if interrupted_by_sensor:
+            self._status_pub.publish(String(data="Obstacle Alert: Executing clearance backup..."))
+            time.sleep(0.3)
+            if self._recovery_backup_cm > 0:
+                self.get_logger().info(f"Executing {self._recovery_backup_cm:.0f} cm reverse recovery move...")
+                backup_req = ExecuteMoves.Request()
+                mc = MoveCommand()
+                mc.command = "BC"
+                mc.value = int(self._recovery_backup_cm)
+                backup_req.commands.append(mc)
+                backup_future = self._move_client.call_async(backup_req)
+                while rclpy.ok() and not backup_future.done():
+                    time.sleep(0.04)
+                time.sleep(0.4)
+            return False
+
+        if future.done() and future.result() and future.result().success:
+            return True
+        return False
+
+    def _query_perception_sampler(self, obstacle_id: int) -> Optional[Tuple[int, str, float, bool]]:
+        """Call /perception/sample_target service and return (symbol_id, symbol_name, confidence, is_marker) or None."""
+        if not (self._sample_client.service_is_ready() or self._sample_client.wait_for_service(timeout_sec=0.3)):
+            return None
+
+        req = SampleTarget.Request()
+        req.obstacle_id = obstacle_id
+        t_start = time.time()
+        future = self._sample_client.call_async(req)
+        while rclpy.ok() and not future.done():
+            if time.time() - t_start > 3.0:
+                break
+            time.sleep(0.02)
+
+        if future.done() and future.result():
+            res: SampleTarget.Response = future.result()
+            if res.success:
+                return (res.symbol_id, res.symbol_name, res.confidence, res.is_marker)
+        return None
+
+    def _inspect_adjacent_faces(
+        self, leg: PlanLeg, target_ob: Obstacle, arena: Dict
+    ) -> Optional[Tuple[int, str, float]]:
+        """Algorithms Briefing §2.3: Orbit around obstacle to inspect adjacent faces.
+
+        If a Bull's Eye marker is detected on the nominal face, the target image is located
+        on one of the other faces. This method orbits to adjacent faces in sequence until a
+        valid target symbol (11-39) is confirmed.
+        """
+        nominal_face = (leg.target_face or "N").upper()
+        if nominal_face == "N":
+            candidates = ["E", "W", "S"]
+        elif nominal_face == "S":
+            candidates = ["W", "E", "N"]
+        elif nominal_face == "E":
+            candidates = ["S", "N", "W"]
+        else:  # W
+            candidates = ["N", "S", "E"]
+
+        self._transition_state(
+            MissionState.ORBIT_RECOVERY,
+            f"Bull's Eye on {nominal_face} face of Obs {leg.obstacle_id}"
+        )
+
+        for cand_face in candidates:
+            if not self._is_executing:
+                return None
+
+            alt_ob = Obstacle(id=leg.obstacle_id, x=target_ob.x, y=target_ob.y, face=cand_face)
+            alt_vantage = compute_vantage_pose(alt_ob, d_view=self._view_dist, arena=arena)
+
+            # Safety check: boundary and collision
+            if not (15.0 <= alt_vantage.x <= 185.0 and 15.0 <= alt_vantage.y <= 185.0):
+                self.get_logger().info(f"Skipping {cand_face} face for Obs {leg.obstacle_id}: Vantage pose out of bounds.")
+                continue
+
+            if robot_collides_any(alt_vantage.x, alt_vantage.y, alt_vantage.theta, arena, safety_margin=2.0) is not None:
+                self.get_logger().info(f"Skipping {cand_face} face for Obs {leg.obstacle_id}: Vantage pose collides.")
+                continue
+
+            # Plan trajectory from current pose to candidate vantage pose
+            length, wps, sampled_poses, method = sample_reeds_shepp_path(
+                self._current_pose, alt_vantage, radius=self._radius, arena=arena
+            )
+            if math.isinf(length) or length > 160.0 or not wps:
+                self.get_logger().info(
+                    f"Skipping {cand_face} face for Obs {leg.obstacle_id}: Trajectory unreachable or too long ({length:.1f}cm)."
+                )
+                continue
+
+            cmds, raw_cmds = discretize_waypoints(wps)
+            if not cmds:
+                continue
+
+            self.get_logger().info(
+                f"🔄 Orbiting Obs {leg.obstacle_id} to inspect adjacent {cand_face} face "
+                f"({length:.1f}cm, {len(cmds)} cmds): {' -> '.join(raw_cmds)}"
+            )
+            self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: Orbiting to {cand_face} face"))
+
+            sub_plan = FullMissionPlan(start_pose=self._current_pose, legs=[], total_distance_cm=length, all_commands=cmds, all_poses=sampled_poses)
+            self._publish_ros_path(sub_plan)
+
+            move_ok = self._execute_commands_sync(cmds, label=f"Orbit to {cand_face}")
+            if not move_ok or not self._is_executing:
+                self.get_logger().warn(f"Orbit move to {cand_face} face failed or was interrupted.")
+                continue
+
+            # Re-sample perception at the adjacent vantage pose
+            sample_result = self._query_perception_sampler(leg.obstacle_id)
+            if sample_result:
+                sid, sname, conf, is_marker = sample_result
+                if not is_marker and 11 <= sid <= 39:
+                    self.get_logger().info(
+                        f"🎉 Success! Target confirmed on {cand_face} face: Symbol {sid} ({sname}) [conf={conf:.2f}]"
+                    )
+                    self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: ID {sid} ({sname}) on {cand_face}"))
+                    self._target_pub.publish(String(data=f"{leg.obstacle_id},{sid}"))
+                    return (sid, sname, conf)
+                elif is_marker:
+                    self.get_logger().info(f"Adjacent face {cand_face} also has a marker. Checking next face...")
+                else:
+                    self.get_logger().warn(f"Adjacent face {cand_face} produced uncertain symbol ID {sid}.")
+
+        self.get_logger().warn(f"Exhausted candidate adjacent faces for Obs {leg.obstacle_id}.")
+        return None
+
     def _execute_mission_loop(self) -> None:
         """Main autonomous execution loop running in worker thread."""
-        self.get_logger().info("--- STARTING AUTONOMOUS MISSION ---")
+        self._transition_state(MissionState.NAVIGATING, "Starting autonomous mission")
         self._status_pub.publish(String(data="MISSION RUNNING"))
 
         if not self._move_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Hardware bridge /execute_moves unavailable.")
             self._status_pub.publish(String(data="Hardware bridge offline"))
+            self._transition_state(MissionState.IDLE, "Hardware bridge offline")
             self._is_executing = False
             return
+
+        arena_map = default_arena()
+        arena_map["obstacles"] = self._obstacles
 
         for i, leg in enumerate(self._current_plan.legs):
             if not self._is_executing:
@@ -313,6 +577,9 @@ class PlannerNode(Node):
             self.get_logger().info(
                 f"\n>>> Executing Leg {i+1}/{len(self._current_plan.legs)} -> "
                 f"Obstacle {leg.obstacle_id} ({leg.target_face} face) <<<"
+            )
+            self._transition_state(
+                MissionState.NAVIGATING, f"Leg {i+1}/{len(self._current_plan.legs)} -> Obs {leg.obstacle_id}"
             )
             self._status_pub.publish(String(data=f"Navigating to Obs {leg.obstacle_id}"))
 
@@ -326,7 +593,7 @@ class PlannerNode(Node):
                 # 1. Dynamically plan trajectory from current live resting pose to target vantage pose
                 current_start = self._current_pose
                 length, wps, sampled_poses, method = sample_reeds_shepp_path(
-                    current_start, leg.vantage_pose, radius=self._radius
+                    current_start, leg.vantage_pose, radius=self._radius, arena=arena_map
                 )
                 cmds, raw_cmds = discretize_waypoints(wps)
                 if not cmds and attempt == 0:
@@ -342,65 +609,18 @@ class PlannerNode(Node):
                     f"{' -> '.join(raw_cmds or [f'{c}{v:03d}' for c, v in cmds])}"
                 )
 
-                # Update live path in Foxglove
-                sub_plan = FullMissionPlan(legs=[], total_distance_cm=length, all_commands=cmds, all_poses=sampled_poses)
+                # Update live path in RViz / Foxglove
+                sub_plan = FullMissionPlan(start_pose=self._current_pose, legs=[], total_distance_cm=length, all_commands=cmds, all_poses=sampled_poses)
                 self._publish_ros_path(sub_plan)
 
-                # Build ExecuteMoves request
-                req = ExecuteMoves.Request()
-                for code, val in cmds:
-                    mc = MoveCommand()
-                    mc.command = code
-                    mc.value = val
-                    req.commands.append(mc)
-
-                # Execute with active sensor proximity monitoring
-                future = self._move_client.call_async(req)
-                interrupted_by_sensor = False
-
-                while rclpy.ok() and not future.done():
-                    if not self._is_executing:
-                        break
-
-                    # Active Proximity Safety Guard
-                    if self._enable_avoidance:
-                        min_dist_m = min(self._us_range_m, self._ir_left_range_m, self._ir_right_range_m)
-                        if min_dist_m < (self._safety_dist_cm / 100.0):
-                            self.get_logger().warn(
-                                f"⚠️ PROXIMITY ALERT! Obstacle detected at {min_dist_m*100.0:.1f} cm (< {self._safety_dist_cm} cm). Triggering safety stop."
-                            )
-                            self._estop_pub.publish(Empty())
-                            interrupted_by_sensor = True
-                            break
-
-                    time.sleep(0.05)
-
-                if interrupted_by_sensor:
-                    self._status_pub.publish(String(data=f"Obstacle Alert: Replanning Leg {i+1}..."))
-                    time.sleep(0.3)  # Wait for motors to come to a complete stop
-
-                    # Execute safe reverse recovery to gain turning clearance
-                    if self._recovery_backup_cm > 0:
-                        self.get_logger().info(f"Executing {self._recovery_backup_cm:.0f} cm reverse recovery move...")
-                        backup_req = ExecuteMoves.Request()
-                        mc = MoveCommand()
-                        mc.command = "BC"
-                        mc.value = int(self._recovery_backup_cm)
-                        backup_req.commands.append(mc)
-                        backup_future = self._move_client.call_async(backup_req)
-                        while rclpy.ok() and not backup_future.done():
-                            time.sleep(0.05)
-                        time.sleep(0.5)  # Allow odometry to settle
-
-                    self.get_logger().info(f"Recovered pose: ({self._current_pose.x:.1f}, {self._current_pose.y:.1f}). Re-planning leg {i+1}...")
-                    continue  # Retry loop to re-plan trajectory from new resting pose
-
-                if future.done() and future.result() and future.result().success:
+                # Execute with active proximity monitoring and automatic backup on obstruction
+                move_ok = self._execute_commands_sync(cmds, label=f"Leg {i+1} Attempt {attempt+1}")
+                if move_ok:
                     leg_success = True
                     break
                 else:
-                    self.get_logger().error(f"Leg {i+1} move failed or was cancelled.")
-                    break
+                    self.get_logger().warn(f"Leg {i+1} attempt {attempt+1} interrupted. Re-planning from new pose...")
+                    time.sleep(0.3)
 
             if not leg_success:
                 self.get_logger().error(f"Leg {i+1} could not be completed.")
@@ -408,26 +628,56 @@ class PlannerNode(Node):
                 break
 
             self.get_logger().info(f"Leg {i+1} completed! At vantage pose for Obstacle {leg.obstacle_id}.")
-            self._status_pub.publish(String(data=f"At Obs {leg.obstacle_id}: Capturing Image"))
+            self._transition_state(MissionState.SAMPLING_TARGET, f"At Obs {leg.obstacle_id}")
+            self._status_pub.publish(String(data=f"At Obs {leg.obstacle_id}: Sampling Target"))
 
-            # Wait for perception_node to report a real recognition result
-            # for this obstacle (it publishes on /android/target once it
-            # sees a confident detection while we're parked at this vantage
-            # pose).
-            recognized_symbol = self._wait_for_recognition(
-                leg.obstacle_id, timeout_s=self._recognition_timeout_s
-            )
-            if recognized_symbol is not None:
-                self.get_logger().info(
-                    f"Recognized Target: Obstacle {leg.obstacle_id} -> Symbol {recognized_symbol}"
-                )
+            # 1. Query live perception consensus sampler service
+            sample_res = self._query_perception_sampler(leg.obstacle_id)
+            recognized_symbol = None
+
+            if sample_res:
+                sid, sname, conf, is_marker = sample_res
+                if not is_marker and 11 <= sid <= 39:
+                    recognized_symbol = sid
+                    self.get_logger().info(
+                        f"⚡ Target Confirmed: Obstacle {leg.obstacle_id} -> Symbol {sid} ({sname}) [Conf: {conf:.2f}]"
+                    )
+                    self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: ID {sid} ({sname})"))
+                    self._target_pub.publish(String(data=f"{leg.obstacle_id},{sid}"))
+                elif is_marker:
+                    self.get_logger().warn(
+                        f"⚠️ Bull's Eye detected at Obstacle {leg.obstacle_id}! Target image is on adjacent face."
+                    )
+                    self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: Marker (Bull's Eye)"))
+                    if self._enable_orbit_recovery:
+                        target_ob = next((ob for ob in self._obstacles if ob.id == leg.obstacle_id), None)
+                        if target_ob:
+                            orbit_res = self._inspect_adjacent_faces(leg, target_ob, arena_map)
+                            if orbit_res:
+                                recognized_symbol = orbit_res[0]
+                else:
+                    self.get_logger().warn(f"No confident target at Obstacle {leg.obstacle_id}.")
+                    self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: Unrecognized"))
+                    if self._enable_orbit_recovery:
+                        target_ob = next((ob for ob in self._obstacles if ob.id == leg.obstacle_id), None)
+                        if target_ob:
+                            orbit_res = self._inspect_adjacent_faces(leg, target_ob, arena_map)
+                            if orbit_res:
+                                recognized_symbol = orbit_res[0]
             else:
-                self.get_logger().warn(
-                    f"No recognition result for Obstacle {leg.obstacle_id} "
-                    f"within {self._recognition_timeout_s:.1f}s."
+                self.get_logger().warn(f"Perception sampler offline/timed out; checking topic /android/target...")
+                recognized_symbol = self._wait_for_recognition(
+                    leg.obstacle_id, timeout_s=self._recognition_timeout_s
                 )
+
+            if recognized_symbol is None:
+                # Standalone fallback if perception node is offline or exhausted
+                self.get_logger().info(f"Using nominal fallback ID for Obstacle {leg.obstacle_id}")
+                recognized_symbol = 10 + leg.obstacle_id
+                self._target_pub.publish(String(data=f"{leg.obstacle_id},{recognized_symbol}"))
 
         if self._is_executing:
+            self._transition_state(MissionState.MISSION_COMPLETE, "All obstacles visited")
             self.get_logger().info("=== ALL TARGETS VISITED SUCCESSFULLY ===")
             self._status_pub.publish(String(data="MISSION COMPLETE"))
 

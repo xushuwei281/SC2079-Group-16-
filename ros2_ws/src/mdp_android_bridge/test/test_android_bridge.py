@@ -25,7 +25,8 @@ class TestAndroidBridge(unittest.TestCase):
             rclpy.shutdown()
 
     def setUp(self):
-        self.node = AndroidBridgeNode()
+        with patch.object(AndroidBridgeNode, "_connection_worker", return_value=None):
+            self.node = AndroidBridgeNode()
         # Mock serial to capture outbound messages
         self.mock_serial = MagicMock()
         self.mock_serial.is_open = True
@@ -45,18 +46,21 @@ class TestAndroidBridge(unittest.TestCase):
         call_args = self.node._move_client.call_async.call_args[0][0]
         self.assertEqual(call_args.commands[0].command, "FC")
         self.assertEqual(call_args.commands[0].value, 20)
+        self.node._is_moving = False
 
         # BW:35 -> BC 35
         self.node._dispatch("BW:35")
         call_args = self.node._move_client.call_async.call_args[0][0]
         self.assertEqual(call_args.commands[0].command, "BC")
         self.assertEqual(call_args.commands[0].value, 35)
+        self.node._is_moving = False
 
         # TL:90 -> FL 90
         self.node._dispatch("TL:90")
         call_args = self.node._move_client.call_async.call_args[0][0]
         self.assertEqual(call_args.commands[0].command, "FL")
         self.assertEqual(call_args.commands[0].value, 90)
+        self.node._is_moving = False
 
         # TR:45 -> FR 45
         self.node._dispatch("TR:45")
@@ -97,18 +101,42 @@ class TestAndroidBridge(unittest.TestCase):
         self.node._cmd_pub.publish.assert_called_once()
         self.assertEqual(self.node._cmd_pub.publish.call_args[0][0].data, "START")
 
+        # Task 2 triggers: STM:sp (Android SP button), SP, START_TASK2
+        self.node._cmd_pub.publish.reset_mock()
+        self.node._dispatch("STM:sp")
+        self.node._cmd_pub.publish.assert_called_once()
+        self.assertEqual(self.node._cmd_pub.publish.call_args[0][0].data, "STM:sp")
+
+        self.node._cmd_pub.publish.reset_mock()
+        self.node._dispatch("SP")
+        self.node._cmd_pub.publish.assert_called_once()
+        self.assertEqual(self.node._cmd_pub.publish.call_args[0][0].data, "SP")
+
+        self.node._cmd_pub.publish.reset_mock()
+        self.node._dispatch("START_TASK2")
+        self.node._cmd_pub.publish.assert_called_once()
+        self.assertEqual(self.node._cmd_pub.publish.call_args[0][0].data, "START_TASK2")
+
     def test_pose_to_tablet_format(self):
-        """Test that /robot_pose converts to ROBOT,<x_cm>,<y_cm>,<dir_deg>."""
+        """Test that /robot_pose converts to Checklist C.10 format: ROBOT,<x>,<y>,<direction>."""
         pose = PoseStamped()
-        pose.pose.position.x = 0.50  # 50 cm
-        pose.pose.position.y = 1.20  # 120 cm
-        # 90 degrees yaw (Z = sin(pi/4), W = cos(pi/4))
+        pose.pose.position.x = 0.50  # 50 cm -> grid 5
+        pose.pose.position.y = 1.20  # 120 cm -> grid 12
+        # 90 degrees yaw (Z = sin(pi/4), W = cos(pi/4)) -> North
         pose.pose.orientation.z = math.sin(math.pi / 4.0)
         pose.pose.orientation.w = math.cos(math.pi / 4.0)
 
         self.node._on_pose(pose)
 
-        # Check last written line
+        # Default Checklist C.10 / Android format
+        written = self.mock_serial.write.call_args[0][0].decode("utf-8")
+        self.assertEqual(written, "ROBOT,<5>,<12>,<N>\n")
+
+        # Test configurable legacy format (cm, degrees, no angle brackets)
+        self.node._use_brackets = False
+        self.node._coords_in_cm = True
+        self.node._direction_as_cardinal = False
+        self.node._on_pose(pose)
         written = self.mock_serial.write.call_args[0][0].decode("utf-8")
         self.assertEqual(written, "ROBOT,50,120,90\n")
 
@@ -117,6 +145,84 @@ class TestAndroidBridge(unittest.TestCase):
         self.node._on_target(String(data="1,15"))
         written = self.mock_serial.write.call_args[0][0].decode("utf-8")
         self.assertEqual(written, "TARGET,1,15\n")
+
+    def test_pending_move_queueing(self):
+        """Test that rapid commands buffer into _pending_move and overwrite with latest."""
+        self.node._move_client.wait_for_service = MagicMock(return_value=True)
+        mock_future = MagicMock()
+        self.node._move_client.call_async = MagicMock(return_value=mock_future)
+
+        # 1st move starts
+        self.node._dispatch("FC:8")
+        self.assertTrue(self.node._is_moving)
+        self.assertIsNone(self.node._pending_move)
+        self.assertEqual(self.node._move_client.call_async.call_count, 1)
+
+        # 2nd move while 1st is moving -> buffered
+        self.node._dispatch("FC:8")
+        self.assertEqual(self.node._pending_move, ("FC", 8))
+        self.assertEqual(self.node._move_client.call_async.call_count, 1)
+
+        # 3rd move with new direction -> overwrites pending slot
+        self.node._dispatch("FR:45")
+        self.assertEqual(self.node._pending_move, ("FR", 45))
+        self.assertEqual(self.node._move_client.call_async.call_count, 1)
+
+    def test_pending_move_dispatch_on_done(self):
+        """Test that finishing a move automatically executes the pending move without idling."""
+        self.node._move_client.wait_for_service = MagicMock(return_value=True)
+        self.node._move_client.call_async = MagicMock()
+
+        # Start first move
+        self.node._dispatch("FC:8")
+        self.node._dispatch("FR:45")  # buffered
+        self.assertEqual(self.node._move_client.call_async.call_count, 1)
+
+        # Simulate first move success
+        fake_future = MagicMock()
+        resp = MagicMock()
+        resp.success = True
+        fake_future.result.return_value = resp
+
+        self.node._on_move_complete(fake_future)
+
+        # Second move should now be dispatched
+        self.assertEqual(self.node._move_client.call_async.call_count, 2)
+        call_args = self.node._move_client.call_async.call_args[0][0]
+        self.assertEqual(call_args.commands[0].command, "FR")
+        self.assertEqual(call_args.commands[0].value, 45)
+        self.assertIsNone(self.node._pending_move)
+        self.assertTrue(self.node._is_moving)
+
+        # Simulate second move success
+        self.node._on_move_complete(fake_future)
+        self.assertFalse(self.node._is_moving)
+        written = self.mock_serial.write.call_args[0][0].decode("utf-8")
+        self.assertEqual(written, "DONE\n")
+
+    def test_busy_local_suppression(self):
+        """Test that BUSY_LOCAL failure does not send 'Move failed' alert to tablet."""
+        fake_future = MagicMock()
+        resp = MagicMock()
+        resp.success = False
+        resp.status = "BUSY_LOCAL"
+        fake_future.result.return_value = resp
+
+        self.node._is_moving = True
+        self.mock_serial.reset_mock()
+        self.node._on_move_complete(fake_future)
+
+        self.assertFalse(self.node._is_moving)
+        self.mock_serial.write.assert_not_called()
+
+    def test_estop_clears_pending_move(self):
+        """Test that E-STOP clears any pending move."""
+        self.node._is_moving = True
+        self.node._pending_move = ("FC", 20)
+
+        self.node._dispatch("STP")
+        self.assertFalse(self.node._is_moving)
+        self.assertIsNone(self.node._pending_move)
 
 
 if __name__ == "__main__":

@@ -1086,15 +1086,15 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
    if (pkt[0] == 'Q') {
        EStop();
    }
+   else if (runRequested == 1) {
+       HAL_UART_Transmit(&huart3, (uint8_t *)"BUS\r\n", 5, 10);
+   }
    else if (pkt[0] == '#') {
        runRequested = 1;
        HAL_UART_Transmit(&huart3, (uint8_t *)"RUN\r\n", 5, 10);
    }
    else if (instrLen >= 40) {
        HAL_UART_Transmit(&huart3, (uint8_t *)"FUL\r\n", 5, 10);
-   }
-   else if (runRequested == 1) {
-       HAL_UART_Transmit(&huart3, (uint8_t *)"BUS\r\n", 5, 10);
    }
    else {
        memcpy((void *)instrList[instrLen++], pkt, FRAME_LEN);
@@ -1134,23 +1134,27 @@ void FrontCenter(int dist)
     dist_target = dist;
 
     right_dir = 1;  left_dir = 1;      /* MOTORLOW - break static friction */
-    osDelay(200);
+    osDelay(50);
     right_dir = 2;  left_dir = 2;      /* MOTORMID - cruise */
 
-    while (cur_dist < dist_target - 5) {
+    int creep_dist = (dist_target > 15) ? 5 : 2;
+    uint32_t t0 = osKernelGetTickCount();
+    uint32_t timeout_ticks = (uint32_t)(dist * 80 + 2000);
+
+    while (cur_dist < dist_target - creep_dist && (osKernelGetTickCount() - t0) < timeout_ticks) {
         osDelay(20);
         cur_dist = (int)((left_dist + right_dist) / 2.0f);
     }
 
-    right_dir = 1;  left_dir = 1;      /* creep the last 5 cm */
-    while (((left_dist + right_dist) / 2.0f) < dist_target - MOVEOVERSHOOT)
+    right_dir = 1;  left_dir = 1;      /* creep */
+    while (((left_dist + right_dist) / 2.0f) < dist_target - MOVEOVERSHOOT && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(10);
 
     motor_pid = 0;  heading_pid = 0;
     right_dir = 0;  left_dir = 0;
     target_pwmVal_servo = SERVOCENTER;
     batchDist += 0.5f * (left_dist + right_dist);
-    osDelay(100);
+    osDelay(20);
 }
 
 void BackCenter(int dist)
@@ -1169,23 +1173,27 @@ void BackCenter(int dist)
     dist_target = -dist;
 
     right_dir = -1;  left_dir = -1;
-    osDelay(200);
+    osDelay(50);
     right_dir = -2;  left_dir = -2;
 
-    while (cur_dist > dist_target + 5) {
+    int creep_dist = (dist > 15) ? 5 : 2;
+    uint32_t t0 = osKernelGetTickCount();
+    uint32_t timeout_ticks = (uint32_t)(dist * 80 + 2000);
+
+    while (cur_dist > dist_target + creep_dist && (osKernelGetTickCount() - t0) < timeout_ticks) {
         osDelay(20);
         cur_dist = (int)((left_dist + right_dist) / 2.0f);
     }
 
     right_dir = -1;  left_dir = -1;
-    while (((left_dist + right_dist) / 2.0f) > dist_target + MOVEOVERSHOOT)
+    while (((left_dist + right_dist) / 2.0f) > dist_target + MOVEOVERSHOOT && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(10);
 
     motor_pid = 0;  heading_pid = 0;
     right_dir = 0;  left_dir = 0;
     target_pwmVal_servo = SERVOCENTER;
     batchDist += 0.5f * (left_dist + right_dist);
-    osDelay(100);
+    osDelay(20);
 }
 
 void FrontRight(int angle)
@@ -1194,21 +1202,26 @@ void FrontRight(int angle)
     motor_pid = 0;  heading_pid = 0;        /* PIDs OFF for the whole turn */
 
     target_pwmVal_servo = SERVORIGHT;
-    osDelay(200);                            /* let the servo physically arrive */
+    osDelay(80);                             /* let the servo physically arrive (~60-80ms throw) */
 
     float startAngle = angleNow;
     right_dir = 2;  left_dir = 2;            /* cruise speed */
 
-    while (fabsf(angleNow - startAngle) < (angle - 4))  osDelay(15);
+    int creep_angle = (angle > 15) ? 4 : 1;
+    uint32_t t0 = osKernelGetTickCount();
+    uint32_t timeout_ticks = (uint32_t)(angle * 60 + 2000);
 
-    right_dir = 1;  left_dir = 1;            /* creep the last 4 deg */
-    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT))  osDelay(10);
+    while (fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
+        osDelay(15);
+
+    right_dir = 1;  left_dir = 1;            /* creep */
+    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
+        osDelay(10);
 
     right_dir = 0;  left_dir = 0;
-    osDelay(100);
     target_pwmVal_servo = SERVOCENTER;
     headingTarget = angleNow;
-    osDelay(100);
+    osDelay(40);
 }
 
 void FrontLeft(int angle)
@@ -1217,21 +1230,26 @@ void FrontLeft(int angle)
     motor_pid = 0;  heading_pid = 0;
 
     target_pwmVal_servo = SERVOLEFT;
-    osDelay(200);
+    osDelay(80);                             /* let the servo physically arrive (~60-80ms throw) */
 
     float startAngle = angleNow;
     right_dir = 2;  left_dir = 2;
 
-    while (fabsf(angleNow - startAngle) < (angle - 4))  osDelay(15);
+    int creep_angle = (angle > 15) ? 4 : 1;
+    uint32_t t0 = osKernelGetTickCount();
+    uint32_t timeout_ticks = (uint32_t)(angle * 60 + 2000);
+
+    while (fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
+        osDelay(15);
 
     right_dir = 1;  left_dir = 1;
-    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT))  osDelay(10);
+    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
+        osDelay(10);
 
     right_dir = 0;  left_dir = 0;
-    osDelay(100);
     target_pwmVal_servo = SERVOCENTER;
     headingTarget = angleNow;
-    osDelay(100);
+    osDelay(40);
 }
 
 void BackRight(int angle)
@@ -1240,21 +1258,26 @@ void BackRight(int angle)
     motor_pid = 0;  heading_pid = 0;
 
     target_pwmVal_servo = SERVORIGHT;
-    osDelay(200);
+    osDelay(80);
 
     float startAngle = angleNow;
     right_dir = -2;  left_dir = -2;
 
-    while (fabsf(angleNow - startAngle) < (angle - 4))  osDelay(15);
+    int creep_angle = (angle > 15) ? 4 : 1;
+    uint32_t t0 = osKernelGetTickCount();
+    uint32_t timeout_ticks = (uint32_t)(angle * 60 + 2000);
+
+    while (fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
+        osDelay(15);
 
     right_dir = -1;  left_dir = -1;
-    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT))  osDelay(10);
+    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
+        osDelay(10);
 
     right_dir = 0;  left_dir = 0;
-    osDelay(100);
     target_pwmVal_servo = SERVOCENTER;
     headingTarget = angleNow;
-    osDelay(100);
+    osDelay(40);
 }
 
 void BackLeft(int angle)
@@ -1263,21 +1286,26 @@ void BackLeft(int angle)
     motor_pid = 0;  heading_pid = 0;
 
     target_pwmVal_servo = SERVOLEFT;
-    osDelay(200);
+    osDelay(80);
 
     float startAngle = angleNow;
     right_dir = -2;  left_dir = -2;
 
-    while (fabsf(angleNow - startAngle) < (angle - 4))  osDelay(15);
+    int creep_angle = (angle > 15) ? 4 : 1;
+    uint32_t t0 = osKernelGetTickCount();
+    uint32_t timeout_ticks = (uint32_t)(angle * 60 + 2000);
+
+    while (fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
+        osDelay(15);
 
     right_dir = -1;  left_dir = -1;
-    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT))  osDelay(10);
+    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
+        osDelay(10);
 
     right_dir = 0;  left_dir = 0;
-    osDelay(100);
     target_pwmVal_servo = SERVOCENTER;
     headingTarget = angleNow;
-    osDelay(100);
+    osDelay(40);
 }
 
 void CalGyroDrift(int timeCal)
@@ -1668,7 +1696,7 @@ void comm_task(void *argument)
 	              osDelay(10);
 	          }
 
-	          osDelay(200);                /* mechanical settling */
+	          osDelay(20);                 /* mechanical settling */
 	          sendFin();
 	          instrLen = 0;
 	          runRequested = 0;
