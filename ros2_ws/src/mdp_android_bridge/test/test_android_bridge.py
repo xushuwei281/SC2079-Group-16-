@@ -140,6 +140,37 @@ class TestAndroidBridge(unittest.TestCase):
         written = self.mock_serial.write.call_args[0][0].decode("utf-8")
         self.assertEqual(written, "ROBOT,50,120,90\n")
 
+    def test_hires_pose_sent_alongside_robot_line(self):
+        """Every /robot_pose update should also emit a full-precision POSE
+        line (Checklist C.10's ROBOT,<x>,<y>,<dir> is deliberately coarse --
+        4 headings, 10cm cells -- which is too coarse to show smooth
+        rotation, e.g. while circling)."""
+        pose = PoseStamped()
+        pose.pose.position.x = 0.523  # 52.3 cm
+        pose.pose.position.y = 1.187  # 118.7 cm
+        pose.pose.orientation.z = math.sin(math.pi / 4.0)
+        pose.pose.orientation.w = math.cos(math.pi / 4.0)
+
+        self.node._on_pose(pose)
+
+        calls = [c[0][0].decode("utf-8") for c in self.mock_serial.write.call_args_list]
+        self.assertEqual(calls, ["POSE,52.3,118.7,90\n", "ROBOT,<5>,<12>,<N>\n"])
+
+    def test_hires_pose_rate_limited(self):
+        """Back-to-back /robot_pose updates within one hires interval should
+        only emit one POSE line, so a busy TLM feed can't flood the link."""
+        pose = PoseStamped()
+        pose.pose.position.x = 0.50
+        pose.pose.position.y = 1.20
+
+        self.node._on_pose(pose)
+        self.mock_serial.write.reset_mock()
+        self.node._on_pose(pose)  # immediately again -- still within the interval
+
+        calls = [c[0][0].decode("utf-8") for c in self.mock_serial.write.call_args_list]
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].startswith("ROBOT,"))
+
     def test_target_to_tablet_format(self):
         """Test that /android/target string converts to TARGET,<payload>."""
         self.node._on_target(String(data="1,15"))

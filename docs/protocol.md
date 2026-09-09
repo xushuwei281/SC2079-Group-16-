@@ -23,6 +23,8 @@ byte to the screen).
 | Android → RPi | `STP` | `STP` | stop immediately |
 | RPi → Android | `STATUS,<text>` | `STATUS,moving` | free-text status update |
 | RPi → Android | `DONE` | `DONE` | last movement command completed |
+| RPi → Android | `ROBOT,<x>,<y>,<dir>` | `ROBOT,<5>,<12>,<N>` | **Checklist C.10** live pose: `x`/`y` are grid cells `[0..19]`, `dir` ∈ `{N,S,E,W}`. Deliberately coarse (4 headings, 10cm cells) — this is the exact wire format the checklist grades, so don't change its shape without checking `docs/task1-fsm-and-orbit-recovery.md` §4.1. |
+| RPi → Android | `POSE,<x_cm>,<y_cm>,<yaw_deg>` | `POSE,52.3,118.7,133` | **Supplemental, non-checklist** full-precision pose, sent alongside `ROBOT` at up to `hires_pose_rate_hz` (`android_bridge_node`, default 10Hz) so the tablet's arena view can track smoothly through turns instead of only updating on 90°/10cm crossings. Purely additive — nothing consumes this for grading. |
 
 **Implementation note:** `android_bridge_node`
 (`ros2_ws/src/mdp_android_bridge/`) opens `/dev/rfcomm0` via `pyserial` —

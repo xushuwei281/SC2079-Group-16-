@@ -11,7 +11,13 @@ Features:
     * Outbound (ROS -> Tablet):
         - Status updates: STATUS,<text>
         - Move completion: DONE
-        - Live Robot Pose: ROBOT,<x_cm>,<y_cm>,<heading_deg> from /robot_pose
+        - Live Robot Pose (Checklist C.10): ROBOT,<x>,<y>,<dir> from
+          /robot_pose -- x/y are grid cells [0..19], dir is N/E/S/W.
+        - Live Robot Pose (supplemental, full precision): POSE,<x_cm>,
+          <y_cm>,<yaw_deg>, sent alongside ROBOT at up to
+          hires_pose_rate_hz so the tablet's arena view can track
+          smoothly through turns instead of only seeing 4 discrete
+          headings and 10cm-quantized positions.
         - Image Detections: TARGET,<obstacle_id>,<symbol_id> from /android/target
 """
 
@@ -69,6 +75,10 @@ class AndroidBridgeNode(Node):
         self.declare_parameter("use_angle_brackets_for_pose", True)  # Format: ROBOT,<x>,<y>,<dir>
         self.declare_parameter("robot_coords_in_cm", False)  # False: 0-19 grid cells, True: cm
         self.declare_parameter("direction_as_cardinal", True)  # True: N/S/E/W, False: degrees
+        # Supplemental, non-checklist pose stream: full-precision cm/degrees,
+        # sent alongside (not instead of) the Checklist C.10 ROBOT line so
+        # the arena view can track smoothly through turns. 0 disables it.
+        self.declare_parameter("hires_pose_rate_hz", 10.0)
 
         self._device = self.get_parameter("rfcomm_device").value
         self._baud = self.get_parameter("baud_rate").value
@@ -77,6 +87,8 @@ class AndroidBridgeNode(Node):
         self._use_brackets = self.get_parameter("use_angle_brackets_for_pose").value
         self._coords_in_cm = self.get_parameter("robot_coords_in_cm").value
         self._direction_as_cardinal = self.get_parameter("direction_as_cardinal").value
+        hires_rate = self.get_parameter("hires_pose_rate_hz").value
+        self._hires_pose_interval_sec = (1.0 / hires_rate) if hires_rate > 0 else None
 
         self._serial: Optional[serial.Serial] = None
         self._serial_lock = threading.Lock()
@@ -88,6 +100,7 @@ class AndroidBridgeNode(Node):
         self._pending_move: Optional[Tuple[str, int]] = None
         self._last_sent_pose_str: str = ""
         self._last_pose_time: float = 0.0
+        self._last_hires_pose_time: float = 0.0
 
         callback_group = ReentrantCallbackGroup()
 
@@ -348,13 +361,24 @@ class AndroidBridgeNode(Node):
             px = max(0, min(19, int(round(x_cm / 10.0))))
             py = max(0, min(19, int(round(y_cm / 10.0))))
 
+        now = time.monotonic()
+
+        # Supplemental full-precision line, independent of the ROBOT
+        # dedup/throttle below -- it's meant to change on every call
+        # (that's the whole point, for smooth tracking through turns), just
+        # rate-limited so a busy TLM feed doesn't flood the RFCOMM link.
+        if self._hires_pose_interval_sec is not None and (
+            now - self._last_hires_pose_time >= self._hires_pose_interval_sec
+        ):
+            self._last_hires_pose_time = now
+            self.send_to_tablet(f"POSE,{x_cm:.1f},{y_cm:.1f},{yaw_deg}")
+
         # Formatting with or without angle brackets
         if self._use_brackets:
             pose_str = f"ROBOT,<{px}>,<{py}>,<{direction_str}>"
         else:
             pose_str = f"ROBOT,{px},{py},{direction_str}"
 
-        now = time.monotonic()
         if pose_str == self._last_sent_pose_str and (now - self._last_pose_time) < 0.5:
             return
         self._last_sent_pose_str = pose_str

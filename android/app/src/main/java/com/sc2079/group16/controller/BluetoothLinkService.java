@@ -19,8 +19,9 @@ import java.util.concurrent.Executors;
  * Owns the classic Bluetooth SPP link to the Raspberry Pi's
  * android_bridge_node (ros2_ws/src/mdp_android_bridge/).
  * Speaks the ASCII line protocol from docs/protocol.md: FW:&lt;mm&gt;,
- * BW:&lt;mm&gt;, TL:&lt;deg&gt;, TR:&lt;deg&gt;, STP out; STATUS,&lt;text&gt;
- * and DONE in.
+ * BW:&lt;mm&gt;, TL:&lt;deg&gt;, TR:&lt;deg&gt;, STP out; STATUS,&lt;text&gt;,
+ * DONE, ROBOT,&lt;x&gt;,&lt;y&gt;,&lt;dir&gt; (Checklist C.10, coarse) and
+ * POSE,&lt;x_cm&gt;,&lt;y_cm&gt;,&lt;yaw_deg&gt; (supplemental, full precision) in.
  *
  * Connects to an already-paired (bonded) device only -- pairing itself is a
  * one-time manual step done outside the app (see
@@ -209,6 +210,8 @@ class BluetoothLinkService {
             mainHandler.post(() -> listener.onStatusLine(payload));
         } else if (text.startsWith("ROBOT,")) {
             parseRobotPose(text.substring("ROBOT,".length()));
+        } else if (text.startsWith("POSE,")) {
+            parseHiResPose(text.substring("POSE,".length()));
         } else if (text.startsWith("TARGET,")) {
             parseTarget(text.substring("TARGET,".length()));
         }
@@ -267,6 +270,27 @@ class BluetoothLinkService {
                 return 270f;
             default:
                 return Float.parseFloat(value);
+        }
+    }
+
+    // POSE,<x_cm>,<y_cm>,<yaw_deg> -- supplemental, non-checklist pose line
+    // android_bridge_node sends alongside (not instead of) ROBOT, at full
+    // precision and up to hires_pose_rate_hz. ROBOT's 4-heading/10cm-cell
+    // resolution makes rotation (e.g. circling) look like it isn't being
+    // tracked at all; this feeds the same onRobotPose() callback with
+    // values that actually change every update.
+    private void parseHiResPose(String payload) {
+        String[] parts = payload.split(",");
+        if (parts.length != 3) {
+            return;
+        }
+        try {
+            float xCm = Float.parseFloat(parts[0].trim());
+            float yCm = Float.parseFloat(parts[1].trim());
+            float headingDeg = Float.parseFloat(parts[2].trim());
+            mainHandler.post(() -> listener.onRobotPose(xCm, yCm, headingDeg));
+        } catch (NumberFormatException ignored) {
+            // Malformed line -- already visible via onDebug, nothing more to do.
         }
     }
 
