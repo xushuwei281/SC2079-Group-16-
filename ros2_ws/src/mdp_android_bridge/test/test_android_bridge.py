@@ -165,6 +165,7 @@ class TestAndroidBridge(unittest.TestCase):
 
         self.node._on_pose(pose)
         self.mock_serial.write.reset_mock()
+        pose.pose.position.x = 0.80  # change cell so ROBOT dedup doesn't suppress it
         self.node._on_pose(pose)  # immediately again -- still within the interval
 
         calls = [c[0][0].decode("utf-8") for c in self.mock_serial.write.call_args_list]
