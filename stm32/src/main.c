@@ -1116,7 +1116,15 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
    HAL_UART_Receive_IT(&huart3, (uint8_t *)rxBuffer[rxIdx], FRAME_LEN);
 
    rxCount++;
-   if (estopFlag) return;                       /* latched until reboot */
+   if (pkt[0] == 'R') {
+       estopFlag = 0;
+       runRequested = 0;
+       instrLen = 0;
+       MotorsOff();
+       snprintf(oled_display[0], sizeof(oled_display[0]), "RESET OK       ");
+       return;
+   }
+   if (estopFlag) return;                       /* latched until reboot or 'R' reset */
 
    if (pkt[0] == 'Q') {
        EStop();

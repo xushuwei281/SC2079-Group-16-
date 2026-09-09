@@ -247,6 +247,15 @@ class SerialBridgeNode(Node):
     def _on_android_cmd(self, msg: String) -> None:
         raw = msg.data.strip().upper()
         if raw == "RESET" or raw.startswith("ALG|"):
+            self._estop_event.clear()
+            self._busy.clear()
+            with self._write_lock:
+                if self._serial is not None and self._serial.is_open:
+                    try:
+                        self._serial.write(b"R\x00\x00\x00\x00")
+                        self._serial.flush()
+                    except (serial.SerialException, OSError) as exc:
+                        self.get_logger().warn(f"Failed to send reset packet to STM32: {exc}")
             self._x = self._initial_x
             self._y = self._initial_y
             self._yaw = self._initial_yaw

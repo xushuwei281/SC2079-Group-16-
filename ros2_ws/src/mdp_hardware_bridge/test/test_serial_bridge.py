@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import rclpy
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, String
 
 from mdp_hardware_bridge.serial_bridge_node import SerialBridgeNode, _VALID_COMMANDS
 from mdp_interfaces.msg import MoveCommand
@@ -126,6 +126,24 @@ class TestSerialBridgeNode(unittest.TestCase):
 
         mock_serial.write.assert_called_with(b"Q\x00\x00\x00\x00")
         mock_serial.flush.assert_called()
+
+    @patch("serial.Serial")
+    def test_on_android_cmd_reset_sends_r_packet(self, mock_serial_cls):
+        mock_serial = MagicMock()
+        mock_serial.is_open = True
+        self.node._serial = mock_serial
+        self.node._estop_event.set()
+        self.node._busy.set()
+
+        self.node._on_android_cmd(String(data="RESET"))
+
+        mock_serial.write.assert_called_with(b"R\x00\x00\x00\x00")
+        mock_serial.flush.assert_called()
+        self.assertFalse(self.node._estop_event.is_set())
+        self.assertFalse(self.node._busy.is_set())
+        self.assertAlmostEqual(self.node._x, 0.200, places=3)
+        self.assertAlmostEqual(self.node._y, 0.200, places=3)
+        self.assertAlmostEqual(self.node._yaw, math.radians(90.0), places=3)
 
     @patch("serial.Serial")
     def test_sensor_fused_fin_updates_pose(self, mock_serial_cls):
