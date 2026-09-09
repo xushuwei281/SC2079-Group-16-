@@ -34,7 +34,7 @@ from geometry_msgs.msg import PoseStamped
 from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 import serial
 from std_msgs.msg import Empty, String
@@ -403,14 +403,20 @@ class AndroidBridgeNode(Node):
             self.get_logger().warn(f"RFCOMM write error: {exc}")
 
     def destroy_node(self) -> None:
-        self._running.clear()
-        with self._move_lock:
-            self._pending_move = None
-            self._is_moving = False
-        self._close_serial()
-        if self._comm_thread.is_alive():
-            self._comm_thread.join(timeout=1.0)
-        return super().destroy_node()
+        try:
+            self._running.clear()
+            with self._move_lock:
+                self._pending_move = None
+                self._is_moving = False
+            self._close_serial()
+            if hasattr(self, "_comm_thread") and self._comm_thread.is_alive():
+                self._comm_thread.join(timeout=0.5)
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            return super().destroy_node()
+        except (Exception, KeyboardInterrupt):
+            pass
 
 
 def main(args: Optional[list[str]] = None) -> None:
@@ -420,9 +426,22 @@ def main(args: Optional[list[str]] = None) -> None:
     executor.add_node(node)
     try:
         executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            executor.shutdown()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            node.destroy_node()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except (Exception, KeyboardInterrupt):
+            pass
 
 
 if __name__ == "__main__":

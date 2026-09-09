@@ -62,7 +62,7 @@ from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves, SampleTarget
 from nav_msgs.msg import Path
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
@@ -701,9 +701,22 @@ def main(args: Optional[list[str]] = None) -> None:
     executor.add_node(node)
     try:
         executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            executor.shutdown()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            node.destroy_node()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except (Exception, KeyboardInterrupt):
+            pass
 
 
 if __name__ == "__main__":

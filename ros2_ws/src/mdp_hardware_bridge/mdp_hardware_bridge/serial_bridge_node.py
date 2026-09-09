@@ -31,7 +31,7 @@ from typing import Optional
 from geometry_msgs.msg import PoseStamped, TransformStamped
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Range
 import serial
@@ -582,13 +582,19 @@ class SerialBridgeNode(Node):
         return ""
 
     def destroy_node(self):
-        if self._timer is not None:
-            self._timer.cancel()
-        if self._telemetry_timer is not None:
-            self._telemetry_timer.cancel()
-        with self._write_lock:
-            self._close_serial_locked()
-        return super().destroy_node()
+        try:
+            if self._timer is not None:
+                self._timer.cancel()
+            if self._telemetry_timer is not None:
+                self._telemetry_timer.cancel()
+            with self._write_lock:
+                self._close_serial_locked()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            return super().destroy_node()
+        except (Exception, KeyboardInterrupt):
+            pass
 
 
 def main(args=None):
@@ -598,9 +604,22 @@ def main(args=None):
     executor.add_node(node)
     try:
         executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            executor.shutdown()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            node.destroy_node()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except (Exception, KeyboardInterrupt):
+            pass
 
 
 if __name__ == "__main__":

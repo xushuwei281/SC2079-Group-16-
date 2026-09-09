@@ -20,6 +20,7 @@ from typing import Optional
 import cv2
 import numpy as np
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 
@@ -135,10 +136,16 @@ class PiCameraNode(Node):
                 os.close(self._shm_fd)
             if hasattr(self, "_daemon_proc"):
                 self._daemon_proc.terminate()
-                self._daemon_proc.wait(timeout=2.0)
-        except Exception:
+                try:
+                    self._daemon_proc.wait(timeout=1.0)
+                except Exception:
+                    self._daemon_proc.kill()
+        except (Exception, KeyboardInterrupt):
             pass
-        super().destroy_node()
+        try:
+            super().destroy_node()
+        except (Exception, KeyboardInterrupt):
+            pass
 
 
 def main(args: Optional[list[str]] = None) -> None:
@@ -146,11 +153,18 @@ def main(args: Optional[list[str]] = None) -> None:
     node = PiCameraNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except (Exception, KeyboardInterrupt):
+            pass
 
 
 if __name__ == "__main__":
