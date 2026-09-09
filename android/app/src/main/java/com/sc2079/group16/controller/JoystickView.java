@@ -2,7 +2,6 @@ package com.sc2079.group16.controller;
 
 import android.content.Context;
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.graphics.Paint;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
@@ -30,8 +29,11 @@ class JoystickView extends View {
 
     public JoystickView(Context context, AttributeSet attrs) {
         super(context, attrs);
-        basePaint.setColor(Color.LTGRAY);
-        knobPaint.setColor(Color.DKGRAY);
+        // Colors ported from facebook/astryx's "neutral" theme -- see
+        // res/values/colors.xml. Resolved once here rather than via
+        // android:color XML attrs since this View draws itself on a Canvas.
+        basePaint.setColor(context.getColor(R.color.border_emphasized));
+        knobPaint.setColor(context.getColor(R.color.accent));
     }
 
     @Override

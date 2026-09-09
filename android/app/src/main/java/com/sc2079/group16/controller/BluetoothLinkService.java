@@ -55,11 +55,18 @@ class BluetoothLinkService {
 
         // Raw traffic in both directions, for on-device debugging -- every
         // line sent and every line received, regardless of whether it's
-        // part of the curated protocol (DONE/STATUS) or not (e.g. ROBOT/
-        // TARGET lines android_bridge_node also sends, which this app
-        // doesn't otherwise parse). Lets you see what's actually crossing
-        // the link without SSHing into the Pi.
+        // part of the curated protocol or not. Lets you see what's actually
+        // crossing the link without SSHing into the Pi.
         void onDebug(String line);
+
+        // ROBOT,<x_cm>,<y_cm>,<heading_deg> -- live dead-reckoned pose,
+        // published by android_bridge_node's /robot_pose subscription
+        // after each completed move.
+        void onRobotPose(float xCm, float yCm, float headingDeg);
+
+        // TARGET,<obstacle_id>,<symbol_id> -- a perception result relayed
+        // from android_bridge_node's /android/target subscription.
+        void onTarget(int obstacleId, int symbolId);
     }
 
     private final Listener listener;
@@ -199,9 +206,40 @@ class BluetoothLinkService {
         } else if (text.startsWith("STATUS,")) {
             String payload = text.substring("STATUS,".length());
             mainHandler.post(() -> listener.onStatusLine(payload));
+        } else if (text.startsWith("ROBOT,")) {
+            parseRobotPose(text.substring("ROBOT,".length()));
+        } else if (text.startsWith("TARGET,")) {
+            parseTarget(text.substring("TARGET,".length()));
         }
-        // Anything outside DONE/STATUS (e.g. ROBOT/TARGET) isn't otherwise
-        // parsed -- it still shows up via onDebug above.
+    }
+
+    private void parseRobotPose(String payload) {
+        String[] parts = payload.split(",");
+        if (parts.length != 3) {
+            return;
+        }
+        try {
+            float x = Float.parseFloat(parts[0]);
+            float y = Float.parseFloat(parts[1]);
+            float heading = Float.parseFloat(parts[2]);
+            mainHandler.post(() -> listener.onRobotPose(x, y, heading));
+        } catch (NumberFormatException ignored) {
+            // Malformed line -- already visible via onDebug, nothing more to do.
+        }
+    }
+
+    private void parseTarget(String payload) {
+        String[] parts = payload.split(",");
+        if (parts.length != 2) {
+            return;
+        }
+        try {
+            int obstacleId = Integer.parseInt(parts[0].trim());
+            int symbolId = Integer.parseInt(parts[1].trim());
+            mainHandler.post(() -> listener.onTarget(obstacleId, symbolId));
+        } catch (NumberFormatException ignored) {
+            // Malformed line -- already visible via onDebug, nothing more to do.
+        }
     }
 
     private void postDisconnected(String reason) {

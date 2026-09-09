@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-mode counterpart to values/colors.xml, see that file's header.
+         Values are the "dark" half of astryx's neutral theme's [light, dark]
+         token tuples. -->
+
+    <color name="background_body">#1B1B1B</color>
+    <color name="background_surface">#262626</color>
+    <color name="background_card">#1B1B1B</color>
+
+    <color name="text_primary">#FAFAFA</color>
+    <color name="text_secondary">#A3A3A3</color>
+    <color name="text_disabled">#525252</color>
+
+    <color name="accent">#EBEBEB</color>
+    <color name="on_accent">#171717</color>
+
+    <color name="border">#1AFFFFFF</color>
+    <color name="border_emphasized">#525252</color>
+
+    <color name="status_accent_fill">#6D9CFE</color>
+    <color name="status_error_fill">#FF705D</color>
+    <color name="on_error">#171717</color>
+
+    <color name="categorical_orange_icon">#FFA258</color>
+    <color name="categorical_orange_bg">#3DFFA258</color>
+</resources>

@@ -33,8 +33,20 @@ done
 # success -- fatal under `set -e`. Confirmed on the team's Pi: the adapter
 # comes up already powered (e.g. still connected to a previously-paired
 # tablet), which made this unit fail on every boot after the first.
-if [ "$(bluetoothctl show | awk -F': ' '/Powered:/ {print $2}')" != "yes" ]; then
-    bluetoothctl power on
+#
+# A prior version of this fix pre-checked `bluetoothctl show`'s Powered
+# field before deciding whether to call `power on` -- but that's a
+# check-then-act race: at boot, right after bluetooth.service reports
+# active, bluetoothd's own D-Bus state isn't always settled yet, so the
+# pre-check can read stale/incomplete output, wrongly decide "not
+# powered", call `power on` anyway, and still hit Busy (confirmed
+# recurring in production). Instead, just call `power on` and treat its
+# own Busy response as success -- Busy specifically means "already on",
+# which is exactly the state this script wants.
+power_output="$(bluetoothctl power on 2>&1)" || true
+if ! printf '%s\n' "$power_output" | grep -qE 'succeeded|Busy'; then
+    echo "$power_output" >&2
+    exit 1
 fi
 
 # sdptool add has no built-in idempotency guard -- re-running it blindly

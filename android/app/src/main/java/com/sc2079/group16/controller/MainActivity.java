@@ -15,6 +15,7 @@ import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.View;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -42,6 +43,11 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private TextView connectedDeviceLabel;
     private TextView statusTextView;
     private JoystickView joystickView;
+    private View joystickPanel;
+    private View arenaPanel;
+    private ArenaView arenaView;
+    private Button driveModeButton;
+    private Button arenaModeButton;
 
     // ---- Joystick -> discrete move translation ----------------------------
     // The STM32 firmware has no continuous-velocity primitive -- every move
@@ -75,10 +81,21 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         statusTextView = findViewById(R.id.statusText);
         statusTextView.setMovementMethod(new ScrollingMovementMethod());
         joystickView = findViewById(R.id.joystick);
+        joystickPanel = findViewById(R.id.joystickPanel);
+        arenaPanel = findViewById(R.id.arenaPanel);
+        arenaView = findViewById(R.id.arenaView);
+        driveModeButton = findViewById(R.id.driveModeButton);
+        arenaModeButton = findViewById(R.id.arenaModeButton);
 
         findViewById(R.id.refreshButton).setOnClickListener(v -> refreshDeviceList());
         findViewById(R.id.disconnectButton).setOnClickListener(v -> disconnect());
         findViewById(R.id.stopButton).setOnClickListener(v -> linkService.sendLine("STP"));
+        findViewById(R.id.driveModeButton).setOnClickListener(v -> showDriveMode());
+        findViewById(R.id.arenaModeButton).setOnClickListener(v -> showArenaMode());
+        findViewById(R.id.addObstacleButton).setOnClickListener(v -> arenaView.addObstacle());
+        findViewById(R.id.clearObstaclesButton).setOnClickListener(v -> arenaView.clearObstacles());
+        findViewById(R.id.sendArenaButton).setOnClickListener(v -> sendArenaLayout());
+        findViewById(R.id.clearLogsButton).setOnClickListener(v -> statusTextView.setText(""));
 
         deviceListView.setOnItemClickListener(
                 (parent, view, position, id) -> connectTo(bondedDevices.get(position)));
@@ -89,6 +106,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         bluetoothAdapter = btManager != null ? btManager.getAdapter() : null;
 
         ensurePermissionThenListDevices();
+        showDriveMode(); // sets the initial active/inactive button styling
 
         joystickHandler.post(this::joystickTick);
     }
@@ -228,6 +246,40 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         return Math.round(min + t * (max - min));
     }
 
+    private void showDriveMode() {
+        joystickPanel.setVisibility(View.VISIBLE);
+        arenaPanel.setVisibility(View.GONE);
+        setModeButtonActive(driveModeButton, arenaModeButton);
+    }
+
+    private void showArenaMode() {
+        joystickPanel.setVisibility(View.GONE);
+        arenaPanel.setVisibility(View.VISIBLE);
+        setModeButtonActive(arenaModeButton, driveModeButton);
+    }
+
+    /** Gives the two mode-toggle buttons a real selected-state distinction --
+     * without this, DRIVE and ARENA are visually identical regardless of
+     * which one is actually showing. */
+    private void setModeButtonActive(Button active, Button inactive) {
+        active.setBackgroundResource(R.drawable.ripple_button_primary);
+        active.setTextColor(getColor(R.color.on_accent));
+        inactive.setBackgroundResource(R.drawable.ripple_button_secondary);
+        inactive.setTextColor(getColor(R.color.text_primary));
+    }
+
+    /** Sends the current obstacle layout as one ALG|id,x,y,face|... command --
+     * this is the "at the end of the interaction" transmission step: the
+     * whole layout goes in one message, matching planner_node.py's parser
+     * exactly (see _parse_and_plan). */
+    private void sendArenaLayout() {
+        if (arenaView.getObstacleCount() == 0) {
+            Toast.makeText(this, "No obstacles placed yet", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        linkService.sendLine(arenaView.buildAlgCommand());
+    }
+
     private void showDevicePicker() {
         devicePickerPanel.setVisibility(View.VISIBLE);
         controlPanel.setVisibility(View.GONE);
@@ -285,6 +337,16 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     @Override
     public void onDebug(String line) {
         appendStatus(line);
+    }
+
+    @Override
+    public void onRobotPose(float xCm, float yCm, float headingDeg) {
+        arenaView.setRobotPose(xCm, yCm, headingDeg);
+    }
+
+    @Override
+    public void onTarget(int obstacleId, int symbolId) {
+        arenaView.setRecognizedSymbol(obstacleId, symbolId);
     }
 
     @Override
