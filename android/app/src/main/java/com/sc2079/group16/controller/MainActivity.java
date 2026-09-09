@@ -12,12 +12,12 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.ListView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -53,6 +53,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private View statusDot;
     private TextView linkStatusText;
     private TextView statusTextView;
+    private ScrollView statusScrollView;
     private JoystickView joystickView;
     private View joystickPanel;
     private View arenaPanel;
@@ -110,7 +111,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         statusDot = findViewById(R.id.statusDot);
         linkStatusText = findViewById(R.id.linkStatusText);
         statusTextView = findViewById(R.id.statusText);
-        statusTextView.setMovementMethod(new ScrollingMovementMethod());
+        statusScrollView = findViewById(R.id.statusScrollView);
         joystickView = findViewById(R.id.joystick);
         joystickPanel = findViewById(R.id.joystickPanel);
         arenaPanel = findViewById(R.id.arenaPanel);
@@ -391,13 +392,11 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private void appendStatus(String text) {
         Log.i("StatusLog", text); // mirror to logcat -- `adb logcat -s StatusLog` for debugging
         statusTextView.append(text + "\n");
-        final int scrollAmount = statusTextView.getLayout() == null
-                ? 0
-                : statusTextView.getLayout().getLineTop(statusTextView.getLineCount())
-                        - statusTextView.getHeight();
-        if (scrollAmount > 0) {
-            statusTextView.scrollTo(0, scrollAmount);
-        }
+        // statusTextView is wrap_content inside statusScrollView -- it's the
+        // ScrollView that actually scrolls, not the TextView itself, so that's
+        // what needs telling to follow new lines. Posted because the layout
+        // pass for the just-appended line hasn't happened yet on this call.
+        statusScrollView.post(() -> statusScrollView.fullScroll(View.FOCUS_DOWN));
     }
 
     @SuppressLint("MissingPermission")
