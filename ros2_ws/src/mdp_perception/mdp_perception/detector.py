@@ -7,38 +7,17 @@ and maintains a live 3x3 verification stitch grid of photographed obstacles.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
-# Official SC2079 Symbol IDs (Briefing & Protocol Spec)
-# 11-19: Digits 1-9
-# 20-35: Letters A-Z
-# 36: Up Arrow
-# 37: Down Arrow
-# 38: Right Arrow
-# 39: Left Arrow
-# 40: Stop / Circle / Target Bullseye
-_LABEL_TO_SYMBOL_ID: Dict[str, int] = {
-    # Digits
-    "1": 11, "2": 12, "3": 13, "4": 14, "5": 15,
-    "6": 16, "7": 17, "8": 18, "9": 19,
-    # Letters (A-Z)
-    "a": 20, "b": 21, "c": 22, "d": 23, "e": 24,
-    "f": 25, "g": 26, "h": 27, "s": 28, "t": 29,
-    "u": 30, "v": 31, "w": 32, "x": 33, "y": 34, "z": 35,
-    # Directional Arrows
-    "up": 36,
-    "down": 37,
-    "right": 38,
-    "left": 39,
-    # Target / Circle / Stop
-    "circle": 40,
-    "target": 40,
-}
+from mdp_perception.class_contract import (
+    _resolve_symbol_id,
+    _validate_model_names,
+    _validate_onnx_contract,
+)
 
 
 class TargetDetector:
@@ -49,73 +28,75 @@ class TargetDetector:
         model_path: str = "models/best.onnx",
         conf_threshold: float = 0.50,
         iou_threshold: float = 0.45,
+        onnx_threads: int = 4,
     ) -> None:
+        if type(onnx_threads) is not int or onnx_threads < 1:
+            raise ValueError("onnx_threads must be a positive integer")
+        self.onnx_threads = onnx_threads
         self.model_path = model_path
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self._onnx_session = None
         self._input_name = None
         self._pt_model = None
-        self._class_names = [
-            "1", "2", "3", "4", "5", "6", "7", "8", "9",
-            "a", "b", "c", "circle", "d", "down", "e", "f", "g", "h",
-            "left", "right", "s", "t", "target", "u", "up", "v", "w", "x", "y", "z"
-        ]
+        self._class_names: List[str] = []
 
         # Recognized Targets Stored for Verification Grid: {obstacle_id: (crop_img, symbol_id, conf)}
         self.recognized_crops: Dict[int, Tuple[np.ndarray, int, float]] = {}
 
         self._load_model()
+        for index, name in enumerate(self._class_names):
+            print(
+                f"[TargetDetector] index {index} -> name {name!r} -> "
+                f"assessment ID {_resolve_symbol_id(name)}"
+            )
 
     def _load_model(self) -> None:
-        """Load YOLO model weights (supports ONNX via onnxruntime and PyTorch .pt via ultralytics)."""
-        candidates = []
+        """Load and validate the explicitly requested model; never use mock mode."""
         if os.path.isabs(self.model_path):
-            candidates.append(self.model_path)
+            candidates = [self.model_path]
         else:
-            base_name = os.path.splitext(self.model_path)[0]
-            # Try ONNX first (lightweight), then PyTorch .pt
-            for ext in [".onnx", ".pt"]:
-                p = base_name + ext
-                candidates.extend([
-                    os.path.abspath(os.path.join(os.getcwd(), p)),
-                    os.path.abspath(os.path.join(os.getcwd(), "..", p)),
-                    os.path.abspath(os.path.join("/home/mdp/dev/SC2079-Group-16", p)),
-                ])
-
-        found_path = None
-        for c in candidates:
-            if os.path.exists(c):
-                found_path = c
-                break
-
+            # Permit repository-root and ros2_ws working directories, preserving
+            # the exact requested extension. Use an absolute path for deployment.
+            candidates = [
+                os.path.abspath(self.model_path),
+                os.path.abspath(os.path.join(os.getcwd(), "..", self.model_path)),
+            ]
+        found_path = next((path for path in candidates if os.path.isfile(path)), None)
         if found_path is None:
-            print(f"[TargetDetector] Warning: Model file not found in candidates: {candidates[:3]}. Running in mock mode.")
+            raise FileNotFoundError(f"Requested model was not found: {candidates}")
+        self.model_path = found_path
+        extension = os.path.splitext(found_path)[1].lower()
+
+        if extension == ".onnx":
+            import onnxruntime as ort
+
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = self.onnx_threads
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            session = ort.InferenceSession(
+                found_path,
+                sess_options=opts,
+                providers=["CPUExecutionProvider"],
+            )
+            self._class_names = _validate_onnx_contract(session)
+            self._input_name = session.get_inputs()[0].name
+            self._onnx_session = session
+            print(f"[TargetDetector] Loaded validated ONNX model: {found_path}")
             return
 
-        self.model_path = found_path
-
-        # 1. Try ONNX Runtime (fast, lean edge inference on Pi)
-        if found_path.endswith(".onnx"):
-            try:
-                import onnxruntime as ort
-                opts = ort.SessionOptions()
-                opts.intra_op_num_threads = 4
-                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                self._onnx_session = ort.InferenceSession(found_path, sess_options=opts, providers=["CPUExecutionProvider"])
-                self._input_name = self._onnx_session.get_inputs()[0].name
-                print(f"[TargetDetector] Successfully loaded ONNX model via ONNXRuntime from {found_path}")
-                return
-            except Exception as exc:
-                print(f"[TargetDetector] Failed to load ONNX with onnxruntime: {exc}")
-
-        # 2. Try Ultralytics PyTorch fallback (if available, e.g. on laptop/PC)
-        try:
+        if extension == ".pt":
             from ultralytics import YOLO
-            self._pt_model = YOLO(found_path)
-            print(f"[TargetDetector] Successfully loaded PyTorch model via Ultralytics from {found_path}")
-        except Exception as exc:
-            print(f"[TargetDetector] Warning: Could not load model ({exc}). Running in mock mode.")
+
+            model = YOLO(found_path)
+            if model.task != "detect":
+                raise ValueError("PyTorch model must be an object-detection model")
+            self._class_names = _validate_model_names(model.names)
+            self._pt_model = model
+            print(f"[TargetDetector] Loaded validated PyTorch model: {found_path}")
+            return
+
+        raise ValueError(f"Unsupported model extension {extension!r}; use .onnx or .pt")
 
     def _infer_onnx(self, frame: np.ndarray) -> List[Tuple[str, int, float, Tuple[int, int, int, int]]]:
         """Pure-NumPy YOLOv8 ONNX inference pipeline."""
@@ -187,11 +168,12 @@ class TargetDetector:
                 bx, by, bw, bh = boxes[idx]
                 x1, y1, x2, y2 = bx, by, bx + bw, by + bh
 
-                raw_name = self._class_names[cid] if cid < len(self._class_names) else str(cid)
-                if raw_name.isdigit() and 11 <= int(raw_name) <= 40:
-                    symbol_id = int(raw_name)
-                else:
-                    symbol_id = _LABEL_TO_SYMBOL_ID.get(raw_name, 10 + cid)
+                if not 0 <= cid < len(self._class_names):
+                    raise RuntimeError(f"ONNX returned out-of-range class index {cid}")
+                raw_name = self._class_names[cid]
+                symbol_id = _resolve_symbol_id(raw_name)
+                if symbol_id is None:
+                    continue
 
                 detections.append((raw_name, symbol_id, conf, (x1, y1, x2, y2)))
 
@@ -222,12 +204,12 @@ class TargetDetector:
                 for box in r.boxes:
                     cls_id = int(box.cls[0].item())
                     conf = float(box.conf[0].item())
-                    raw_name = str(self._pt_model.names.get(cls_id, str(cls_id))).lower()
-
-                    if raw_name.isdigit() and 11 <= int(raw_name) <= 40:
-                        symbol_id = int(raw_name)
-                    else:
-                        symbol_id = _LABEL_TO_SYMBOL_ID.get(raw_name, 10 + cls_id)
+                    if not 0 <= cls_id < len(self._class_names):
+                        raise RuntimeError(f"PyTorch returned out-of-range class index {cls_id}")
+                    raw_name = self._class_names[cls_id]
+                    symbol_id = _resolve_symbol_id(raw_name)
+                    if symbol_id is None:
+                        continue
 
                     xyxy = box.xyxy[0].cpu().numpy().astype(int)
                     x1, y1, x2, y2 = xyxy[0], xyxy[1], xyxy[2], xyxy[3]
@@ -236,7 +218,7 @@ class TargetDetector:
 
             return detections
 
-        return []
+        raise RuntimeError("No validated inference backend is loaded")
 
     def draw_detections(
         self,

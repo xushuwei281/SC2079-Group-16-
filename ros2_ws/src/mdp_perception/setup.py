@@ -19,6 +19,7 @@ setup(
     entry_points={
         "console_scripts": [
             "perception_node = mdp_perception.perception_node:main",
+            "live_perception_node = mdp_perception.live_perception_node:main",
         ],
     },
 )
