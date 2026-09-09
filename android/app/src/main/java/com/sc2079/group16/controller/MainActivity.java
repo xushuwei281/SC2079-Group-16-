@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -15,6 +16,7 @@ import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.View;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -31,6 +33,14 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
 
     private static final int REQUEST_BT_CONNECT = 1001;
 
+    private enum Mode {
+        MANUAL,
+        TASK1,
+        TASK2
+    }
+
+    private Mode currentMode = Mode.MANUAL;
+
     private BluetoothAdapter bluetoothAdapter;
     private BluetoothLinkService linkService;
 
@@ -42,6 +52,13 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private TextView connectedDeviceLabel;
     private TextView statusTextView;
     private JoystickView joystickView;
+
+    private View panelManual;
+    private View panelTask1;
+    private View panelTask2;
+    private Button tabManual;
+    private Button tabTask1;
+    private Button tabTask2;
 
     // ---- Joystick -> discrete move translation ----------------------------
     // The STM32 firmware has no continuous-velocity primitive -- every move
@@ -76,8 +93,23 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         statusTextView.setMovementMethod(new ScrollingMovementMethod());
         joystickView = findViewById(R.id.joystick);
 
+        panelManual = findViewById(R.id.panelManual);
+        panelTask1 = findViewById(R.id.panelTask1);
+        panelTask2 = findViewById(R.id.panelTask2);
+
+        tabManual = findViewById(R.id.tabManual);
+        tabTask1 = findViewById(R.id.tabTask1);
+        tabTask2 = findViewById(R.id.tabTask2);
+
+        tabManual.setOnClickListener(v -> setMode(Mode.MANUAL));
+        tabTask1.setOnClickListener(v -> setMode(Mode.TASK1));
+        tabTask2.setOnClickListener(v -> setMode(Mode.TASK2));
+
         findViewById(R.id.refreshButton).setOnClickListener(v -> refreshDeviceList());
         findViewById(R.id.disconnectButton).setOnClickListener(v -> disconnect());
+        findViewById(R.id.startTask1Button).setOnClickListener(v -> linkService.sendLine("START"));
+        findViewById(R.id.startTask2Button).setOnClickListener(v -> linkService.sendLine("START_TASK2"));
+        findViewById(R.id.resetButton).setOnClickListener(v -> linkService.sendLine("RESET"));
         findViewById(R.id.stopButton).setOnClickListener(v -> linkService.sendLine("STP"));
 
         deviceListView.setOnItemClickListener(
@@ -174,7 +206,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private void joystickTick() {
         joystickHandler.postDelayed(this::joystickTick, JOYSTICK_POLL_MS);
 
-        if (controlPanel.getVisibility() != View.VISIBLE) {
+        if (controlPanel.getVisibility() != View.VISIBLE || currentMode != Mode.MANUAL) {
             return;
         }
 
@@ -236,6 +268,26 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private void showControlPanel() {
         devicePickerPanel.setVisibility(View.GONE);
         controlPanel.setVisibility(View.VISIBLE);
+        setMode(Mode.MANUAL);
+    }
+
+    private void setMode(Mode mode) {
+        currentMode = mode;
+        panelManual.setVisibility(mode == Mode.MANUAL ? View.VISIBLE : View.GONE);
+        panelTask1.setVisibility(mode == Mode.TASK1 ? View.VISIBLE : View.GONE);
+        panelTask2.setVisibility(mode == Mode.TASK2 ? View.VISIBLE : View.GONE);
+
+        tabManual.setBackgroundTintList(ColorStateList.valueOf(
+                getColor(mode == Mode.MANUAL ? R.color.tab_active : R.color.tab_inactive)));
+        tabManual.setTextColor(getColor(mode == Mode.MANUAL ? android.R.color.white : android.R.color.black));
+
+        tabTask1.setBackgroundTintList(ColorStateList.valueOf(
+                getColor(mode == Mode.TASK1 ? R.color.tab_active : R.color.tab_inactive)));
+        tabTask1.setTextColor(getColor(mode == Mode.TASK1 ? android.R.color.white : android.R.color.black));
+
+        tabTask2.setBackgroundTintList(ColorStateList.valueOf(
+                getColor(mode == Mode.TASK2 ? R.color.tab_active : R.color.tab_inactive)));
+        tabTask2.setTextColor(getColor(mode == Mode.TASK2 ? android.R.color.white : android.R.color.black));
     }
 
     private void appendStatus(String text) {

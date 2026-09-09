@@ -56,14 +56,14 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:layout_marginBottom="12dp">
+            android:layout_marginBottom="8dp">
 
             <TextView
                 android:id="@+id/connectedDeviceLabel"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:textSize="16sp"
+                android:textSize="15sp"
                 android:text="@string/not_connected" />
 
             <Button
@@ -73,33 +73,159 @@
                 android:text="@string/disconnect_button" />
         </LinearLayout>
 
+        <!-- Mode Switcher Tabs -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+
+            <Button
+                android:id="@+id/tabManual"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/mode_manual"
+                android:backgroundTint="@color/tab_active"
+                android:textColor="@android:color/white"
+                android:layout_marginEnd="2dp" />
+
+            <Button
+                android:id="@+id/tabTask1"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/mode_task1"
+                android:backgroundTint="@color/tab_inactive"
+                android:textColor="@android:color/black"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="2dp" />
+
+            <Button
+                android:id="@+id/tabTask2"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/mode_task2"
+                android:backgroundTint="@color/tab_inactive"
+                android:textColor="@android:color/black"
+                android:layout_marginStart="2dp" />
+        </LinearLayout>
+
+        <!-- Mode Panels -->
+        <!-- 1. Manual Teleop Panel (Joystick for Checklist C.2-C.10) -->
         <FrameLayout
+            android:id="@+id/panelManual"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginBottom="12dp"
-            android:gravity="center">
+            android:layout_marginBottom="8dp">
 
             <com.sc2079.group16.controller.JoystickView
                 android:id="@+id/joystick"
-                android:layout_width="240dp"
-                android:layout_height="240dp" />
+                android:layout_width="220dp"
+                android:layout_height="220dp"
+                android:layout_gravity="center" />
         </FrameLayout>
 
-        <Button
-            android:id="@+id/stopButton"
+        <!-- 2. Task 1 (Explore) Panel -->
+        <LinearLayout
+            android:id="@+id/panelTask1"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="16dp"
+            android:layout_marginBottom="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/task1_desc"
+                android:textSize="15sp"
+                android:gravity="center"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/startTask1Button"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="@string/start_task1"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:backgroundTint="@color/task1_green"
+                android:textColor="@android:color/white" />
+        </LinearLayout>
+
+        <!-- 3. Task 2 (Fastest Car) Panel -->
+        <LinearLayout
+            android:id="@+id/panelTask2"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="16dp"
+            android:layout_marginBottom="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/task2_desc"
+                android:textSize="15sp"
+                android:gravity="center"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/startTask2Button"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="@string/start_task2"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:backgroundTint="@color/task2_blue"
+                android:textColor="@android:color/white" />
+        </LinearLayout>
+
+        <!-- Global Control Buttons (STOP & Reset) -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/stop_button"
-            android:backgroundTint="@color/stop_red"
-            android:textColor="@android:color/white"
-            android:layout_marginBottom="12dp" />
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginBottom="8dp">
+
+            <Button
+                android:id="@+id/stopButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                android:text="@string/stop_button"
+                android:textStyle="bold"
+                android:backgroundTint="@color/stop_red"
+                android:textColor="@android:color/white"
+                android:layout_marginEnd="4dp" />
+
+            <Button
+                android:id="@+id/resetButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/reset_button"
+                android:backgroundTint="@color/reset_gray"
+                android:textColor="@android:color/white"
+                android:layout_marginStart="4dp" />
+        </LinearLayout>
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/status_label"
-            android:textSize="16sp" />
+            android:textSize="15sp"
+            android:layout_marginBottom="4dp" />
 
         <ScrollView
             android:layout_width="match_parent"
@@ -113,7 +239,7 @@
                 android:layout_height="wrap_content"
                 android:padding="8dp"
                 android:fontFamily="monospace"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
         </ScrollView>
     </LinearLayout>
 

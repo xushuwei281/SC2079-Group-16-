@@ -15,5 +15,16 @@
     <string name="turn_left_button">Turn Left</string>
     <string name="turn_right_button">Turn Right</string>
     <string name="stop_button">STOP</string>
+    <string name="task1_button">Task 1 (Explore)</string>
+    <string name="task2_button">Task 2 (Fastest Car)</string>
+    <string name="reset_button">Reset</string>
+    <string name="mode_manual">Manual</string>
+    <string name="mode_task1">Task 1</string>
+    <string name="mode_task2">Task 2</string>
+    <string name="task1_desc">Autonomous Exploration &amp; Bull\'s Eye Orbit Recovery (4–8 obstacles)</string>
+    <string name="task2_desc">Fastest Car Reactive Sprint (Arrow slalom &amp; Carpark return)</string>
+    <string name="manual_desc">Joystick teleoperation (Checklist C.2–C.10)</string>
+    <string name="start_task1">START TASK 1 (EXPLORE)</string>
+    <string name="start_task2">START TASK 2 (FASTEST CAR)</string>
     <string name="status_label">Status</string>
 </resources>

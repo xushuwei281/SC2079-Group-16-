@@ -199,9 +199,13 @@ class BluetoothLinkService {
         } else if (text.startsWith("STATUS,")) {
             String payload = text.substring("STATUS,".length());
             mainHandler.post(() -> listener.onStatusLine(payload));
+        } else if (text.startsWith("TARGET,")) {
+            String payload = text.substring("TARGET,".length());
+            mainHandler.post(() -> listener.onStatusLine("🎯 TARGET: " + payload));
+        } else if (text.startsWith("ROBOT,")) {
+            String payload = text.substring("ROBOT,".length());
+            mainHandler.post(() -> listener.onStatusLine("📍 POSE: " + payload));
         }
-        // Anything outside DONE/STATUS (e.g. ROBOT/TARGET) isn't otherwise
-        // parsed -- it still shows up via onDebug above.
     }
 
     private void postDisconnected(String reason) {

@@ -14,9 +14,12 @@ classic Bluetooth SPP to the Raspberry Pi's `android_bridge_node`
 ## How it works
 
 - `MainActivity` — single screen: a list of already-**paired** Bluetooth
-  devices to connect to, then a movement control panel (Forward/Backward/
-  Turn Left/Turn Right/Stop, distance+angle inputs, and a scrolling status
-  log showing only curated `STATUS,`/`DONE` text, never a raw byte stream).
+  devices to connect to, then a control panel with a **3-tab mode switcher**:
+  - **Manual Tab** (`[Manual]`): displays `JoystickView` for continuous, low-latency manual driving (Checklist C.2–C.10).
+  - **Task 1 Tab** (`[Task 1]`): displays mission summary and green `START TASK 1 (EXPLORE)` button (sends `START` to activate autonomous TSP exploration).
+  - **Task 2 Tab** (`[Task 2]`): displays sprint summary and blue `START TASK 2 (FASTEST CAR)` button (sends `START_TASK2` to trigger reactive slalom sprint & carpark return).
+  - **Global Controls**: persistent `STOP` button (sends `STP` E-STOP) and `Reset` button (sends `RESET`), accessible in all modes.
+  - **Status Log**: scrolling display for curated `STATUS: ...`, `DONE`, live `🎯 TARGET: ...` recognitions, and `📍 POSE: ...` telemetry.
 - `BluetoothLinkService` — owns the `BluetoothSocket` connect + read/write
   loop on a background thread, decoupled from the UI thread. Connects with
   `createInsecureRfcommSocketToServiceRecord()` against the well-known SPP
