@@ -206,14 +206,26 @@ def main(args: Optional[list[str]] = None) -> None:
                 node.last_status = "Reset to 20cm / 90°"
                 node.refresh_display()
 
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     except Exception as exc:
         print(f"\nTeleop error: {exc}")
     finally:
         # Restore terminal settings
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+        try:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
         print("\n\nTeleop keyboard closed.")
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except (Exception, KeyboardInterrupt):
+            pass
 
 
 if __name__ == "__main__":
