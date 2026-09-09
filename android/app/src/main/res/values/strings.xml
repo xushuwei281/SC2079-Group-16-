@@ -33,4 +33,10 @@
     <string name="clear_obstacles_button">Clear</string>
     <string name="send_arena_button">Send to Robot</string>
     <string name="clear_logs_button">Clear</string>
+
+    <!-- Link liveness indicator -->
+    <string name="link_status_not_connected">Not connected</string>
+    <string name="link_status_live_now">Live — just connected</string>
+    <string name="link_status_live">Live — last message %1$ds ago</string>
+    <string name="link_status_stale">No response for %1$ds — check the Bluetooth link</string>
 </resources>

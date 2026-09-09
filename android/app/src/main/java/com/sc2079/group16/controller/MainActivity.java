@@ -50,6 +50,8 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private View devicePickerPanel;
     private View controlPanel;
     private TextView connectedDeviceLabel;
+    private View statusDot;
+    private TextView linkStatusText;
     private TextView statusTextView;
     private JoystickView joystickView;
     private View joystickPanel;
@@ -85,6 +87,17 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private boolean moveInFlight = false;
     private long lastMoveSentAt = 0L;
 
+    // ---- Link liveness indicator -------------------------------------
+    // Ground truth for "is the app actually talking to the robot right
+    // now" is "have we heard anything back over Bluetooth recently" --
+    // a still-open socket doesn't prove the Pi-side process is alive.
+    private static final long LINK_STATUS_TICK_MS = 1000;
+    private static final long LINK_STALE_AFTER_MS = 6000;
+
+    private final Handler linkStatusHandler = new Handler(Looper.getMainLooper());
+    private boolean linkConnected = false;
+    private long lastLinkRxAtMillis = 0L;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -94,6 +107,8 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         devicePickerPanel = findViewById(R.id.devicePickerPanel);
         controlPanel = findViewById(R.id.controlPanel);
         connectedDeviceLabel = findViewById(R.id.connectedDeviceLabel);
+        statusDot = findViewById(R.id.statusDot);
+        linkStatusText = findViewById(R.id.linkStatusText);
         statusTextView = findViewById(R.id.statusText);
         statusTextView.setMovementMethod(new ScrollingMovementMethod());
         joystickView = findViewById(R.id.joystick);
@@ -140,6 +155,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         showDriveMode(); // sets the initial active/inactive button styling
 
         joystickHandler.post(this::joystickTick);
+        linkStatusHandler.post(this::linkStatusTick);
     }
 
     private void ensurePermissionThenListDevices() {
@@ -270,6 +286,37 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         linkService.sendLine(command + ":" + value);
     }
 
+    /** Runs every {@link #LINK_STATUS_TICK_MS} for the life of the Activity,
+     * independent of mode/panel visibility, so the indicator keeps counting
+     * up even while a task panel or the arena view is showing. */
+    private void linkStatusTick() {
+        linkStatusHandler.postDelayed(this::linkStatusTick, LINK_STATUS_TICK_MS);
+        updateLinkStatus();
+    }
+
+    private void updateLinkStatus() {
+        if (!linkConnected) {
+            setDotColor(R.color.text_disabled);
+            linkStatusText.setText(R.string.link_status_not_connected);
+            return;
+        }
+        long ageMs = System.currentTimeMillis() - lastLinkRxAtMillis;
+        if (ageMs < LINK_STALE_AFTER_MS) {
+            setDotColor(R.color.status_accent_fill);
+            linkStatusText.setText(
+                    ageMs < 1000
+                            ? getString(R.string.link_status_live_now)
+                            : getString(R.string.link_status_live, ageMs / 1000));
+        } else {
+            setDotColor(R.color.status_error_fill);
+            linkStatusText.setText(getString(R.string.link_status_stale, ageMs / 1000));
+        }
+    }
+
+    private void setDotColor(int colorRes) {
+        statusDot.setBackgroundTintList(ColorStateList.valueOf(getColor(colorRes)));
+    }
+
     /** Maps a deflection in [DEADZONE, 1] onto [min, max]. */
     private int scaleStep(float magnitude, int min, int max) {
         float t = (magnitude - JOYSTICK_DEADZONE) / (1f - JOYSTICK_DEADZONE);
@@ -365,6 +412,9 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     public void onConnected(BluetoothDevice device) {
         connectedDeviceLabel.setText(getString(R.string.connected_prefix) + " " + safeName(device));
         appendStatus("Connected to " + safeName(device));
+        linkConnected = true;
+        lastLinkRxAtMillis = System.currentTimeMillis();
+        updateLinkStatus();
         showControlPanel();
     }
 
@@ -388,6 +438,13 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     @Override
     public void onDebug(String line) {
         appendStatus(line);
+        // Any actual inbound traffic (not our own "queuing"/"→ sent" echoes)
+        // is proof the Pi side is alive and talking back -- reset the
+        // staleness clock immediately rather than waiting for the next tick.
+        if (line.startsWith("← ")) {
+            lastLinkRxAtMillis = System.currentTimeMillis();
+            updateLinkStatus();
+        }
     }
 
     @Override
@@ -409,6 +466,8 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         Toast.makeText(this, "Disconnected: " + reason, Toast.LENGTH_LONG).show();
         appendStatus("Disconnected (" + reason + ")");
         moveInFlight = false; // don't carry stale in-flight state into the next connection
+        linkConnected = false;
+        updateLinkStatus();
         showDevicePicker();
     }
 
