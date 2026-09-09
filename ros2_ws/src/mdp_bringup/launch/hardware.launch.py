@@ -117,8 +117,10 @@ def generate_launch_description():
         package="foxglove_bridge",
         executable="foxglove_bridge",
         name="foxglove_bridge",
-        parameters=[{"port": 8765, "address": "0.0.0.0"}],
+        parameters=[{"port": 8765, "address": "0.0.0.0", "ignore_unresponsive_param_nodes": True}],
         output="screen",
+        sigterm_timeout="1.0",
+        sigkill_timeout="1.0",
     )
 
     # Delayed launch of ROS nodes (gives Zenoh router 2.0s to bind port 7447 and start listening)
