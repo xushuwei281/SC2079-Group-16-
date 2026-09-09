@@ -33,4 +33,19 @@
     <!-- Categorical: orange, used for obstacle markers -->
     <color name="categorical_orange_icon">#6E3500</color>
     <color name="categorical_orange_bg">#FAD0B5</color>
+
+    <!-- Legacy names kept as aliases, still referenced by the Task 1/Task 2
+         panels added in 0c3a9fb. Point at the astryx-derived tokens above
+         rather than diverging with separate hardcoded values. -->
+    <color name="background">@color/background_body</color>
+    <color name="status_background">@color/background_card</color>
+    <color name="stop_red">@color/status_error_fill</color>
+
+    <!-- Task 1 / Task 2 mode-panel colors -->
+    <color name="task1_green">#2E7D32</color>
+    <color name="task2_blue">#1565C0</color>
+    <color name="reset_gray">#546E7A</color>
+    <color name="tab_active">#1976D2</color>
+    <color name="tab_inactive">#CFD8DC</color>
+    <color name="card_background">#F5F5F5</color>
 </resources>

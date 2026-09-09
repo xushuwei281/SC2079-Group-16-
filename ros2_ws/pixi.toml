@@ -79,7 +79,9 @@ clean = { cmd = "rm -rf build install log", description = "Remove colcon build a
 sim = { cmd = "python3 ../algorithm/simulator.py", description = "Launch the interactive 2D arena simulator" }
 planner = { cmd = "python3 ../algorithm/planner.py", description = "Run the CLI path planning algorithm demo" }
 test-algo = { cmd = "python3 -m unittest discover -s ../algorithm/test -p 'test_*.py'", description = "Run algorithm unit tests" }
-test-bridge = { cmd = "env RMW_IMPLEMENTATION=rmw_fastrtps_cpp python3 -m unittest discover -s src/mdp_hardware_bridge/test -p 'test_*.py' && env RMW_IMPLEMENTATION=rmw_fastrtps_cpp python3 -m unittest discover -s src/mdp_android_bridge/test -p 'test_*.py'", description = "Run hardware & Android bridge unit tests" }
+test-bridge = { cmd = "env RMW_IMPLEMENTATION=rmw_cyclonedds_cpp python3 -m unittest discover -s src/mdp_hardware_bridge/test -p 'test_*.py' && env RMW_IMPLEMENTATION=rmw_cyclonedds_cpp python3 -m unittest discover -s src/mdp_android_bridge/test -p 'test_*.py'", description = "Run hardware & Android bridge unit tests" }
+test-planner = { cmd = "env RMW_IMPLEMENTATION=rmw_cyclonedds_cpp python3 -m unittest discover -s src/mdp_bringup/test -p 'test_*.py'", description = "Run autonomous planner FSM unit tests" }
+test-all = { cmd = "pixi run -e pi test-algo && pixi run -e pi test-bridge && pixi run -e pi test-planner", description = "Run all unit test suites across algorithm, bridges, and planner" }
 # -u ZENOH_SESSION_CONFIG_URI: this task is shared by pi/pc, both of whose
 # activation scripts point that var at a mode:"client" config (client sessions
 # only connect, they never listen). The router process needs mode:"router" with
@@ -128,9 +130,11 @@ build = { cmd = "colcon build --packages-up-to mdp_hardware_bridge mdp_android_b
 test = { cmd = "colcon test --packages-up-to mdp_hardware_bridge mdp_android_bridge mdp_camera_bringup mdp_bringup mdp_perception", description = "Test robot packages" }
 robot = { cmd = "ros2 launch mdp_bringup robot.launch.py", description = "Start full autonomous robot stack (Zenoh, STM32, Android, Camera, Planner, Perception, Foxglove)" }
 robot-no-cv = { cmd = "ros2 launch mdp_bringup robot.launch.py run_perception:=false", description = "Start autonomous stack WITHOUT on-board perception (runs perception on laptop or off)" }
+task2 = { cmd = "ros2 launch mdp_bringup task2.launch.py", description = "Start Task 2 fastest car sprint stack (Zenoh, STM32, Android, Camera, FastestCarNode, Perception, Foxglove)" }
 hardware = { cmd = "ros2 launch mdp_bringup hardware.launch.py", description = "Start essential low-level hardware stack (Zenoh, STM32 UART, Android Bluetooth, Camera, Foxglove)" }
 teleop = { cmd = "ros2 launch mdp_bringup teleop.launch.py", description = "Start manual teleop stack (Zenoh, STM32 UART, Android Bluetooth)" }
 planner = { cmd = "ros2 run mdp_bringup planner_node", description = "Start the autonomous path planner on the Pi" }
+fastest-car = { cmd = "ros2 run mdp_bringup fastest_car_node", description = "Start Task 2 fastest car sprint node on the Pi" }
 perception = { cmd = "ros2 run mdp_perception perception_node", description = "Start local ONNX target detection on the Pi" }
 camera = { cmd = "ros2 launch mdp_camera_bringup camera.launch.py", description = "Start the Pi camera driver" }
 foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", description = "Start the Foxglove websocket bridge (ws://mdp.local:8765)" }

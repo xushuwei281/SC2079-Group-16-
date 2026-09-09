@@ -50,8 +50,10 @@ _MOVEMENT_MAP = {
     "FR": "FR",
 }
 
-# Planner / Arena commands forwarded verbatim to /android/cmd
-_PLANNER_COMMAND_PREFIXES = ("ALG", "START", "RESET", "ADD", "SUB", "FACE")
+# Mission / Planner / Arena / Task 2 commands forwarded verbatim to /android/cmd
+_MISSION_COMMAND_PREFIXES = (
+    "ALG", "START", "RESET", "ADD", "SUB", "FACE", "STM", "SP", "TASK2", "START_TASK2", "MODE"
+)
 
 
 class AndroidBridgeNode(Node):
@@ -64,16 +66,26 @@ class AndroidBridgeNode(Node):
         self.declare_parameter("baud_rate", 115200)
         self.declare_parameter("service_wait_sec", 5.0)
         self.declare_parameter("distance_in_mm", False)  # True if tablet sends mm, False if cm
+        self.declare_parameter("use_angle_brackets_for_pose", True)  # Format: ROBOT,<x>,<y>,<dir>
+        self.declare_parameter("robot_coords_in_cm", False)  # False: 0-19 grid cells, True: cm
+        self.declare_parameter("direction_as_cardinal", True)  # True: N/S/E/W, False: degrees
 
         self._device = self.get_parameter("rfcomm_device").value
         self._baud = self.get_parameter("baud_rate").value
         self._service_wait_sec = self.get_parameter("service_wait_sec").value
         self._distance_in_mm = self.get_parameter("distance_in_mm").value
+        self._use_brackets = self.get_parameter("use_angle_brackets_for_pose").value
+        self._coords_in_cm = self.get_parameter("robot_coords_in_cm").value
+        self._direction_as_cardinal = self.get_parameter("direction_as_cardinal").value
 
         self._serial: Optional[serial.Serial] = None
         self._serial_lock = threading.Lock()
         self._running = threading.Event()
         self._running.set()
+
+        self._move_lock = threading.Lock()
+        self._is_moving = False
+        self._pending_move: Optional[Tuple[str, int]] = None
 
         callback_group = ReentrantCallbackGroup()
 
@@ -129,7 +141,9 @@ class AndroidBridgeNode(Node):
                     self.get_logger().info(f"[Tablet -> Pi]: {line}")
                     self._dispatch(line)
 
-            except (serial.SerialException, OSError) as exc:
+            except (serial.SerialException, OSError, TypeError, AttributeError) as exc:
+                if not self._running.is_set():
+                    break
                 self.get_logger().warn(f"RFCOMM connection lost: {exc}")
                 self._close_serial()
                 time.sleep(1.0)
@@ -171,13 +185,18 @@ class AndroidBridgeNode(Node):
         # 1. Emergency Stop (Fast Path)
         if line.upper() in ("STP", "STOP", "Q"):
             self.get_logger().warn("Tablet requested E-STOP")
+            with self._move_lock:
+                self._pending_move = None
+                self._is_moving = False
             self._estop_pub.publish(Empty())
             self.send_to_tablet("STATUS,E-STOP TRIGGERED")
             return
 
-        # 2. Planner & Arena Commands (ALG|..., START, RESET, ADD, SUB, FACE)
-        if line.startswith(_PLANNER_COMMAND_PREFIXES):
-            self.get_logger().info(f"Forwarding command to planner: {line}")
+        # 2. Mission & Arena Commands (ALG|..., START, RESET, ADD, SUB, FACE, STM:sp, SP, TASK2)
+        if line.upper().startswith(_MISSION_COMMAND_PREFIXES):
+            self.get_logger().info(f"Forwarding mission command: {line}")
+            with self._move_lock:
+                self._pending_move = None
             self._cmd_pub.publish(String(data=line))
             self.send_to_tablet(f"STATUS,Received {line.split('|')[0]}")
             return
@@ -216,9 +235,25 @@ class AndroidBridgeNode(Node):
             self.send_to_tablet(f"STATUS,Value out of range: {value}")
             return
 
+        with self._move_lock:
+            if self._is_moving:
+                # Buffer the latest streaming command (overwriting prior pending move)
+                self._pending_move = (code, value)
+                self.get_logger().debug(
+                    f"Move in progress; buffered pending command {code}{value:03d}"
+                )
+                return
+
+            self._is_moving = True
+            self._dispatch_move_locked(code, value)
+
+    def _dispatch_move_locked(self, code: str, value: int) -> None:
+        """Dispatch a move to /execute_moves service. Must be called with _move_lock held."""
         if not self._move_client.wait_for_service(timeout_sec=self._service_wait_sec):
             self.get_logger().error("/execute_moves service unavailable")
             self.send_to_tablet("STATUS,Hardware bridge offline")
+            self._is_moving = False
+            self._pending_move = None
             return
 
         req = ExecuteMoves.Request()
@@ -235,14 +270,36 @@ class AndroidBridgeNode(Node):
         """Callback when /execute_moves completes."""
         try:
             resp: ExecuteMoves.Response = future.result()
-            if resp.success:
-                self.send_to_tablet("DONE")
-            else:
-                self.get_logger().warn(f"Move rejected or failed: {resp.status}")
-                self.send_to_tablet(f"STATUS,Move failed: {resp.status}")
         except Exception as exc:
             self.get_logger().error(f"Move service exception: {exc}")
+            with self._move_lock:
+                self._is_moving = False
+                self._pending_move = None
             self.send_to_tablet("STATUS,Move error")
+            return
+
+        with self._move_lock:
+            if resp.success:
+                if self._pending_move is not None:
+                    # Immediately chain into the pending move without idling
+                    next_code, next_value = self._pending_move
+                    self._pending_move = None
+                    self.get_logger().debug(
+                        f"Move finished; immediately dispatching buffered {next_code}{next_value:03d}"
+                    )
+                    self._dispatch_move_locked(next_code, next_value)
+                else:
+                    self._is_moving = False
+                    self.send_to_tablet("DONE")
+            else:
+                # Suppress noisy error alerts if stream caused BUSY_LOCAL
+                if resp.status == "BUSY_LOCAL":
+                    self.get_logger().info("Move rejected due to BUSY_LOCAL")
+                else:
+                    self.get_logger().warn(f"Move rejected or failed: {resp.status}")
+                    self.send_to_tablet(f"STATUS,Move failed: {resp.status}")
+                self._is_moving = False
+                self._pending_move = None
 
     # -------------------------------------------------------------------------
     # Outbound Message Streaming (ROS -> Tablet)
@@ -257,18 +314,45 @@ class AndroidBridgeNode(Node):
         self.send_to_tablet(f"TARGET,{msg.data}")
 
     def _on_pose(self, msg: PoseStamped) -> None:
-        """Convert ROS PoseStamped to tablet format: ROBOT,<x_cm>,<y_cm>,<dir_deg>."""
-        x_cm = round(msg.pose.position.x * 100.0)
-        y_cm = round(msg.pose.position.y * 100.0)
+        """Convert ROS PoseStamped to tablet format: ROBOT,<x>,<y>,<direction>."""
+        x_cm = msg.pose.position.x * 100.0
+        y_cm = msg.pose.position.y * 100.0
 
-        # Quaternion to yaw (degrees)
+        # Quaternion to yaw (degrees, 0-359)
         q = msg.pose.orientation
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         yaw_rad = math.atan2(siny_cosp, cosy_cosp)
         yaw_deg = round(math.degrees(yaw_rad)) % 360
 
-        self.send_to_tablet(f"ROBOT,{x_cm},{y_cm},{yaw_deg}")
+        # Cardinal direction mapping according to Checklist C.10 (N, S, E, W)
+        if self._direction_as_cardinal:
+            if 45 <= yaw_deg < 135:
+                direction_str = "N"
+            elif 135 <= yaw_deg < 225:
+                direction_str = "W"
+            elif 225 <= yaw_deg < 315:
+                direction_str = "S"
+            else:
+                direction_str = "E"
+        else:
+            direction_str = str(yaw_deg)
+
+        # Coordinate domain: grid cells [0..19] for Android canvas, or cm
+        if self._coords_in_cm:
+            px = round(x_cm)
+            py = round(y_cm)
+        else:
+            px = max(0, min(19, int(round(x_cm / 10.0))))
+            py = max(0, min(19, int(round(y_cm / 10.0))))
+
+        # Formatting with or without angle brackets
+        if self._use_brackets:
+            pose_str = f"ROBOT,<{px}>,<{py}>,<{direction_str}>"
+        else:
+            pose_str = f"ROBOT,{px},{py},{direction_str}"
+
+        self.send_to_tablet(pose_str)
 
     def send_to_tablet(self, text: str) -> None:
         """Send a single line of text to the tablet over Bluetooth."""
@@ -288,6 +372,9 @@ class AndroidBridgeNode(Node):
 
     def destroy_node(self) -> None:
         self._running.clear()
+        with self._move_lock:
+            self._pending_move = None
+            self._is_moving = False
         self._close_serial()
         if self._comm_thread.is_alive():
             self._comm_thread.join(timeout=1.0)

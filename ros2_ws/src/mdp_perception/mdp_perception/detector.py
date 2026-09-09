@@ -100,10 +100,26 @@ class TargetDetector:
             try:
                 import onnxruntime as ort
                 opts = ort.SessionOptions()
-                opts.intra_op_num_threads = 4
+                # 2 threads is faster on Cortex-A72 than 4 (avoids L2 cache contention and thermal throttling)
+                # and leaves 2 cores free for ROS2 middleware and hardware bridges.
+                opts.intra_op_num_threads = 2
+                opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
                 opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                opts.enable_cpu_mem_arena = True
+                opts.enable_mem_pattern = True
                 self._onnx_session = ort.InferenceSession(found_path, sess_options=opts, providers=["CPUExecutionProvider"])
                 self._input_name = self._onnx_session.get_inputs()[0].name
+
+                # Parse class names dynamically from ONNX metadata if available
+                self._meta_names = None
+                meta = self._onnx_session.get_modelmeta()
+                if meta and "names" in meta.custom_metadata_map:
+                    import ast
+                    try:
+                        self._meta_names = ast.literal_eval(meta.custom_metadata_map["names"])
+                    except Exception:
+                        pass
+
                 print(f"[TargetDetector] Successfully loaded ONNX model via ONNXRuntime from {found_path}")
                 return
             except Exception as exc:
@@ -120,7 +136,8 @@ class TargetDetector:
     def _infer_onnx(self, frame: np.ndarray) -> List[Tuple[str, int, float, Tuple[int, int, int, int]]]:
         """Pure-NumPy YOLOv8 ONNX inference pipeline."""
         orig_h, orig_w = frame.shape[:2]
-        img_size = 640
+        inp_shape = self._onnx_session.get_inputs()[0].shape
+        img_size = inp_shape[2] if len(inp_shape) > 2 and isinstance(inp_shape[2], int) else 640
 
         # Letterbox resize maintaining aspect ratio
         scale = min(img_size / orig_h, img_size / orig_w)
@@ -187,7 +204,13 @@ class TargetDetector:
                 bx, by, bw, bh = boxes[idx]
                 x1, y1, x2, y2 = bx, by, bx + bw, by + bh
 
-                raw_name = self._class_names[cid] if cid < len(self._class_names) else str(cid)
+                if self._meta_names and cid in self._meta_names:
+                    raw_name = str(self._meta_names[cid])
+                elif cid < len(self._class_names):
+                    raw_name = self._class_names[cid]
+                else:
+                    raw_name = str(cid)
+
                 if raw_name.isdigit() and 11 <= int(raw_name) <= 40:
                     symbol_id = int(raw_name)
                 else:

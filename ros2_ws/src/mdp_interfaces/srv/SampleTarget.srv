@@ -1,0 +1,9 @@
+# Request: obstacle ID being visited
+int32 obstacle_id
+---
+# Response: consensus detection result from live buffer
+bool success
+int32 symbol_id
+string symbol_name
+float32 confidence
+bool is_marker

@@ -32,12 +32,20 @@ upload_protocol = serial
 upload_port = /dev/ttyACM0
 upload_flags =
     -i
-    rts,-dtr,dtr,-rts:-rts,-dtr,dtr
+    rts,-dtr,dtr,-rts:-rts,-dtr
 ```
 
-The `-i` sequence drives the C30D board's CH9102F DTR/RTS circuit. It selects
-the STM32 system-memory bootloader, pulses reset, and restores normal execution
-after programming. There is no need to move a BOOT0 jumper manually.
+The `-i` sequence drives the C30D board's CH9102F DTR/RTS circuit. It pulses the STM32
+system-memory bootloader entry, flashes the chip, and crucially exits with `-rts,-dtr`
+to release the reset/BOOT0 lines and start normal execution.
+
+> **Note:** A previous configuration used `...:-rts,-dtr,dtr`. The trailing `dtr` left DTR
+> asserted, latching the bootloader/reset circuit and preventing user firmware from running.
+> Always ensure the exit sequence is `-rts,-dtr`.
+>
+> On boot, the STM32 firmware performs a **5.0-second gyro offset and drift calibration**
+> before enabling USART3 communication on Port 2 (`/dev/ttyACM1`). Allow ~5 seconds after
+> power-on or flashing before sending commands.
 
 ## Build and flash
 
@@ -103,7 +111,7 @@ flash, run:
 ```bash
 ~/.platformio/packages/tool-stm32flash/stm32flash \
   -b 115200 \
-  -i 'rts,-dtr,dtr,-rts:-rts,-dtr,dtr' \
+  -i 'rts,-dtr,dtr,-rts:-rts,-dtr' \
   /dev/ttyACM0
 ```
 

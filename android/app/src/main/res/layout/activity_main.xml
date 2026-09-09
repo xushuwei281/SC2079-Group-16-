@@ -58,7 +58,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:layout_marginBottom="12dp">
+            android:layout_marginBottom="8dp">
 
             <TextView
                 android:id="@+id/connectedDeviceLabel"
@@ -77,106 +77,237 @@
                 android:text="@string/disconnect_button" />
         </LinearLayout>
 
+        <!-- Mode Switcher Tabs: Manual (joystick/arena) vs autonomous Task 1/2 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="12dp">
+            android:layout_marginBottom="8dp">
 
             <Button
-                android:id="@+id/driveModeButton"
+                android:id="@+id/tabManual"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginEnd="4dp"
-                style="@style/Widget.Button"
-                android:text="@string/drive_mode_button" />
+                android:text="@string/mode_manual"
+                android:backgroundTint="@color/tab_active"
+                android:textColor="@android:color/white"
+                android:layout_marginEnd="2dp" />
 
             <Button
-                android:id="@+id/arenaModeButton"
+                android:id="@+id/tabTask1"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="4dp"
-                style="@style/Widget.Button"
-                android:text="@string/arena_mode_button" />
+                android:text="@string/mode_task1"
+                android:backgroundTint="@color/tab_inactive"
+                android:textColor="@android:color/black"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="2dp" />
+
+            <Button
+                android:id="@+id/tabTask2"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/mode_task2"
+                android:backgroundTint="@color/tab_inactive"
+                android:textColor="@android:color/black"
+                android:layout_marginStart="2dp" />
         </LinearLayout>
 
-        <FrameLayout
-            android:id="@+id/joystickPanel"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:layout_marginBottom="12dp"
-            android:gravity="center"
-            android:visibility="visible">
-
-            <com.sc2079.group16.controller.JoystickView
-                android:id="@+id/joystick"
-                android:layout_width="240dp"
-                android:layout_height="240dp" />
-        </FrameLayout>
-
+        <!-- Mode Panels -->
+        <!-- 1. Manual Teleop Panel: Drive (joystick) / Arena (obstacle map) sub-toggle -->
         <LinearLayout
-            android:id="@+id/arenaPanel"
+            android:id="@+id/panelManual"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="3"
             android:orientation="vertical"
-            android:layout_marginBottom="12dp"
-            android:visibility="gone">
+            android:layout_marginBottom="8dp"
+            android:visibility="visible">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginBottom="8dp">
+                android:layout_marginBottom="12dp">
 
                 <Button
-                    android:id="@+id/addObstacleButton"
+                    android:id="@+id/driveModeButton"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:layout_marginEnd="4dp"
-                    style="@style/Widget.Button.Secondary"
-                    android:text="@string/add_obstacle_button" />
+                    style="@style/Widget.Button"
+                    android:text="@string/drive_mode_button" />
 
                 <Button
-                    android:id="@+id/clearObstaclesButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginStart="4dp"
-                    android:layout_marginEnd="4dp"
-                    style="@style/Widget.Button.Secondary"
-                    android:text="@string/clear_obstacles_button" />
-
-                <Button
-                    android:id="@+id/sendArenaButton"
+                    android:id="@+id/arenaModeButton"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:layout_marginStart="4dp"
                     style="@style/Widget.Button"
-                    android:text="@string/send_arena_button" />
+                    android:text="@string/arena_mode_button" />
             </LinearLayout>
 
-            <com.sc2079.group16.controller.ArenaView
-                android:id="@+id/arenaView"
+            <FrameLayout
+                android:id="@+id/joystickPanel"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
-                android:background="@drawable/bg_card"
-                android:elevation="1dp" />
+                android:gravity="center"
+                android:visibility="visible">
+
+                <com.sc2079.group16.controller.JoystickView
+                    android:id="@+id/joystick"
+                    android:layout_width="220dp"
+                    android:layout_height="220dp"
+                    android:layout_gravity="center" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:id="@+id/arenaPanel"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="8dp">
+
+                    <Button
+                        android:id="@+id/addObstacleButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        style="@style/Widget.Button.Secondary"
+                        android:text="@string/add_obstacle_button" />
+
+                    <Button
+                        android:id="@+id/clearObstaclesButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        android:layout_marginEnd="4dp"
+                        style="@style/Widget.Button.Secondary"
+                        android:text="@string/clear_obstacles_button" />
+
+                    <Button
+                        android:id="@+id/sendArenaButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginStart="4dp"
+                        style="@style/Widget.Button"
+                        android:text="@string/send_arena_button" />
+                </LinearLayout>
+
+                <com.sc2079.group16.controller.ArenaView
+                    android:id="@+id/arenaView"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_card"
+                    android:elevation="1dp" />
+            </LinearLayout>
         </LinearLayout>
 
-        <Button
-            android:id="@+id/stopButton"
+        <!-- 2. Task 1 (Explore) Panel -->
+        <LinearLayout
+            android:id="@+id/panelTask1"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="16dp"
+            android:layout_marginBottom="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/task1_desc"
+                android:textSize="15sp"
+                android:gravity="center"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/startTask1Button"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="@string/start_task1"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:backgroundTint="@color/task1_green"
+                android:textColor="@android:color/white" />
+        </LinearLayout>
+
+        <!-- 3. Task 2 (Fastest Car) Panel -->
+        <LinearLayout
+            android:id="@+id/panelTask2"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="16dp"
+            android:layout_marginBottom="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/task2_desc"
+                android:textSize="15sp"
+                android:gravity="center"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/startTask2Button"
+                android:layout_width="match_parent"
+                android:layout_height="60dp"
+                android:text="@string/start_task2"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:backgroundTint="@color/task2_blue"
+                android:textColor="@android:color/white" />
+        </LinearLayout>
+
+        <!-- Global Control Buttons (STOP & Reset) -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/stop_button"
-            style="@style/Widget.Button.Danger"
-            android:layout_marginBottom="12dp" />
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginBottom="8dp">
+
+            <Button
+                android:id="@+id/stopButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                style="@style/Widget.Button.Danger"
+                android:text="@string/stop_button"
+                android:layout_marginEnd="4dp" />
+
+            <Button
+                android:id="@+id/resetButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                style="@style/Widget.Button.Secondary"
+                android:text="@string/reset_button"
+                android:layout_marginStart="4dp" />
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -214,7 +345,7 @@
                 android:padding="8dp"
                 android:textColor="@color/text_primary"
                 android:fontFamily="monospace"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
         </ScrollView>
     </LinearLayout>
 
