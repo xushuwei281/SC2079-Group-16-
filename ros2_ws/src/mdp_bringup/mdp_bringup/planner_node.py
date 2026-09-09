@@ -411,13 +411,14 @@ class PlannerNode(Node):
 
         future = self._move_client.call_async(req)
         interrupted_by_sensor = False
+        is_backward = all(code in {"BC", "BL", "BR", "BU"} for code, _ in cmds)
 
         while rclpy.ok() and not future.done():
             if not self._is_executing:
                 return False
 
-            # Active Proximity Safety Guard
-            if self._enable_avoidance:
+            # Active Proximity Safety Guard (only active during forward maneuvers)
+            if self._enable_avoidance and not is_backward:
                 min_dist_m = min(self._us_range_m, self._ir_left_range_m, self._ir_right_range_m)
                 if min_dist_m < (self._safety_dist_cm / 100.0):
                     self.get_logger().warn(

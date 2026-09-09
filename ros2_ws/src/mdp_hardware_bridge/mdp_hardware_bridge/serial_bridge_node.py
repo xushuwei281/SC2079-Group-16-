@@ -148,6 +148,11 @@ class SerialBridgeNode(Node):
         else:
             self._timer = None
 
+        # Background periodic telemetry polling (when idle)
+        self._telemetry_timer = self.create_timer(
+            0.05, self._poll_telemetry, callback_group=callback_group
+        )
+
     def _find_candidate_ports(self) -> list[str]:
         candidates: list[str] = []
         if self._configured_port and self._configured_port.lower() != "auto":
@@ -408,21 +413,23 @@ class SerialBridgeNode(Node):
         # Normalize yaw to (-pi, pi]
         self._yaw = (self._yaw + math.pi) % (2.0 * math.pi) - math.pi
         self._publish_current_pose()
+        self.get_logger().info(
+            f"Batch completed pose: x={self._x:.3f}m, y={self._y:.3f}m, yaw={math.degrees(self._yaw):.1f}°"
+        )
 
     def _publish_sensor_ranges(self, us_m: float, ir1_m: float, ir2_m: float) -> None:
         """Publish sensor_msgs/Range messages for Ultrasonic and IR sensors."""
         now = self.get_clock().now().to_msg()
 
-        if us_m > 0.0:
-            us = Range()
-            us.header.stamp = now
-            us.header.frame_id = "ultrasonic_link"
-            us.radiation_type = Range.ULTRASOUND
-            us.field_of_view = 0.26  # ~15 degrees cone
-            us.min_range = 0.02
-            us.max_range = 3.00
-            us.range = float(us_m)
-            self._us_pub.publish(us)
+        us = Range()
+        us.header.stamp = now
+        us.header.frame_id = "ultrasonic_link"
+        us.radiation_type = Range.ULTRASOUND
+        us.field_of_view = 0.26  # ~15 degrees cone
+        us.min_range = 0.02
+        us.max_range = 3.00
+        us.range = float(us_m) if us_m > 0.0 else float("inf")
+        self._us_pub.publish(us)
 
         r1 = Range()
         r1.header.stamp = now
@@ -431,7 +438,7 @@ class SerialBridgeNode(Node):
         r1.field_of_view = 0.1
         r1.min_range = 0.10
         r1.max_range = 0.80
-        r1.range = float(ir1_m)
+        r1.range = float(ir1_m) if ir1_m > 0.0 else float("inf")
         self._ir_left_pub.publish(r1)
 
         r2 = Range()
@@ -441,10 +448,10 @@ class SerialBridgeNode(Node):
         r2.field_of_view = 0.1
         r2.min_range = 0.10
         r2.max_range = 0.80
-        r2.range = float(ir2_m)
+        r2.range = float(ir2_m) if ir2_m > 0.0 else float("inf")
         self._ir_right_pub.publish(r2)
 
-        self.get_logger().info(
+        self.get_logger().debug(
             f"Sensors: US={us_m*100.0:.1f}cm, IR1={ir1_m*100.0:.1f}cm, IR2={ir2_m*100.0:.1f}cm"
         )
 
@@ -477,7 +484,7 @@ class SerialBridgeNode(Node):
             tf_msg.transform.rotation.w = float(qw)
             self._tf_broadcaster.sendTransform(tf_msg)
 
-        self.get_logger().info(
+        self.get_logger().debug(
             f"Pose updated: x={self._x:.3f}m, y={self._y:.3f}m, yaw={math.degrees(self._yaw):.1f}°"
         )
 
@@ -503,6 +510,48 @@ class SerialBridgeNode(Node):
             elif cmd == "BR":
                 self._yaw += math.radians(val)
 
+    def _handle_telemetry_line(self, line: str) -> None:
+        """Parse incoming real-time telemetry line (TLM:<x>,<y>,<yaw>,<us>,<ir1>,<ir2>)."""
+        try:
+            payload = line[4:].strip()
+            parts = payload.split(",")
+            if len(parts) >= 3:
+                self._x = float(parts[0]) / 100.0
+                self._y = float(parts[1]) / 100.0
+                self._yaw = math.radians(float(parts[2]))
+                self._yaw = (self._yaw + math.pi) % (2.0 * math.pi) - math.pi
+                self._publish_current_pose()
+            if len(parts) >= 6:
+                us_m = float(parts[3]) / 100.0
+                ir1_m = float(parts[4]) / 100.0
+                ir2_m = float(parts[5]) / 100.0
+                self._publish_sensor_ranges(us_m, ir1_m, ir2_m)
+        except Exception as exc:
+            self.get_logger().debug(f"Failed to parse telemetry {line!r}: {exc}")
+
+    def _poll_telemetry(self) -> None:
+        """Poll incoming telemetry when idle."""
+        if self._busy.is_set():
+            return
+        line_bytes = None
+        with self._write_lock:
+            if self._serial is None or not self._serial.is_open:
+                return
+            try:
+                in_waiting = getattr(self._serial, "in_waiting", 0)
+                if isinstance(in_waiting, int) and in_waiting <= 0:
+                    return
+                line_bytes = self._serial.readline()
+            except (serial.SerialException, OSError) as exc:
+                self.get_logger().error(f"Serial read error in poll: {exc}")
+                self._close_serial_locked()
+                return
+
+        if line_bytes:
+            line = line_bytes.decode("ascii", errors="replace").strip()
+            if line.startswith("TLM:"):
+                self._handle_telemetry_line(line)
+
     def _read_status_line(self, deadline_sec: float) -> str:
         buf = b""
         deadline = time.monotonic() + deadline_sec
@@ -523,12 +572,20 @@ class SerialBridgeNode(Node):
             if chunk:
                 buf += chunk
                 if buf.endswith(b"\n"):
-                    return buf.decode("ascii", errors="replace").strip()
+                    line = buf.decode("ascii", errors="replace").strip()
+                    buf = b""
+                    if line.startswith("TLM:"):
+                        self._handle_telemetry_line(line)
+                        continue
+                    if line:
+                        return line
         return ""
 
     def destroy_node(self):
         if self._timer is not None:
             self._timer.cancel()
+        if self._telemetry_timer is not None:
+            self._telemetry_timer.cancel()
         with self._write_lock:
             self._close_serial_locked()
         return super().destroy_node()

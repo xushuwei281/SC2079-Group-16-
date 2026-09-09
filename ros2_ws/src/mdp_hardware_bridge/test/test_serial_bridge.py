@@ -197,6 +197,43 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.assertAlmostEqual(self.node._y, 1.202, places=3)
         self.assertAlmostEqual(self.node._yaw, math.radians(89.5), places=3)
 
+    @patch("serial.Serial")
+    def test_tlm_stream_during_moves(self, mock_serial_cls):
+        mock_serial = MagicMock()
+        mock_serial.is_open = True
+        # In-flight telemetry arrives before RUN and during movement before FIN
+        mock_serial.readline.side_effect = [
+            b"TLM:20.0,20.0,90.0,50,40,30\r\n",
+            b"RUN\r\n",
+            b"TLM:25.0,20.0,90.0,45,40,30\r\n",
+            b"FIN:POS,30.0,20.0,90.0,40,40,30\r\n",
+        ]
+        self.node._serial = mock_serial
+
+        req = ExecuteMoves.Request()
+        req.commands = [MoveCommand(command="FC", value=10)]
+        resp = ExecuteMoves.Response()
+
+        result = self.node._handle_execute_moves(req, resp)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.status, "FIN:POS,30.0,20.0,90.0,40,40,30")
+        self.assertAlmostEqual(self.node._x, 0.30, places=2)
+
+    @patch("serial.Serial")
+    def test_poll_telemetry_idle(self, mock_serial_cls):
+        mock_serial = MagicMock()
+        mock_serial.is_open = True
+        mock_serial.in_waiting = 35
+        mock_serial.readline.return_value = b"TLM:22.5,21.0,88.0,60,35,42\r\n"
+        self.node._serial = mock_serial
+
+        self.node._poll_telemetry()
+
+        self.assertAlmostEqual(self.node._x, 0.225, places=3)
+        self.assertAlmostEqual(self.node._y, 0.210, places=3)
+        self.assertAlmostEqual(self.node._yaw, math.radians(88.0), places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

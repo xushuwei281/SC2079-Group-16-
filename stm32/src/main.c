@@ -132,6 +132,14 @@ const osThreadAttr_t Comm_task_attributes = {
   .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal1,
 };
+/* Definitions for uartTxMutex */
+osMutexId_t uartTxMutexHandle;
+const osMutexAttr_t uartTxMutex_attributes = {
+  .name = "uartTxMutex",
+  .attr_bits = osMutexPrioInherit,
+  .cb_mem = NULL,
+  .cb_size = 0U
+};
 /* USER CODE BEGIN PV */
 float gyroZ = 0.0f;
 float gyroOffset = 0.0f;
@@ -496,7 +504,7 @@ int main(void)
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
- /* add mutexes, ... */
+  uartTxMutexHandle = osMutexNew(&uartTxMutex_attributes);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -1039,15 +1047,42 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-//for UART communication
-///* Send a 3-letter reply to the RPi and mirror it to the OLED. */
-//static void uartSend(const char *code)
-//{
-//    char frame[8];
-//    int n = snprintf(frame, sizeof(frame), "%s\r\n", code);
-//    HAL_UART_Transmit(&huart3, (uint8_t *)frame, n, 10);
-//    snprintf(oled_display[1], sizeof(oled_display[1]), "Tx:%-12s", code);
-//}
+// Thread-safe UART transmission guarded by FreeRTOS mutex
+static HAL_StatusTypeDef UART_SafeTransmit(const uint8_t *pData, uint16_t Size, uint32_t timeout_ms)
+{
+    HAL_StatusTypeDef status = HAL_ERROR;
+    if (uartTxMutexHandle != NULL && osKernelGetState() == osKernelRunning) {
+        if (osMutexAcquire(uartTxMutexHandle, timeout_ms) == osOK) {
+            status = HAL_UART_Transmit(&huart3, (uint8_t *)pData, Size, timeout_ms);
+            osMutexRelease(uartTxMutexHandle);
+        } else {
+            return HAL_BUSY;
+        }
+    } else {
+        status = HAL_UART_Transmit(&huart3, (uint8_t *)pData, Size, timeout_ms);
+    }
+    return status;
+}
+
+/* Stream live telemetry to RPi: TLM:<x_cm>,<y_cm>,<world_deg>,<us_cm>,<ir1_cm>,<ir2_cm> */
+static void sendTlm(void)
+{
+    char buf[64];
+    int x10 = (int)(robot_x_cm * 10.0f);
+    int y10 = (int)(robot_y_cm * 10.0f);
+    float world_deg = 90.0f + angleNow;
+    int h10 = (int)(world_deg   * 10.0f);
+    int ax  = x10 < 0 ? -x10 : x10;
+    int ay  = y10 < 0 ? -y10 : y10;
+    int ah  = h10 < 0 ? -h10 : h10;
+
+    int n = snprintf(buf, sizeof(buf), "TLM:%s%d.%d,%s%d.%d,%s%d.%d,%u,%u,%u\r\n",
+                     x10 < 0 ? "-" : "", ax / 10, ax % 10,
+                     y10 < 0 ? "-" : "", ay / 10, ay % 10,
+                     h10 < 0 ? "-" : "", ah / 10, ah % 10,
+                     (unsigned int)us_cm, (unsigned int)ir1_cm, (unsigned int)ir2_cm);
+    UART_SafeTransmit((const uint8_t *)buf, n, 20);
+}
 
 static void MotorsOff(void)
 {
@@ -1087,14 +1122,16 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
        EStop();
    }
    else if (runRequested == 1) {
-       HAL_UART_Transmit(&huart3, (uint8_t *)"BUS\r\n", 5, 10);
+       /* Batch is actively executing; ignore incoming moves to protect current batch */
    }
    else if (pkt[0] == '#') {
        runRequested = 1;
-       HAL_UART_Transmit(&huart3, (uint8_t *)"RUN\r\n", 5, 10);
+       if (Comm_taskHandle != NULL) {
+           osThreadFlagsSet(Comm_taskHandle, 0x01);
+       }
    }
    else if (instrLen >= 40) {
-       HAL_UART_Transmit(&huart3, (uint8_t *)"FUL\r\n", 5, 10);
+       /* Instruction buffer full; drop to prevent overflow */
    }
    else {
        memcpy((void *)instrList[instrLen++], pkt, FRAME_LEN);
@@ -1321,6 +1358,8 @@ void ZeroGyro(void)
 {
     angleNow      = 0.0f;
     headingTarget = 0.0f;
+    robot_x_cm    = 20.0f;
+    robot_y_cm    = 20.0f;
 }
 
 /* USER CODE END 4 */
@@ -1335,11 +1374,9 @@ void ZeroGyro(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
- /* This task owns the OLED. No other task may call OLED_* - they write into
-    oled_display[] instead. A refresh is a ~90 ms bit-banged SPI burst of 1024
-    bytes, so it must never sit inside a control loop. */
- for(;;)
- {
+  uint8_t oled_div = 0;
+  for(;;)
+  {
     irSensor1Raw = IR_ADC_Read(2U); /* PA2 / ADC1_IN2 */
     irSensor2Raw = IR_ADC_Read(3U); /* PA3 / ADC1_IN3 */
 
@@ -1350,21 +1387,26 @@ void StartDefaultTask(void *argument)
     us_cm = HCSR04_ReadCm(&raw_echo);
     us_raw_us = raw_echo;
 
-    snprintf(oled_display[3], sizeof(oled_display[3]),
-             "US :%-3ucm R:%-5lu ", (unsigned int)us_cm, (unsigned long)us_raw_us);
-    snprintf(oled_display[4], sizeof(oled_display[4]),
-             "I1 :%-3ucm R:%-5u ", (unsigned int)ir1_cm, (unsigned int)irSensor1Raw);
-    snprintf(oled_display[5], sizeof(oled_display[5]),
-             "I2 :%-3ucm R:%-5u ", (unsigned int)ir2_cm, (unsigned int)irSensor2Raw);
+    sendTlm();
 
-    OLED_ShowString(0,  0, (uint8_t *)oled_display[0]);
-    OLED_ShowString(0, 10, (uint8_t *)oled_display[1]);
-    OLED_ShowString(0, 20, (uint8_t *)oled_display[2]);
-    OLED_ShowString(0, 30, (uint8_t *)oled_display[3]);
-    OLED_ShowString(0, 40, (uint8_t *)oled_display[4]);
-    OLED_ShowString(0, 50, (uint8_t *)oled_display[5]);
-    OLED_Refresh_Gram();
-    osDelay(200);
+    if (++oled_div >= 3) {
+        oled_div = 0;
+        snprintf(oled_display[3], sizeof(oled_display[3]),
+                 "US :%-3ucm R:%-5lu ", (unsigned int)us_cm, (unsigned long)us_raw_us);
+        snprintf(oled_display[4], sizeof(oled_display[4]),
+                 "I1 :%-3ucm R:%-5u ", (unsigned int)ir1_cm, (unsigned int)irSensor1Raw);
+        snprintf(oled_display[5], sizeof(oled_display[5]),
+                 "I2 :%-3ucm R:%-5u ", (unsigned int)ir2_cm, (unsigned int)irSensor2Raw);
+
+        OLED_ShowString(0,  0, (uint8_t *)oled_display[0]);
+        OLED_ShowString(0, 10, (uint8_t *)oled_display[1]);
+        OLED_ShowString(0, 20, (uint8_t *)oled_display[2]);
+        OLED_ShowString(0, 30, (uint8_t *)oled_display[3]);
+        OLED_ShowString(0, 40, (uint8_t *)oled_display[4]);
+        OLED_ShowString(0, 50, (uint8_t *)oled_display[5]);
+        OLED_Refresh_Gram();
+    }
+    osDelay(100);
   }
   /* USER CODE END 5 */
 }
@@ -1635,7 +1677,6 @@ void gyro_task(void *argument)
 * @retval None
 */
 /* USER CODE END Header_comm_task */
-/* Telemetry for the RPi: FIN:POS,<x_cm>,<y_cm>,<world_heading_deg>,<us_cm>,<ir1_cm>,<ir2_cm> */
 static void sendFin(void)
 {
     char buf[64];
@@ -1652,7 +1693,7 @@ static void sendFin(void)
                      y10 < 0 ? "-" : "", ay / 10, ay % 10,
                      h10 < 0 ? "-" : "", ah / 10, ah % 10,
                      (unsigned int)us_cm, (unsigned int)ir1_cm, (unsigned int)ir2_cm);
-    HAL_UART_Transmit(&huart3, (uint8_t *)buf, n, 100);
+    UART_SafeTransmit((const uint8_t *)buf, n, 100);
 }
 
 
@@ -1668,8 +1709,11 @@ void comm_task(void *argument)
 	  {
 	      if (estopFlag) { MotorsOff(); osDelay(20); continue; }
 
+	      osThreadFlagsWait(0x01, osFlagsWaitAny, 20);
+
 	      if (runRequested == 1)
 	      {
+	          UART_SafeTransmit((const uint8_t *)"RUN\r\n", 5, 50);
 	          batchDist = 0.0f;
 
 	          for (uint8_t i = 0; i < instrLen; i++)
@@ -1701,7 +1745,6 @@ void comm_task(void *argument)
 	          instrLen = 0;
 	          runRequested = 0;
 	      }
-	      osDelay(20);
 	  }
   /* USER CODE END comm_task */
 }

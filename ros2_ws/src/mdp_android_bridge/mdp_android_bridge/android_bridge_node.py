@@ -86,6 +86,8 @@ class AndroidBridgeNode(Node):
         self._move_lock = threading.Lock()
         self._is_moving = False
         self._pending_move: Optional[Tuple[str, int]] = None
+        self._last_sent_pose_str: str = ""
+        self._last_pose_time: float = 0.0
 
         callback_group = ReentrantCallbackGroup()
 
@@ -351,6 +353,12 @@ class AndroidBridgeNode(Node):
             pose_str = f"ROBOT,<{px}>,<{py}>,<{direction_str}>"
         else:
             pose_str = f"ROBOT,{px},{py},{direction_str}"
+
+        now = time.monotonic()
+        if pose_str == self._last_sent_pose_str and (now - self._last_pose_time) < 0.5:
+            return
+        self._last_sent_pose_str = pose_str
+        self._last_pose_time = now
 
         self.send_to_tablet(pose_str)
 
