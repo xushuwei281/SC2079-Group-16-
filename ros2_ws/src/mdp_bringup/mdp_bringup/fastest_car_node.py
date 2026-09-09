@@ -41,6 +41,20 @@ class Task2State(str, Enum):
     ESTOP = "ESTOP"
 
 
+_STEP_MAP = {
+    Task2State.IDLE: (0, "Standing By"),
+    Task2State.APPROACH_OBS1: (1, "Approaching Obstacle 1"),
+    Task2State.DETECT_ARROW1: (2, "Scanning Arrow 1"),
+    Task2State.SLALOM_OBS1: (3, "Bypassing Obstacle 1"),
+    Task2State.APPROACH_OBS2: (4, "Approaching Obstacle 2"),
+    Task2State.DETECT_ARROW2: (5, "Scanning Arrow 2"),
+    Task2State.SLALOM_OBS2_AND_RETURN: (6, "Rounding Obs 2 & Return"),
+    Task2State.PARK: (7, "Sprinting to Carpark"),
+    Task2State.COMPLETE: (8, "Sprint Completed"),
+    Task2State.ESTOP: (9, "E-Stop Halting"),
+}
+
+
 def parse_move_command(cmd_str: str) -> MoveCommand:
     """Parse a command string like 'FL045' or 'FC030' into a MoveCommand."""
     cmd_str = cmd_str.strip()
@@ -109,12 +123,14 @@ class FastestCarNode(Node):
         self._current_x = 0.0
         self._current_y = 0.0
         self._current_yaw = 0.0
+        self._sprint_start_time = 0.0
 
         callback_group = ReentrantCallbackGroup()
 
         # Publishers
         self._status_pub = self.create_publisher(String, "/android/status", 10)
         self._target_pub = self.create_publisher(String, "/android/target", 10)
+        self._telemetry_pub = self.create_publisher(String, "/android/telemetry", 10)
         self._estop_pub = self.create_publisher(Empty, "/estop", 10)
 
         # Subscribers
@@ -190,6 +206,11 @@ class FastestCarNode(Node):
         if reason:
             msg += f" ({reason})"
         self.get_logger().info(msg)
+        elapsed = (time.time() - self._sprint_start_time) if self._sprint_start_time > 0 else 0.0
+        step_idx, desc = _STEP_MAP.get(new_state, (0, new_state.value))
+        self._telemetry_pub.publish(
+            String(data=f"T2_STATE,{new_state.value},{step_idx},{desc},{elapsed:.2f}")
+        )
 
     # -------------------------------------------------------------------------
     # Sprint Control & Worker Thread
@@ -202,6 +223,7 @@ class FastestCarNode(Node):
             return
 
         self._is_running = True
+        self._sprint_start_time = time.time()
         self._sprint_thread = threading.Thread(
             target=self._run_task2_sprint, daemon=True
         )
@@ -210,6 +232,7 @@ class FastestCarNode(Node):
     def reset_sprint(self) -> None:
         """Reset sprint state."""
         self._is_running = False
+        self._sprint_start_time = 0.0
         self._transition(Task2State.IDLE, "User reset")
         self._status_pub.publish(String(data="Task 2 Reset"))
 
@@ -321,10 +344,16 @@ class FastestCarNode(Node):
                         self.get_logger().info(
                             f"Obstacle {obs_num} Arrow: LEFT (Symbol {sid}, Conf: {conf:.2f})"
                         )
+                        self._telemetry_pub.publish(
+                            String(data=f"T2_ARROW,{obs_num},LEFT,{sid},{conf:.2f}")
+                        )
                         return ("LEFT", sid, conf)
                     elif sid == 38 or "right" in sname:
                         self.get_logger().info(
                             f"Obstacle {obs_num} Arrow: RIGHT (Symbol {sid}, Conf: {conf:.2f})"
+                        )
+                        self._telemetry_pub.publish(
+                            String(data=f"T2_ARROW,{obs_num},RIGHT,{sid},{conf:.2f}")
                         )
                         return ("RIGHT", sid, conf)
 
@@ -335,6 +364,9 @@ class FastestCarNode(Node):
         fallback_id = 39 if fallback_dir == "LEFT" else 38
         self.get_logger().warn(
             f"Perception uncertain for Obs {obs_num}. Defaulting to {fallback_dir}."
+        )
+        self._telemetry_pub.publish(
+            String(data=f"T2_ARROW,{obs_num},{fallback_dir},{fallback_id},0.50")
         )
         return (fallback_dir, fallback_id, 0.50)
 

@@ -48,4 +48,13 @@
     <color name="tab_active">#1976D2</color>
     <color name="tab_inactive">#CFD8DC</color>
     <color name="card_background">#F5F5F5</color>
+
+    <!-- Telemetry Badges and Indicators -->
+    <color name="badge_idle">#546E7A</color>
+    <color name="badge_active">#0074E2</color>
+    <color name="badge_warning">#E65100</color>
+    <color name="badge_success">#2E7D32</color>
+    <color name="badge_estop">#C9303A</color>
+    <color name="arrow_left">#2E7D32</color>
+    <color name="arrow_right">#1565C0</color>
 </resources>

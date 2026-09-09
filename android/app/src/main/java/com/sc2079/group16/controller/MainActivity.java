@@ -8,21 +8,30 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Single-screen remote control: a list of already-paired devices to connect
@@ -58,6 +67,8 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private View joystickPanel;
     private View arenaPanel;
     private ArenaView arenaView;
+    private FrameLayout manualArenaContainer;
+    private FrameLayout task1ArenaContainer;
     private Button driveModeButton;
     private Button arenaModeButton;
 
@@ -67,6 +78,57 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private Button tabManual;
     private Button tabTask1;
     private Button tabTask2;
+
+    // ---- Task 1 UI & Stopwatch -------------------------------------------
+    private TextView t1TimerText;
+    private TextView t1StateBadge;
+    private TextView t1LegText;
+    private TextView t1SensorText;
+    private TextView t1TargetsText;
+    private final Handler t1TimerHandler = new Handler(Looper.getMainLooper());
+    private boolean t1TimerRunning = false;
+    private long t1StartTimeMillis = 0L;
+    private long t1ElapsedMillis = 0L;
+    private final Map<Integer, String> t1RecognizedTargets = new LinkedHashMap<>();
+
+    // ---- Task 2 UI & Stopwatch -------------------------------------------
+    private TextView t2TimerText;
+    private TextView t2StateBadge;
+    private TextView t2Obs1Arrow;
+    private TextView t2Obs1Details;
+    private TextView t2Obs2Arrow;
+    private TextView t2Obs2Details;
+    private TextView t2StepTitle;
+    private final TextView[] t2Steps = new TextView[7];
+    private static final String[] T2_STEP_LABELS = {
+        "1. Approach Obstacle 1",
+        "2. Scan Arrow 1 (Left / Right)",
+        "3. Slalom Obstacle 1",
+        "4. Approach Obstacle 2",
+        "5. Scan Arrow 2 (Left / Right)",
+        "6. Round Obs 2 & Return Loop",
+        "7. Carpark Sprint & Finish"
+    };
+    private TextView t2SensorText;
+    private TextView t2ManeuverText;
+    private final Handler t2TimerHandler = new Handler(Looper.getMainLooper());
+    private boolean t2TimerRunning = false;
+    private long t2StartTimeMillis = 0L;
+    private long t2ElapsedMillis = 0L;
+
+    // ---- Fallback Regex for Legacy / Mixed Text Logs ---------------------
+    private static final Pattern OBS_ARROW_PATTERN = Pattern.compile(
+            "Obs\\s*([12]):\\s*Arrow\\s*(LEFT|RIGHT)(?:\\s*\\(symbol\\s*(\\d+)(?:,\\s*conf\\s*([0-9.]+))?\\))?",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern T2_COMPLETE_PATTERN = Pattern.compile(
+            "Task\\s*2\\s*Complete!?(?:\\s*Time:\\s*([0-9.]+)s?)?",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern T1_COMPLETE_PATTERN = Pattern.compile(
+            "Mission completed(?: in ([0-9.]+)s)?",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern FSM_TRANSITION_PATTERN = Pattern.compile(
+            "FSM:\\s*\\w+\\s*->\\s*(\\w+)",
+            Pattern.CASE_INSENSITIVE);
 
     // ---- Joystick -> discrete move translation ----------------------------
     // The STM32 firmware has no continuous-velocity primitive -- every move
@@ -116,6 +178,8 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         joystickPanel = findViewById(R.id.joystickPanel);
         arenaPanel = findViewById(R.id.arenaPanel);
         arenaView = findViewById(R.id.arenaView);
+        manualArenaContainer = findViewById(R.id.manualArenaContainer);
+        task1ArenaContainer = findViewById(R.id.task1ArenaContainer);
         driveModeButton = findViewById(R.id.driveModeButton);
         arenaModeButton = findViewById(R.id.arenaModeButton);
 
@@ -127,16 +191,66 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         tabTask1 = findViewById(R.id.tabTask1);
         tabTask2 = findViewById(R.id.tabTask2);
 
+        // Task 1 widget bindings
+        t1TimerText = findViewById(R.id.t1TimerText);
+        t1StateBadge = findViewById(R.id.t1StateBadge);
+        t1LegText = findViewById(R.id.t1LegText);
+        t1SensorText = findViewById(R.id.t1SensorText);
+        t1TargetsText = findViewById(R.id.t1TargetsText);
+
+        // Task 2 widget bindings
+        t2TimerText = findViewById(R.id.t2TimerText);
+        t2StateBadge = findViewById(R.id.t2StateBadge);
+        t2Obs1Arrow = findViewById(R.id.t2Obs1Arrow);
+        t2Obs1Details = findViewById(R.id.t2Obs1Details);
+        t2Obs2Arrow = findViewById(R.id.t2Obs2Arrow);
+        t2Obs2Details = findViewById(R.id.t2Obs2Details);
+        t2StepTitle = findViewById(R.id.t2StepTitle);
+        t2Steps[0] = findViewById(R.id.t2Step1);
+        t2Steps[1] = findViewById(R.id.t2Step2);
+        t2Steps[2] = findViewById(R.id.t2Step3);
+        t2Steps[3] = findViewById(R.id.t2Step4);
+        t2Steps[4] = findViewById(R.id.t2Step5);
+        t2Steps[5] = findViewById(R.id.t2Step6);
+        t2Steps[6] = findViewById(R.id.t2Step7);
+        t2SensorText = findViewById(R.id.t2SensorText);
+        t2ManeuverText = findViewById(R.id.t2ManeuverText);
+
         tabManual.setOnClickListener(v -> setMode(Mode.MANUAL));
         tabTask1.setOnClickListener(v -> setMode(Mode.TASK1));
         tabTask2.setOnClickListener(v -> setMode(Mode.TASK2));
 
         findViewById(R.id.refreshButton).setOnClickListener(v -> refreshDeviceList());
         findViewById(R.id.disconnectButton).setOnClickListener(v -> disconnect());
-        findViewById(R.id.startTask1Button).setOnClickListener(v -> linkService.sendLine("START"));
-        findViewById(R.id.startTask2Button).setOnClickListener(v -> linkService.sendLine("START_TASK2"));
-        findViewById(R.id.resetButton).setOnClickListener(v -> linkService.sendLine("RESET"));
-        findViewById(R.id.stopButton).setOnClickListener(v -> linkService.sendLine("STP"));
+
+        findViewById(R.id.startTask1Button).setOnClickListener(v -> {
+            resetT1Views();
+            startT1Timer();
+            updateT1StateBadge("PLANNING");
+            linkService.sendLine("START");
+        });
+
+        findViewById(R.id.startTask2Button).setOnClickListener(v -> {
+            resetT2Views();
+            startT2Timer();
+            updateT2StateBadge("APPROACH_OBS1");
+            linkService.sendLine("START_TASK2");
+        });
+
+        findViewById(R.id.resetButton).setOnClickListener(v -> {
+            resetT1Views();
+            resetT2Views();
+            linkService.sendLine("RESET");
+        });
+
+        findViewById(R.id.stopButton).setOnClickListener(v -> {
+            stopT1Timer();
+            stopT2Timer();
+            updateT1StateBadge("ESTOP");
+            updateT2StateBadge("ESTOP");
+            linkService.sendLine("STP");
+        });
+
         findViewById(R.id.driveModeButton).setOnClickListener(v -> showDriveMode());
         findViewById(R.id.arenaModeButton).setOnClickListener(v -> showArenaMode());
         findViewById(R.id.addObstacleButton).setOnClickListener(v -> arenaView.addObstacle());
@@ -151,6 +265,9 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
 
         BluetoothManager btManager = getSystemService(BluetoothManager.class);
         bluetoothAdapter = btManager != null ? btManager.getAdapter() : null;
+
+        resetT1Views();
+        resetT2Views();
 
         ensurePermissionThenListDevices();
         showDriveMode(); // sets the initial active/inactive button styling
@@ -387,6 +504,194 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         tabTask2.setBackgroundTintList(ColorStateList.valueOf(
                 getColor(mode == Mode.TASK2 ? R.color.tab_active : R.color.tab_inactive)));
         tabTask2.setTextColor(getColor(mode == Mode.TASK2 ? android.R.color.white : android.R.color.black));
+
+        // Seamless 2D Arena reparenting: share single ArenaView between Manual and Task 1
+        if (mode == Mode.TASK1) {
+            if (arenaView != null && task1ArenaContainer != null && arenaView.getParent() != task1ArenaContainer) {
+                if (arenaView.getParent() != null) {
+                    ((ViewGroup) arenaView.getParent()).removeView(arenaView);
+                }
+                task1ArenaContainer.addView(arenaView, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+        } else {
+            if (arenaView != null && manualArenaContainer != null && arenaView.getParent() != manualArenaContainer) {
+                if (arenaView.getParent() != null) {
+                    ((ViewGroup) arenaView.getParent()).removeView(arenaView);
+                }
+                manualArenaContainer.addView(arenaView, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+        }
+    }
+
+    // ---- Task 1 Stopwatch & State Helpers --------------------------------
+
+    private void startT1Timer() {
+        if (t1TimerRunning) return;
+        t1TimerRunning = true;
+        t1StartTimeMillis = System.currentTimeMillis() - t1ElapsedMillis;
+        t1TimerHandler.post(t1TimerRunnable);
+    }
+
+    private void stopT1Timer() {
+        t1TimerRunning = false;
+        t1TimerHandler.removeCallbacks(t1TimerRunnable);
+    }
+
+    private void resetT1Timer() {
+        stopT1Timer();
+        t1ElapsedMillis = 0L;
+        if (t1TimerText != null) {
+            t1TimerText.setText(R.string.timer_default_t1);
+            t1TimerText.setTextColor(getColor(R.color.text_primary));
+        }
+    }
+
+    private final Runnable t1TimerRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!t1TimerRunning) return;
+            t1ElapsedMillis = System.currentTimeMillis() - t1StartTimeMillis;
+            long totalSec = t1ElapsedMillis / 1000;
+            long mins = totalSec / 60;
+            long secs = totalSec % 60;
+            t1TimerText.setText(String.format(Locale.US, "%02d:%02d / 06:00", mins, secs));
+            if (totalSec >= 300) {
+                t1TimerText.setTextColor(getColor(R.color.status_error_fill));
+            } else {
+                t1TimerText.setTextColor(getColor(R.color.text_primary));
+            }
+            t1TimerHandler.postDelayed(this, 250);
+        }
+    };
+
+    private void updateT1StateBadge(String state) {
+        if (state == null || state.isEmpty()) state = "IDLE";
+        t1StateBadge.setText(state);
+        int colorRes;
+        if (state.equalsIgnoreCase("IDLE")) {
+            colorRes = R.color.badge_idle;
+        } else if (state.equalsIgnoreCase("PLANNING")) {
+            colorRes = R.color.badge_warning;
+        } else if (state.equalsIgnoreCase("NAVIGATING") || state.equalsIgnoreCase("EXPLORING")) {
+            colorRes = R.color.badge_active;
+        } else if (state.equalsIgnoreCase("SCANNING") || state.equalsIgnoreCase("SAMPLING_TARGET") || state.contains("ORBIT")) {
+            colorRes = R.color.badge_warning;
+        } else if (state.equalsIgnoreCase("DONE") || state.equalsIgnoreCase("COMPLETED") || state.equalsIgnoreCase("MISSION_COMPLETE")) {
+            colorRes = R.color.badge_success;
+        } else if (state.equalsIgnoreCase("ESTOP") || state.equalsIgnoreCase("ERROR")) {
+            colorRes = R.color.badge_estop;
+        } else {
+            colorRes = R.color.badge_active;
+        }
+        t1StateBadge.setBackgroundTintList(ColorStateList.valueOf(getColor(colorRes)));
+    }
+
+    private void resetT1Views() {
+        resetT1Timer();
+        updateT1StateBadge("IDLE");
+        t1LegText.setText("Leg: Ready | Target: --");
+        t1SensorText.setText("US: -- cm | IR: -- cm");
+        t1RecognizedTargets.clear();
+        t1TargetsText.setText("🎯 Targets: Standing by for mission start");
+    }
+
+    // ---- Task 2 Stopwatch & Stepper Helpers ------------------------------
+
+    private void startT2Timer() {
+        if (t2TimerRunning) return;
+        t2TimerRunning = true;
+        t2StartTimeMillis = System.currentTimeMillis() - t2ElapsedMillis;
+        t2TimerHandler.post(t2TimerRunnable);
+    }
+
+    private void stopT2Timer() {
+        t2TimerRunning = false;
+        t2TimerHandler.removeCallbacks(t2TimerRunnable);
+    }
+
+    private void resetT2Timer() {
+        stopT2Timer();
+        t2ElapsedMillis = 0L;
+        if (t2TimerText != null) {
+            t2TimerText.setText(R.string.timer_default_t2);
+        }
+    }
+
+    private final Runnable t2TimerRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!t2TimerRunning) return;
+            t2ElapsedMillis = System.currentTimeMillis() - t2StartTimeMillis;
+            float sec = t2ElapsedMillis / 1000.0f;
+            t2TimerText.setText(String.format(Locale.US, "%05.2fs", sec));
+            t2TimerHandler.postDelayed(this, 50);
+        }
+    };
+
+    private void updateT2StateBadge(String state) {
+        if (state == null || state.isEmpty()) state = "IDLE";
+        t2StateBadge.setText(state);
+        int colorRes;
+        if (state.equalsIgnoreCase("IDLE")) {
+            colorRes = R.color.badge_idle;
+        } else if (state.equalsIgnoreCase("COMPLETE") || state.equalsIgnoreCase("DONE") || state.equalsIgnoreCase("COMPLETED")) {
+            colorRes = R.color.badge_success;
+        } else if (state.equalsIgnoreCase("ESTOP") || state.equalsIgnoreCase("ERROR")) {
+            colorRes = R.color.badge_estop;
+        } else if (state.contains("DETECT") || state.contains("SCAN")) {
+            colorRes = R.color.badge_warning;
+        } else {
+            colorRes = R.color.badge_active;
+        }
+        t2StateBadge.setBackgroundTintList(ColorStateList.valueOf(getColor(colorRes)));
+    }
+
+    private void updateT2PipelineStep(int activeStep) {
+        for (int i = 0; i < t2Steps.length; i++) {
+            if (t2Steps[i] == null) continue;
+            int stepNum = i + 1;
+            if (activeStep == 0) {
+                t2Steps[i].setText(T2_STEP_LABELS[i]);
+                t2Steps[i].setTextColor(getColor(R.color.text_secondary));
+                t2Steps[i].setTypeface(null, Typeface.NORMAL);
+            } else if (stepNum < activeStep || activeStep >= 8) {
+                t2Steps[i].setText("✓ " + T2_STEP_LABELS[i]);
+                t2Steps[i].setTextColor(getColor(R.color.badge_success));
+                t2Steps[i].setTypeface(null, Typeface.BOLD);
+            } else if (stepNum == activeStep) {
+                t2Steps[i].setText("▶ " + T2_STEP_LABELS[i]);
+                t2Steps[i].setTextColor(getColor(R.color.task2_blue));
+                t2Steps[i].setTypeface(null, Typeface.BOLD);
+            } else {
+                t2Steps[i].setText(T2_STEP_LABELS[i]);
+                t2Steps[i].setTextColor(getColor(R.color.text_secondary));
+                t2Steps[i].setTypeface(null, Typeface.NORMAL);
+            }
+        }
+    }
+
+    private void resetT2Views() {
+        resetT2Timer();
+        updateT2StateBadge("IDLE");
+        t2Obs1Arrow.setText(R.string.waiting_label);
+        t2Obs1Arrow.setTextColor(getColor(R.color.text_disabled));
+        t2Obs1Details.setText("Symbol: -- | Conf: --");
+        t2Obs2Arrow.setText(R.string.waiting_label);
+        t2Obs2Arrow.setTextColor(getColor(R.color.text_disabled));
+        t2Obs2Details.setText("Symbol: -- | Conf: --");
+        t2StepTitle.setText("Pipeline: Ready");
+        updateT2PipelineStep(0);
+        t2SensorText.setText("Ultrasonic: -- cm");
+        t2ManeuverText.setText("Maneuver: Ready");
+    }
+
+    private String formatSensorDist(float cm) {
+        if (Float.isInfinite(cm) || Float.isNaN(cm) || cm <= 0f || cm > 500f) {
+            return "--";
+        }
+        return String.format(Locale.US, "%.1f", cm);
     }
 
     private void appendStatus(String text) {
@@ -426,6 +731,38 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         if (!text.startsWith("Moving")) {
             moveInFlight = false;
         }
+
+        // Fallback resilience for mixed text logs or CLI echoes
+        Matcher mArrow = OBS_ARROW_PATTERN.matcher(text);
+        if (mArrow.find()) {
+            try {
+                int obsNum = Integer.parseInt(mArrow.group(1));
+                String dir = mArrow.group(2).toUpperCase(Locale.US);
+                int sym = mArrow.group(3) != null ? Integer.parseInt(mArrow.group(3)) : (dir.equals("LEFT") ? 39 : 38);
+                float conf = mArrow.group(4) != null ? Float.parseFloat(mArrow.group(4)) : 0.95f;
+                onT2Arrow(obsNum, dir, sym, conf);
+            } catch (Exception ignored) {}
+        }
+
+        Matcher mT2Comp = T2_COMPLETE_PATTERN.matcher(text);
+        if (mT2Comp.find()) {
+            float t = 0f;
+            try {
+                if (mT2Comp.group(1) != null) t = Float.parseFloat(mT2Comp.group(1));
+            } catch (Exception ignored) {}
+            onT2State("COMPLETE", 8, "Sprint Completed", t);
+        }
+
+        Matcher mT1Comp = T1_COMPLETE_PATTERN.matcher(text);
+        if (mT1Comp.find()) {
+            updateT1StateBadge("COMPLETED");
+            stopT1Timer();
+        }
+
+        Matcher mFsm = FSM_TRANSITION_PATTERN.matcher(text);
+        if (mFsm.find()) {
+            updateT1StateBadge(mFsm.group(1));
+        }
     }
 
     @Override
@@ -454,6 +791,88 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     @Override
     public void onTarget(int obstacleId, int symbolId) {
         arenaView.setRecognizedSymbol(obstacleId, symbolId);
+        String entry = String.format(Locale.US, "Obs %d: #%d", obstacleId, symbolId);
+        t1RecognizedTargets.put(obstacleId, entry);
+        t1TargetsText.setText("🎯 Targets (" + t1RecognizedTargets.size() + "): " + TextUtils.join(" | ", t1RecognizedTargets.values()));
+    }
+
+    @Override
+    public void onT1State(String state, int currentLeg, int totalLegs, int obsId, String face, float remDistCm) {
+        updateT1StateBadge(state);
+        if (totalLegs > 0) {
+            String obsStr = (obsId > 0) ? ("Obs " + obsId + " (" + face + ")") : "--";
+            t1LegText.setText(String.format(Locale.US, "Leg %d/%d (%s) | Rem: %.0f cm",
+                    currentLeg, totalLegs, obsStr, remDistCm));
+        } else {
+            t1LegText.setText("Leg: Ready | Target: --");
+        }
+
+        if (state.equalsIgnoreCase("MISSION_COMPLETE") || state.equalsIgnoreCase("DONE") || state.equalsIgnoreCase("COMPLETED")) {
+            stopT1Timer();
+        } else if (state.equalsIgnoreCase("ESTOP") || state.equalsIgnoreCase("IDLE")) {
+            stopT1Timer();
+        } else if (!t1TimerRunning && (state.equalsIgnoreCase("NAVIGATING") || state.equalsIgnoreCase("SAMPLING_TARGET") || state.equalsIgnoreCase("ORBIT_RECOVERY"))) {
+            startT1Timer();
+        }
+    }
+
+    @Override
+    public void onT1Target(int obsId, int symbolId, String symbolName, float confidence, String face) {
+        arenaView.setRecognizedSymbol(obsId, symbolId);
+        String entry = String.format(Locale.US, "Obs %d (%s): %s (#%d, %.0f%%)",
+                obsId, face, symbolName, symbolId, confidence * 100f);
+        t1RecognizedTargets.put(obsId, entry);
+        t1TargetsText.setText("🎯 Targets (" + t1RecognizedTargets.size() + "): " + TextUtils.join(" | ", t1RecognizedTargets.values()));
+    }
+
+    @Override
+    public void onT2State(String state, int stepIdx, String stepDesc, float elapsedSec) {
+        updateT2StateBadge(state);
+        t2StepTitle.setText("Pipeline: " + stepDesc);
+        updateT2PipelineStep(stepIdx);
+        t2ManeuverText.setText("Maneuver: " + stepDesc);
+
+        if (state.equalsIgnoreCase("COMPLETE") || state.equalsIgnoreCase("DONE") || state.equalsIgnoreCase("COMPLETED") || stepIdx >= 8) {
+            stopT2Timer();
+            if (elapsedSec > 0f) {
+                t2TimerText.setText(String.format(Locale.US, "%.2fs", elapsedSec));
+            }
+        } else if (state.equalsIgnoreCase("IDLE")) {
+            resetT2Timer();
+        } else if (state.equalsIgnoreCase("ESTOP")) {
+            stopT2Timer();
+        } else if (!t2TimerRunning && stepIdx >= 1 && stepIdx <= 7) {
+            startT2Timer();
+        }
+    }
+
+    @Override
+    public void onT2Arrow(int obsNum, String direction, int symbolId, float confidence) {
+        String dirUpper = direction.toUpperCase(Locale.US);
+        boolean isLeft = dirUpper.contains("LEFT");
+        String arrowDisplay = isLeft ? "⬅ LEFT" : "➡ RIGHT";
+        int color = getColor(isLeft ? R.color.arrow_left : R.color.arrow_right);
+        String details = String.format(Locale.US, "Symbol: %d | Conf: %.0f%%", symbolId, confidence * 100f);
+
+        if (obsNum == 1) {
+            t2Obs1Arrow.setText(arrowDisplay);
+            t2Obs1Arrow.setTextColor(color);
+            t2Obs1Details.setText(details);
+        } else if (obsNum == 2) {
+            t2Obs2Arrow.setText(arrowDisplay);
+            t2Obs2Arrow.setTextColor(color);
+            t2Obs2Details.setText(details);
+        }
+    }
+
+    @Override
+    public void onSensors(float usCm, float irLeftCm, float irRightCm) {
+        String usStr = formatSensorDist(usCm);
+        String irLStr = formatSensorDist(irLeftCm);
+        String irRStr = formatSensorDist(irRightCm);
+
+        t1SensorText.setText(String.format(Locale.US, "US: %s cm | IR: %s / %s cm", usStr, irLStr, irRStr));
+        t2SensorText.setText(String.format(Locale.US, "Ultrasonic: %s cm", usStr));
     }
 
     @Override
@@ -466,6 +885,8 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         appendStatus("Disconnected (" + reason + ")");
         moveInFlight = false; // don't carry stale in-flight state into the next connection
         linkConnected = false;
+        stopT1Timer();
+        stopT2Timer();
         updateLinkStatus();
         showDevicePicker();
     }
@@ -473,6 +894,10 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        joystickHandler.removeCallbacksAndMessages(null);
+        linkStatusHandler.removeCallbacksAndMessages(null);
+        t1TimerHandler.removeCallbacksAndMessages(null);
+        t2TimerHandler.removeCallbacksAndMessages(null);
         linkService.shutdown();
     }
 }

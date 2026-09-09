@@ -15,9 +15,19 @@ classic Bluetooth SPP to the Raspberry Pi's `android_bridge_node`
 
 - `MainActivity` — single screen: a list of already-**paired** Bluetooth
   devices to connect to, then a control panel with a **3-tab mode switcher**:
-  - **Manual Tab** (`[Manual]`): displays `JoystickView` for continuous, low-latency manual driving (Checklist C.2–C.10).
-  - **Task 1 Tab** (`[Task 1]`): displays mission summary and green `START TASK 1 (EXPLORE)` button (sends `START` to activate autonomous TSP exploration).
-  - **Task 2 Tab** (`[Task 2]`): displays sprint summary and blue `START TASK 2 (FASTEST CAR)` button (sends `START_TASK2` to trigger reactive slalom sprint & carpark return).
+  - **Manual Tab** (`[Manual]`): Sub-toggle between `Drive` (joystick continuous control) and `Arena` (2D obstacle editor with `Add Obstacle`, `Clear`, and `Send Arena`).
+  - **Task 1 Tab** (`[Task 1]`): Full mission exploration dashboard:
+    - Dynamic 2D Arena map reparented live with robot pose, obstacles, and recognized target symbols.
+    - FSM State badge (`IDLE`, `PLANNING`, `NAVIGATING`, `SAMPLING_TARGET`, `ORBIT_RECOVERY`, `COMPLETED`, `ESTOP`).
+    - 6-minute competition stopwatch (`00:00 / 06:00`) with visual warning threshold.
+    - Leg tracker (`Leg X/Y | Rem: ZZ cm`) and real-time ultrasonic/IR proximity indicators.
+    - Target recognition consensus card showing confirmed symbol IDs and confidence scores.
+  - **Task 2 Tab** (`[Task 2]`): Fastest Car reactive slalom sprint dashboard:
+    - Hundredth-of-a-second sprint stopwatch (`00.00s`), synced and locked to ROS clock on completion.
+    - Sprint phase badge (`APPROACH_OBS1`, `DETECT_ARROW1`, `SLALOM_OBS1`, etc.).
+    - Visual arrow detection cards for Obstacle 1 and Obstacle 2 with direction (`⬅ LEFT` / `➡ RIGHT`), class ID, and confidence.
+    - 7-step pipeline progress stepper with active (`▶`), completed (`✓`), and pending highlighting.
+    - Ultrasonic range and active maneuver telemetry.
   - **Global Controls**: persistent `STOP` button (sends `STP` E-STOP) and `Reset` button (sends `RESET`), accessible in all modes.
   - **Status Log**: scrolling display for curated `STATUS: ...`, `DONE`, live `🎯 TARGET: ...` recognitions, and `📍 POSE: ...` telemetry.
 - `BluetoothLinkService` — owns the `BluetoothSocket` connect + read/write

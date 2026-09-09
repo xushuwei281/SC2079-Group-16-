@@ -90,6 +90,26 @@ drift apart.
   - **Task 2 Mode**: `pixi run -e pi task2` (fastest car reactive sprint).
   - **Runtime Switching**: `android_bridge_node` routes `ALG:START` to `planner_node` and `STM:sp`/`SP` to `fastest_car_node` without node restarts.
 
+## Android Remote Control & Real-Time Dashboards (`android/`)
+
+- **Task 1 Real-Time Mission Dashboard**:
+  - **Live 2D Arena Map**: Single `ArenaView` instance dynamically reparented into `task1ArenaContainer` on tab switch, showing live dead-reckoned robot pose, obstacle positions, and target icons.
+  - **FSM State Badge**: Color-coded mission state pill (`IDLE`, `PLANNING`, `NAVIGATING`, `SAMPLING_TARGET`, `ORBIT_RECOVERY`, `MISSION_COMPLETE`, `ESTOP`).
+  - **Mission Stopwatch**: 6-minute competition countdown/elapsed timer (`00:00 / 06:00`), turns red after 5:00.
+  - **Leg & Distance Tracker**: Displays current leg progress and remaining distance (`Leg X/Y (Obs Z face) | Rem: W cm`).
+  - **Target Consensus Card**: Displays recognized obstacle targets with symbol IDs, labels, and confidence percentages.
+  - **Proximity Telemetry**: Displays real-time ultrasonic and IR rangefinder readings.
+- **Task 2 Fastest Car Reactive Sprint Dashboard**:
+  - **Sprint Stopwatch**: High-precision hundredth-of-a-second stopwatch (`00.00s`), synchronised and locked to the robot ROS clock on completion.
+  - **Sprint State Badge**: Tracks active phase (`APPROACH_OBS1`, `DETECT_ARROW1`, `SLALOM_OBS1`, `APPROACH_OBS2`, `DETECT_ARROW2`, `ROUND_OBS2`, `PARK`, `COMPLETE`).
+  - **Dual Arrow Detection Cards**: Visual direction indicators (`⬅ LEFT` / `➡ RIGHT`) with symbol IDs and confidence scores for Obstacle 1 and Obstacle 2.
+  - **7-Step Pipeline Stepper**: Interactive visual stepper with `✓` green completed steps, `▶` active blue step, and gray pending steps.
+  - **Ultrasonic & Maneuver Row**: Real-time ultrasonic range (`US: XX.X cm`) and active maneuver descriptions.
+- **Shared Telemetry Protocol & Resilience**:
+  - `T1_STATE`, `T1_TARGET`, `T2_STATE`, `T2_ARROW`, and `SENSORS` structured wire formats.
+  - Regex fallback parser in `onStatusLine` catches legacy log formats if older nodes run in isolation.
+  - Zero memory leaks: all UI handler runnables and Bluetooth threads cleaned up in `onDestroy()`.
+
 
 ## Repo map
 

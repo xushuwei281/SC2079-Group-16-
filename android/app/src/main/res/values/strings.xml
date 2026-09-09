@@ -39,4 +39,12 @@
     <string name="link_status_live_now">Live — just connected</string>
     <string name="link_status_live">Live — last message %1$ds ago</string>
     <string name="link_status_stale">No response for %1$ds — check the Bluetooth link</string>
+
+    <!-- Task 1 / Task 2 Telemetry -->
+    <string name="timer_default_t1">00:00 / 06:00</string>
+    <string name="timer_default_t2">00:00.00 s</string>
+    <string name="state_idle">IDLE</string>
+    <string name="waiting_label">WAITING</string>
+    <string name="obs1_label">OBSTACLE 1</string>
+    <string name="obs2_label">OBSTACLE 2</string>
 </resources>

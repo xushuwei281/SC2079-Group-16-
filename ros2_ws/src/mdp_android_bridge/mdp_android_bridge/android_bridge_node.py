@@ -37,6 +37,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 import serial
+from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
 
 # Inbound Movement Mapping
@@ -102,6 +103,12 @@ class AndroidBridgeNode(Node):
         self._last_pose_time: float = 0.0
         self._last_hires_pose_time: float = 0.0
 
+        # Sensor distance tracking (cm)
+        self._us_cm: float = -1.0
+        self._ir_l_cm: float = -1.0
+        self._ir_r_cm: float = -1.0
+        self._last_sensor_time: float = 0.0
+
         callback_group = ReentrantCallbackGroup()
 
         # Publishers
@@ -117,6 +124,18 @@ class AndroidBridgeNode(Node):
         )
         self._pose_sub = self.create_subscription(
             PoseStamped, "/robot_pose", self._on_pose, 10, callback_group=callback_group
+        )
+        self._telemetry_sub = self.create_subscription(
+            String, "/android/telemetry", self._on_telemetry, 10, callback_group=callback_group
+        )
+        self._us_sub = self.create_subscription(
+            Range, "/sensors/ultrasonic", self._on_us_range, 10, callback_group=callback_group
+        )
+        self._ir_l_sub = self.create_subscription(
+            Range, "/sensors/ir_left", self._on_ir_l_range, 10, callback_group=callback_group
+        )
+        self._ir_r_sub = self.create_subscription(
+            Range, "/sensors/ir_right", self._on_ir_r_range, 10, callback_group=callback_group
         )
 
         # Service Clients
@@ -327,6 +346,43 @@ class AndroidBridgeNode(Node):
     def _on_target(self, msg: String) -> None:
         """Forward target recognition results to the tablet (format: TARGET,<obs_id>,<symbol_id>)."""
         self.send_to_tablet(f"TARGET,{msg.data}")
+
+    def _on_telemetry(self, msg: String) -> None:
+        """Forward raw structured telemetry directly to the tablet."""
+        self.send_to_tablet(msg.data)
+
+    def _on_us_range(self, msg: Range) -> None:
+        """Track front ultrasonic sensor range and emit throttled SENSORS update."""
+        if msg.min_range <= msg.range <= msg.max_range:
+            self._us_cm = msg.range * 100.0
+        else:
+            self._us_cm = -1.0
+        self._maybe_send_sensors()
+
+    def _on_ir_l_range(self, msg: Range) -> None:
+        """Track front-left IR sensor range and emit throttled SENSORS update."""
+        if msg.min_range <= msg.range <= msg.max_range:
+            self._ir_l_cm = msg.range * 100.0
+        else:
+            self._ir_l_cm = -1.0
+        self._maybe_send_sensors()
+
+    def _on_ir_r_range(self, msg: Range) -> None:
+        """Track front-right IR sensor range and emit throttled SENSORS update."""
+        if msg.min_range <= msg.range <= msg.max_range:
+            self._ir_r_cm = msg.range * 100.0
+        else:
+            self._ir_r_cm = -1.0
+        self._maybe_send_sensors()
+
+    def _maybe_send_sensors(self) -> None:
+        """Stream SENSORS,<us_cm>,<ir_left_cm>,<ir_right_cm> at up to 4 Hz."""
+        now = time.monotonic()
+        if now - self._last_sensor_time >= 0.25:
+            self._last_sensor_time = now
+            self.send_to_tablet(
+                f"SENSORS,{self._us_cm:.1f},{self._ir_l_cm:.1f},{self._ir_r_cm:.1f}"
+            )
 
     def _on_pose(self, msg: PoseStamped) -> None:
         """Convert ROS PoseStamped to tablet format: ROBOT,<x>,<y>,<direction>."""

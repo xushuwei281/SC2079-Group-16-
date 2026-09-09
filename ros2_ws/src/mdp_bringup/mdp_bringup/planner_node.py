@@ -112,6 +112,13 @@ class PlannerNode(Node):
         self._mission_thread: Optional[threading.Thread] = None
         self._recognized_targets: dict[int, int] = {}
 
+        # Structured mission progress tracking for Android UI
+        self._current_leg_idx = 0
+        self._total_legs = 0
+        self._current_target_id = 0
+        self._current_target_face = "-"
+        self._current_rem_dist = 0.0
+
         # Live sensor distance tracking (in meters)
         self._us_range_m = float("inf")
         self._ir_left_range_m = float("inf")
@@ -123,6 +130,7 @@ class PlannerNode(Node):
         # Publishers
         self._status_pub = self.create_publisher(String, "/android/status", 10)
         self._target_pub = self.create_publisher(String, "/android/target", 10)
+        self._telemetry_pub = self.create_publisher(String, "/android/telemetry", 10)
         self._path_pub = self.create_publisher(Path, "/planner/path", 10)
         self._estop_pub = self.create_publisher(Empty, "/estop", 10)
 
@@ -230,6 +238,15 @@ class PlannerNode(Node):
         if reason:
             msg += f" ({reason})"
         self.get_logger().info(msg)
+        self._publish_t1_telemetry()
+
+    def _publish_t1_telemetry(self) -> None:
+        """Emit structured T1_STATE telemetry for tablet UI widgets."""
+        packet = (
+            f"T1_STATE,{self._state.value},{self._current_leg_idx},{self._total_legs},"
+            f"{self._current_target_id},{self._current_target_face},{self._current_rem_dist:.1f}"
+        )
+        self._telemetry_pub.publish(String(data=packet))
 
     def _on_estop(self, msg: Empty) -> None:
         """Emergency stop handler."""
@@ -357,6 +374,13 @@ class PlannerNode(Node):
         self._status_pub.publish(
             String(data=f"Plan Ready: {len(self._current_plan.legs)} targets, {self._current_plan.total_distance_cm:.0f}cm")
         )
+
+        self._current_leg_idx = 0
+        self._total_legs = len(self._current_plan.legs)
+        self._current_target_id = self._current_plan.legs[0].obstacle_id if self._current_plan.legs else 0
+        self._current_target_face = self._current_plan.legs[0].target_face if self._current_plan.legs else "-"
+        self._current_rem_dist = self._current_plan.total_distance_cm
+        self._publish_t1_telemetry()
 
         # Publish ROS Path for visualization
         self._publish_ros_path(self._current_plan)
@@ -548,6 +572,9 @@ class PlannerNode(Node):
                     )
                     self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: ID {sid} ({sname}) on {cand_face}"))
                     self._target_pub.publish(String(data=f"{leg.obstacle_id},{sid}"))
+                    self._telemetry_pub.publish(
+                        String(data=f"T1_TARGET,{leg.obstacle_id},{sid},{sname},{conf:.2f},{cand_face}")
+                    )
                     return (sid, sname, conf)
                 elif is_marker:
                     self.get_logger().info(f"Adjacent face {cand_face} also has a marker. Checking next face...")
@@ -576,6 +603,11 @@ class PlannerNode(Node):
             if not self._is_executing:
                 self.get_logger().warn("Mission execution interrupted.")
                 break
+
+            self._current_leg_idx = i + 1
+            self._current_target_id = leg.obstacle_id
+            self._current_target_face = leg.target_face
+            self._current_rem_dist = float(getattr(leg, 'distance_cm', 0.0))
 
             self.get_logger().info(
                 f"\n>>> Executing Leg {i+1}/{len(self._current_plan.legs)} -> "
@@ -647,6 +679,9 @@ class PlannerNode(Node):
                     )
                     self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: ID {sid} ({sname})"))
                     self._target_pub.publish(String(data=f"{leg.obstacle_id},{sid}"))
+                    self._telemetry_pub.publish(
+                        String(data=f"T1_TARGET,{leg.obstacle_id},{sid},{sname},{conf:.2f},{leg.target_face}")
+                    )
                 elif is_marker:
                     self.get_logger().warn(
                         f"⚠️ Bull's Eye detected at Obstacle {leg.obstacle_id}! Target image is on adjacent face."
@@ -680,6 +715,7 @@ class PlannerNode(Node):
                 self._target_pub.publish(String(data=f"{leg.obstacle_id},{recognized_symbol}"))
 
         if self._is_executing:
+            self._current_rem_dist = 0.0
             self._transition_state(MissionState.MISSION_COMPLETE, "All obstacles visited")
             self.get_logger().info("=== ALL TARGETS VISITED SUCCESSFULLY ===")
             self._status_pub.publish(String(data="MISSION COMPLETE"))
@@ -690,6 +726,12 @@ class PlannerNode(Node):
         """Reset mission state."""
         self._is_executing = False
         self._current_plan = None
+        self._current_leg_idx = 0
+        self._total_legs = 0
+        self._current_target_id = 0
+        self._current_target_face = "-"
+        self._current_rem_dist = 0.0
+        self._transition_state(MissionState.IDLE, "Mission reset")
         self.get_logger().info("Mission reset.")
         self._status_pub.publish(String(data="Mission Reset"))
 

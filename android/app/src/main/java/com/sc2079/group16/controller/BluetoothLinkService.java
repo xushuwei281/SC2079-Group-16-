@@ -69,6 +69,21 @@ class BluetoothLinkService {
         // TARGET,<obstacle_id>,<symbol_id> -- a perception result relayed
         // from android_bridge_node's /android/target subscription.
         void onTarget(int obstacleId, int symbolId);
+
+        // T1_STATE,<state>,<current_leg>,<total_legs>,<obs_id>,<face>,<rem_dist_cm>
+        void onT1State(String state, int currentLeg, int totalLegs, int obsId, String face, float remDistCm);
+
+        // T1_TARGET,<obs_id>,<symbol_id>,<symbol_name>,<confidence>,<face>
+        void onT1Target(int obsId, int symbolId, String symbolName, float confidence, String face);
+
+        // T2_STATE,<state>,<step_idx>,<step_desc>,<elapsed_sec>
+        void onT2State(String state, int stepIdx, String stepDesc, float elapsedSec);
+
+        // T2_ARROW,<obs_num>,<LEFT|RIGHT>,<symbol_id>,<confidence>
+        void onT2Arrow(int obsNum, String direction, int symbolId, float confidence);
+
+        // SENSORS,<us_cm>,<ir_left_cm>,<ir_right_cm>
+        void onSensors(float usCm, float irLeftCm, float irRightCm);
     }
 
     private final Listener listener;
@@ -214,6 +229,16 @@ class BluetoothLinkService {
             parseHiResPose(text.substring("POSE,".length()));
         } else if (text.startsWith("TARGET,")) {
             parseTarget(text.substring("TARGET,".length()));
+        } else if (text.startsWith("T1_STATE,")) {
+            parseT1State(text.substring("T1_STATE,".length()));
+        } else if (text.startsWith("T1_TARGET,")) {
+            parseT1Target(text.substring("T1_TARGET,".length()));
+        } else if (text.startsWith("T2_STATE,")) {
+            parseT2State(text.substring("T2_STATE,".length()));
+        } else if (text.startsWith("T2_ARROW,")) {
+            parseT2Arrow(text.substring("T2_ARROW,".length()));
+        } else if (text.startsWith("SENSORS,")) {
+            parseSensors(text.substring("SENSORS,".length()));
         }
     }
 
@@ -305,6 +330,88 @@ class BluetoothLinkService {
             mainHandler.post(() -> listener.onTarget(obstacleId, symbolId));
         } catch (NumberFormatException ignored) {
             // Malformed line -- already visible via onDebug, nothing more to do.
+        }
+    }
+
+    // T1_STATE,<state>,<current_leg>,<total_legs>,<obs_id>,<face>,<rem_dist_cm>
+    private void parseT1State(String payload) {
+        String[] parts = payload.split(",");
+        if (parts.length < 5) {
+            return;
+        }
+        try {
+            String state = parts[0].trim();
+            int currentLeg = Integer.parseInt(parts[1].trim());
+            int totalLegs = Integer.parseInt(parts[2].trim());
+            int obsId = Integer.parseInt(parts[3].trim());
+            String face = parts[4].trim();
+            float remDistCm = parts.length > 5 ? Float.parseFloat(parts[5].trim()) : 0f;
+            mainHandler.post(() -> listener.onT1State(state, currentLeg, totalLegs, obsId, face, remDistCm));
+        } catch (Exception ignored) {
+        }
+    }
+
+    // T1_TARGET,<obs_id>,<symbol_id>,<symbol_name>,<confidence>,<face>
+    private void parseT1Target(String payload) {
+        String[] parts = payload.split(",");
+        if (parts.length < 5) {
+            return;
+        }
+        try {
+            int obsId = Integer.parseInt(parts[0].trim());
+            int symbolId = Integer.parseInt(parts[1].trim());
+            String symbolName = parts[2].trim();
+            float confidence = Float.parseFloat(parts[3].trim());
+            String face = parts[4].trim();
+            mainHandler.post(() -> listener.onT1Target(obsId, symbolId, symbolName, confidence, face));
+        } catch (Exception ignored) {
+        }
+    }
+
+    // T2_STATE,<state>,<step_idx>,<step_desc>,<elapsed_sec>
+    private void parseT2State(String payload) {
+        String[] parts = payload.split(",", 4);
+        if (parts.length < 4) {
+            return;
+        }
+        try {
+            String state = parts[0].trim();
+            int stepIdx = Integer.parseInt(parts[1].trim());
+            String stepDesc = parts[2].trim();
+            float elapsedSec = Float.parseFloat(parts[3].trim());
+            mainHandler.post(() -> listener.onT2State(state, stepIdx, stepDesc, elapsedSec));
+        } catch (Exception ignored) {
+        }
+    }
+
+    // T2_ARROW,<obs_num>,<LEFT|RIGHT>,<symbol_id>,<confidence>
+    private void parseT2Arrow(String payload) {
+        String[] parts = payload.split(",");
+        if (parts.length < 4) {
+            return;
+        }
+        try {
+            int obsNum = Integer.parseInt(parts[0].trim());
+            String direction = parts[1].trim().toUpperCase(java.util.Locale.US);
+            int symbolId = Integer.parseInt(parts[2].trim());
+            float confidence = Float.parseFloat(parts[3].trim());
+            mainHandler.post(() -> listener.onT2Arrow(obsNum, direction, symbolId, confidence));
+        } catch (Exception ignored) {
+        }
+    }
+
+    // SENSORS,<us_cm>,<ir_left_cm>,<ir_right_cm>
+    private void parseSensors(String payload) {
+        String[] parts = payload.split(",");
+        if (parts.length < 3) {
+            return;
+        }
+        try {
+            float usCm = Float.parseFloat(parts[0].trim());
+            float irLeftCm = Float.parseFloat(parts[1].trim());
+            float irRightCm = Float.parseFloat(parts[2].trim());
+            mainHandler.post(() -> listener.onSensors(usCm, irLeftCm, irRightCm));
+        } catch (Exception ignored) {
         }
     }
 

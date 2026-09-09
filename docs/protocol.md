@@ -25,6 +25,11 @@ byte to the screen).
 | RPi → Android | `DONE` | `DONE` | last movement command completed |
 | RPi → Android | `ROBOT,<x>,<y>,<dir>` | `ROBOT,<5>,<12>,<N>` | **Checklist C.10** live pose: `x`/`y` are grid cells `[0..19]`, `dir` ∈ `{N,S,E,W}`. Deliberately coarse (4 headings, 10cm cells) — this is the exact wire format the checklist grades, so don't change its shape without checking `docs/task1-fsm-and-orbit-recovery.md` §4.1. |
 | RPi → Android | `POSE,<x_cm>,<y_cm>,<yaw_deg>` | `POSE,52.3,118.7,133` | **Supplemental, non-checklist** full-precision pose, sent alongside `ROBOT` at up to `hires_pose_rate_hz` (`android_bridge_node`, default 10Hz) so the tablet's arena view can track smoothly through turns instead of only updating on 90°/10cm crossings. Purely additive — nothing consumes this for grading. |
+| RPi → Android | `T1_STATE,<state>,<current_leg>,<total_legs>,<obs_id>,<face>,<rem_dist_cm>` | `T1_STATE,NAVIGATING,1,5,3,N,45.2` | **Task 1 Autonomous State & Progress:** Emitted on FSM state transitions, leg starts, and waypoint progress. Updates tablet state badge, mission timer, and leg distance counter. |
+| RPi → Android | `T1_TARGET,<obs_id>,<symbol_id>,<symbol_name>,<confidence>,<face>` | `T1_TARGET,3,39,Arrow Left,0.92,N` | **Task 1 Target Classification:** Relayed on target recognition consensus and orbit recovery confirmation. Updates tablet targets card and 2D arena target icons. |
+| RPi → Android | `T2_STATE,<state>,<step_idx>,<step_desc>,<elapsed_sec>` | `T2_STATE,APPROACH_OBS1,1,Approaching Obstacle 1,2.45` | **Task 2 Sprint State & Stepper:** Emitted on sprint pipeline transitions (steps 1–8). Powers the 7-step progress stepper and millisecond-accurate sprint stopwatch. |
+| RPi → Android | `T2_ARROW,<obs_num>,<LEFT\|RIGHT>,<symbol_id>,<confidence>` | `T2_ARROW,1,LEFT,39,0.94` | **Task 2 Arrow Detection:** Real-time steering decision card for Obstacle 1 and 2. Drives the visual arrow indicators (`⬅ LEFT` / `➡ RIGHT`). |
+| RPi → Android | `SENSORS,<us_cm>,<ir_left_cm>,<ir_right_cm>` | `SENSORS,28.4,15.2,42.0` | **Throttled Proximity Telemetry (4 Hz):** Front ultrasonic, left IR, and right IR distance in cm for proximity display across all panels. |
 
 **Implementation note:** `android_bridge_node`
 (`ros2_ws/src/mdp_android_bridge/`) opens `/dev/rfcomm0` via `pyserial` —
