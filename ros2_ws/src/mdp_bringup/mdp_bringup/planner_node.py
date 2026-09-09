@@ -91,6 +91,7 @@ class PlannerNode(Node):
         self.declare_parameter("auto_start", True)
         self.declare_parameter("enable_collision_avoidance", True)
         self.declare_parameter("safety_stop_dist_cm", 12.0)
+        self.declare_parameter("recovery_backup_cm", 8.0)
         self.declare_parameter("recognition_timeout_s", 3.0)
         self.declare_parameter("enable_orbit_recovery", True)
 
@@ -121,6 +122,7 @@ class PlannerNode(Node):
 
         # Publishers
         self._status_pub = self.create_publisher(String, "/android/status", 10)
+        self._target_pub = self.create_publisher(String, "/android/target", 10)
         self._path_pub = self.create_publisher(Path, "/planner/path", 10)
         self._estop_pub = self.create_publisher(Empty, "/estop", 10)
 

@@ -79,6 +79,7 @@ class FastestCarNode(Node):
             ["FR045", "FC030", "FL090", "FC020", "FL090", "FC030", "FL045"],
         )
         self.declare_parameter("return_straight_cm", 80.0)
+        self.declare_parameter("carpark_y_cm", 20.0)
         self.declare_parameter("default_turn", "LEFT")
         self.declare_parameter("sample_retries", 3)
 
@@ -96,6 +97,7 @@ class FastestCarNode(Node):
         self._return_left_cmds = list(self.get_parameter("return_left_cmds").value)
         self._return_right_cmds = list(self.get_parameter("return_right_cmds").value)
         self._return_straight_cm = float(self.get_parameter("return_straight_cm").value)
+        self._carpark_y_cm = float(self.get_parameter("carpark_y_cm").value)
         self._default_turn = str(self.get_parameter("default_turn").value).upper()
         self._sample_retries = int(self.get_parameter("sample_retries").value)
 
@@ -418,7 +420,19 @@ class FastestCarNode(Node):
         # ---------------------------------------------------------------------
         self._transition(Task2State.PARK, "Returning to Carpark")
         self._status_pub.publish(String(data="Sprinting back to Carpark..."))
-        park_cmd = f"FC{int(self._return_straight_cm):03d}"
+
+        # Compute return distance: use live dead-reckoned y position if available,
+        # otherwise use the configured return_straight_cm fallback.
+        if self._current_y > (self._carpark_y_cm + 10.0):
+            dist_to_park = max(10.0, self._current_y - self._carpark_y_cm)
+            self.get_logger().info(
+                f"Odometry return: current_y={self._current_y:.1f}cm, carpark_y={self._carpark_y_cm:.1f}cm -> Return: {dist_to_park:.0f}cm"
+            )
+        else:
+            dist_to_park = self._return_straight_cm
+            self.get_logger().info(f"Fallback return distance: {dist_to_park:.0f}cm")
+
+        park_cmd = f"FC{int(dist_to_park):03d}"
         if not self._execute_move_list_sync([park_cmd], label="Park Sprint"):
             self.get_logger().warn("Park sprint aborted.")
             self._is_running = False
