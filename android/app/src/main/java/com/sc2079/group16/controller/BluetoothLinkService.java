@@ -59,9 +59,10 @@ class BluetoothLinkService {
         // crossing the link without SSHing into the Pi.
         void onDebug(String line);
 
-        // ROBOT,<x_cm>,<y_cm>,<heading_deg> -- live dead-reckoned pose,
-        // published by android_bridge_node's /robot_pose subscription
-        // after each completed move.
+        // ROBOT,<x>,<y>,<dir> -- live dead-reckoned pose (Checklist C.10
+        // format: x/y are grid cells 0-19, dir is N/E/S/W), published by
+        // android_bridge_node's /robot_pose subscription after each
+        // completed move. Delivered already converted to cm + degrees.
         void onRobotPose(float xCm, float yCm, float headingDeg);
 
         // TARGET,<obstacle_id>,<symbol_id> -- a perception result relayed
@@ -213,18 +214,59 @@ class BluetoothLinkService {
         }
     }
 
+    // android_bridge_node's default Checklist C.10 pose format wraps each
+    // field in literal angle brackets and reports grid cells [0..19] over
+    // the 200cm arena (10cm/cell) -- see docs/task1-fsm-and-orbit-recovery.md
+    // §4.1. This used to plain-Float.parseFloat("<5>"), which always threw
+    // and silently dropped every pose update (caught below), so the arena
+    // view never moved. Strip the brackets and convert to what ArenaView
+    // actually draws in: centimetres + degrees CCW from East.
+    private static final float CM_PER_GRID_CELL = 10f;
+
     private void parseRobotPose(String payload) {
         String[] parts = payload.split(",");
         if (parts.length != 3) {
             return;
         }
         try {
-            float x = Float.parseFloat(parts[0]);
-            float y = Float.parseFloat(parts[1]);
-            float heading = Float.parseFloat(parts[2]);
-            mainHandler.post(() -> listener.onRobotPose(x, y, heading));
+            float gridX = Float.parseFloat(stripBrackets(parts[0]));
+            float gridY = Float.parseFloat(stripBrackets(parts[1]));
+            float heading = parseHeading(parts[2]);
+            // +half a cell so the marker sits at the cell's center rather
+            // than its corner.
+            float xCm = gridX * CM_PER_GRID_CELL + CM_PER_GRID_CELL / 2f;
+            float yCm = gridY * CM_PER_GRID_CELL + CM_PER_GRID_CELL / 2f;
+            mainHandler.post(() -> listener.onRobotPose(xCm, yCm, heading));
         } catch (NumberFormatException ignored) {
             // Malformed line -- already visible via onDebug, nothing more to do.
+        }
+    }
+
+    private static String stripBrackets(String field) {
+        String trimmed = field.trim();
+        if (trimmed.length() >= 2 && trimmed.startsWith("<") && trimmed.endsWith(">")) {
+            return trimmed.substring(1, trimmed.length() - 1);
+        }
+        return trimmed;
+    }
+
+    /** Accepts a Checklist C.10 cardinal letter (N/E/S/W, matching
+     * ArenaView's "degrees CCW from East" convention) or, if
+     * android_bridge_node's direction_as_cardinal param is ever set False,
+     * a plain numeric heading in degrees. */
+    private static float parseHeading(String field) {
+        String value = stripBrackets(field).toUpperCase(java.util.Locale.US);
+        switch (value) {
+            case "E":
+                return 0f;
+            case "N":
+                return 90f;
+            case "W":
+                return 180f;
+            case "S":
+                return 270f;
+            default:
+                return Float.parseFloat(value);
         }
     }
 
