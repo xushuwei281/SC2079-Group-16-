@@ -22,6 +22,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -257,6 +258,9 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         findViewById(R.id.clearObstaclesButton).setOnClickListener(v -> arenaView.clearObstacles());
         findViewById(R.id.sendArenaButton).setOnClickListener(v -> sendArenaLayout());
         findViewById(R.id.clearLogsButton).setOnClickListener(v -> statusTextView.setText(""));
+        Switch verboseLogSwitch = findViewById(R.id.verboseLogSwitch);
+        verboseLogSwitch.setChecked(showTelemetryLogs);
+        verboseLogSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> showTelemetryLogs = isChecked);
 
         deviceListView.setOnItemClickListener(
                 (parent, view, position, id) -> connectTo(bondedDevices.get(position)));
@@ -771,22 +775,38 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         moveInFlight = false;
     }
 
+    // Default off: ROBOT/POSE/SENSORS stream ~20Hz and flood the status log
+    // if shown. Toggled live via verboseLogSwitch (see onCreate).
+    private boolean showTelemetryLogs = false;
+    private static final String[] HIGH_FREQUENCY_PREFIXES = {"← ROBOT,", "← POSE,", "← SENSORS,"};
+
+    private boolean isHighFrequencyTelemetry(String line) {
+        for (String prefix : HIGH_FREQUENCY_PREFIXES) {
+            if (line.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public void onDebug(String line) {
-        appendStatus(line);
         // Any actual inbound traffic (not our own "queuing"/"→ sent" echoes)
         // is proof the Pi side is alive and talking back -- reset the
-        // staleness clock immediately rather than waiting for the next tick.
+        // staleness clock immediately rather than waiting for the next tick,
+        // regardless of whether this line is actually displayed below.
         if (line.startsWith("← ")) {
             markLinkAlive();
         }
+        if (!showTelemetryLogs && isHighFrequencyTelemetry(line)) {
+            return;
+        }
+        appendStatus(line);
     }
 
-    /** ROBOT/POSE/SENSORS are deliberately excluded from the onDebug echo
-     * (BluetoothLinkService.HIGH_FREQUENCY_PREFIXES) since they fire ~20Hz
-     * and flooded the status log -- but they're still real inbound traffic,
-     * so their callbacks (this one and onSensors) must mark liveness
-     * themselves rather than relying on onDebug to have seen them. */
+    /** ROBOT/POSE/SENSORS liveness must not depend on showTelemetryLogs --
+     * onRobotPose/onSensors below mark liveness themselves too, since those
+     * structured callbacks fire independently of whatever onDebug displays. */
     private void markLinkAlive() {
         lastLinkRxAtMillis = System.currentTimeMillis();
         updateLinkStatus();

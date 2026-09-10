@@ -33,6 +33,7 @@
     <string name="clear_obstacles_button">Clear</string>
     <string name="send_arena_button">Send to Robot</string>
     <string name="clear_logs_button">Clear</string>
+    <string name="verbose_log_label">POSE/SENSORS</string>
 
     <!-- Link liveness indicator -->
     <string name="link_status_not_connected">Not connected</string>

@@ -650,6 +650,20 @@
                 style="@style/TextAppearance.Label"
                 android:textSize="16sp" />
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/verbose_log_label"
+                style="@style/TextAppearance.Label"
+                android:textSize="11sp"
+                android:layout_marginEnd="4dp" />
+
+            <Switch
+                android:id="@+id/verboseLogSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp" />
+
             <Button
                 android:id="@+id/clearLogsButton"
                 android:layout_width="wrap_content"
