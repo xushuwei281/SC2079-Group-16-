@@ -383,7 +383,14 @@ class SerialBridgeNode(Node):
                 parts = payload.split(",")
                 self._x = float(parts[0]) / 100.0
                 self._y = float(parts[1]) / 100.0
-                self._yaw = math.radians(float(parts[2]))
+                # STM32's world_deg increases for a physical right (CW) turn --
+                # confirmed empirically (gyro zeroed, real right turn: 0 -> +3).
+                # Everything else in this pipeline (the nominal-kinematics
+                # fallback below, the joystick's angle math) uses the opposite
+                # convention: East=0, increasing = CCW. Reflect through the
+                # fixed point at 90 deg (the calibrated "facing North" pose)
+                # to convert one to the other.
+                self._yaw = math.radians(180.0 - float(parts[2]))
                 if len(parts) >= 6:
                     us_m = float(parts[3]) / 100.0
                     ir1_m = float(parts[4]) / 100.0
@@ -408,8 +415,12 @@ class SerialBridgeNode(Node):
                 if is_backward and dist_m > 0:
                     dist_m = -dist_m
 
-                # STM32 gyro heading is relative to the calibrated G0 baseline (North = initial_yaw)
-                world_yaw = self._initial_yaw + measured_yaw
+                # STM32 gyro heading is relative to the calibrated G0 baseline
+                # (North = initial_yaw). Subtract, not add: this raw value
+                # follows the STM32's right-turn-increases convention, the
+                # opposite of this pipeline's East=0/CCW-positive convention
+                # (see the FIN:POS branch above for how that was confirmed).
+                world_yaw = self._initial_yaw - measured_yaw
                 self._x += dist_m * math.cos(world_yaw)
                 self._y += dist_m * math.sin(world_yaw)
                 self._yaw = world_yaw
@@ -527,7 +538,9 @@ class SerialBridgeNode(Node):
             if len(parts) >= 3:
                 self._x = float(parts[0]) / 100.0
                 self._y = float(parts[1]) / 100.0
-                self._yaw = math.radians(float(parts[2]))
+                # Same STM32-to-pipeline sign correction as the FIN:POS branch
+                # in _update_and_publish_pose -- see the comment there.
+                self._yaw = math.radians(180.0 - float(parts[2]))
                 self._yaw = (self._yaw + math.pi) % (2.0 * math.pi) - math.pi
                 self._publish_current_pose()
             if len(parts) >= 6:

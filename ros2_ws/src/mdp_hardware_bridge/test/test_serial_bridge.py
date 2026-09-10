@@ -168,7 +168,9 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.status, "FIN:50.2,0.4")
         self.assertAlmostEqual(self.node._x, 0.502, places=3)
-        self.assertAlmostEqual(self.node._yaw, math.radians(0.4), places=3)
+        # world_yaw = initial_yaw - measured_yaw (STM32's raw heading
+        # increases for a right/CW turn; this pipeline is CCW-positive).
+        self.assertAlmostEqual(self.node._yaw, math.radians(-0.4), places=3)
 
     @patch("serial.Serial")
     def test_plain_fin_falls_back_to_nominal_pose(self, mock_serial_cls):
@@ -213,7 +215,8 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.assertEqual(result.status, "FIN:POS,65.4,120.2,89.5,25,18,45")
         self.assertAlmostEqual(self.node._x, 0.654, places=3)
         self.assertAlmostEqual(self.node._y, 1.202, places=3)
-        self.assertAlmostEqual(self.node._yaw, math.radians(89.5), places=3)
+        # yaw = 180 - world_deg (see _update_and_publish_pose's FIN:POS branch)
+        self.assertAlmostEqual(self.node._yaw, math.radians(90.5), places=3)
 
     @patch("serial.Serial")
     def test_tlm_stream_during_moves(self, mock_serial_cls):
@@ -250,7 +253,8 @@ class TestSerialBridgeNode(unittest.TestCase):
 
         self.assertAlmostEqual(self.node._x, 0.225, places=3)
         self.assertAlmostEqual(self.node._y, 0.210, places=3)
-        self.assertAlmostEqual(self.node._yaw, math.radians(88.0), places=3)
+        # yaw = 180 - world_deg (see _handle_telemetry_line's sign correction)
+        self.assertAlmostEqual(self.node._yaw, math.radians(92.0), places=3)
 
 
 if __name__ == "__main__":
