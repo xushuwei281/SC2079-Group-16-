@@ -213,11 +213,27 @@ class BluetoothLinkService {
         }
     }
 
+    // These stream continuously (roughly 20Hz, whether or not the robot is
+    // actually moving) -- echoing every line via onDebug flooded the status
+    // log to the point of being unreadable. Their data still fully reaches
+    // the UI via the structured callbacks below (onRobotPose/onSensors/...);
+    // this only suppresses the raw text echo, not the telemetry itself.
+    private static final String[] HIGH_FREQUENCY_PREFIXES = {"ROBOT,", "POSE,", "SENSORS,"};
+
     private void dispatchLine(String text) {
         if (text.isEmpty()) {
             return;
         }
-        mainHandler.post(() -> listener.onDebug("← " + text));
+        boolean isHighFrequencyTelemetry = false;
+        for (String prefix : HIGH_FREQUENCY_PREFIXES) {
+            if (text.startsWith(prefix)) {
+                isHighFrequencyTelemetry = true;
+                break;
+            }
+        }
+        if (!isHighFrequencyTelemetry) {
+            mainHandler.post(() -> listener.onDebug("← " + text));
+        }
         if (text.equals("DONE")) {
             mainHandler.post(listener::onDone);
         } else if (text.startsWith("STATUS,")) {

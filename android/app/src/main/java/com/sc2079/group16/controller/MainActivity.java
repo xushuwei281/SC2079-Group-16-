@@ -778,14 +778,24 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         // is proof the Pi side is alive and talking back -- reset the
         // staleness clock immediately rather than waiting for the next tick.
         if (line.startsWith("← ")) {
-            lastLinkRxAtMillis = System.currentTimeMillis();
-            updateLinkStatus();
+            markLinkAlive();
         }
+    }
+
+    /** ROBOT/POSE/SENSORS are deliberately excluded from the onDebug echo
+     * (BluetoothLinkService.HIGH_FREQUENCY_PREFIXES) since they fire ~20Hz
+     * and flooded the status log -- but they're still real inbound traffic,
+     * so their callbacks (this one and onSensors) must mark liveness
+     * themselves rather than relying on onDebug to have seen them. */
+    private void markLinkAlive() {
+        lastLinkRxAtMillis = System.currentTimeMillis();
+        updateLinkStatus();
     }
 
     @Override
     public void onRobotPose(float xCm, float yCm, float headingDeg) {
         arenaView.setRobotPose(xCm, yCm, headingDeg);
+        markLinkAlive();
     }
 
     @Override
@@ -873,6 +883,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
 
         t1SensorText.setText(String.format(Locale.US, "US: %s cm | IR: %s / %s cm", usStr, irLStr, irRStr));
         t2SensorText.setText(String.format(Locale.US, "Ultrasonic: %s cm", usStr));
+        markLinkAlive();
     }
 
     @Override
