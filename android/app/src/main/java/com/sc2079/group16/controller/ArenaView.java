@@ -71,6 +71,9 @@ class ArenaView extends View {
     private final Paint obstacleTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint robotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint robotHeadingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint axisLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+    private static final int AXIS_LABEL_STEP_CM = 10; // marks at 10, 20, ..., 200
 
     private Obstacle draggingObstacle;
     private float dragDownPx;
@@ -94,6 +97,7 @@ class ArenaView extends View {
         robotPaint.setColor(context.getColor(R.color.status_accent_fill)); // reserved for live/info markers
         robotHeadingPaint.setColor(Color.WHITE);
         robotHeadingPaint.setStrokeWidth(6f);
+        axisLabelPaint.setColor(context.getColor(R.color.text_secondary));
 
         minTouchRadiusPx = 24f * context.getResources().getDisplayMetrics().density;
     }
@@ -105,6 +109,7 @@ class ArenaView extends View {
         arenaLeftPx = (w - arenaPixelSize) / 2f;
         arenaTopPx = (h - arenaPixelSize) / 2f;
         obstacleTextPaint.setTextSize(arenaPixelSize * 0.03f);
+        axisLabelPaint.setTextSize(arenaPixelSize * 0.018f);
     }
 
     // ---- Public API, called from MainActivity ------------------------------
@@ -188,12 +193,38 @@ class ArenaView extends View {
             canvas.drawLine(arenaLeftPx, y, arenaLeftPx + arenaPixelSize, y, gridPaint);
         }
         canvas.drawRect(arenaLeftPx, arenaTopPx, arenaLeftPx + arenaPixelSize, arenaTopPx + arenaPixelSize, borderPaint);
+        drawAxisLabels(canvas);
 
         for (Obstacle o : obstacles) {
             drawObstacle(canvas, o);
         }
 
         drawRobot(canvas);
+    }
+
+    /** Cm scale marks along the bottom (X) and left (Y) edges, at
+     * AXIS_LABEL_STEP_CM intervals -- lets you read an obstacle's
+     * approximate position off the grid without tapping it. */
+    private void drawAxisLabels(Canvas canvas) {
+        float padding = axisLabelPaint.getTextSize() * 0.9f;
+
+        axisLabelPaint.setTextAlign(Paint.Align.CENTER);
+        for (int xCm = AXIS_LABEL_STEP_CM; xCm <= ARENA_SIZE_CM; xCm += AXIS_LABEL_STEP_CM) {
+            canvas.drawText(
+                    String.valueOf(xCm),
+                    cmXToPx(xCm),
+                    arenaTopPx + arenaPixelSize - padding * 0.3f,
+                    axisLabelPaint);
+        }
+
+        axisLabelPaint.setTextAlign(Paint.Align.LEFT);
+        for (int yCm = AXIS_LABEL_STEP_CM; yCm <= ARENA_SIZE_CM; yCm += AXIS_LABEL_STEP_CM) {
+            canvas.drawText(
+                    String.valueOf(yCm),
+                    arenaLeftPx + padding * 0.2f,
+                    cmYToPx(yCm) + axisLabelPaint.getTextSize() * 0.35f,
+                    axisLabelPaint);
+        }
     }
 
     private void drawObstacle(Canvas canvas, Obstacle o) {
