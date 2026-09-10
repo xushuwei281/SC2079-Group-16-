@@ -1442,8 +1442,17 @@ void encoder_task(void *argument)
 
 		      float delta_s = 0.5f * (dL + dR);
 
-		      /* In arena convention: East=0 rad, North=+90 deg. Car starts facing North (angleNow=0 -> 90 deg). */
-		      float world_angle_deg = 90.0f + angleNow;
+		      /* In arena convention: East=0 rad, North=+90 deg, increasing
+		         CCW. Car starts facing North (angleNow=0 -> 90 deg).
+		         Subtract, not add: confirmed empirically on real hardware
+		         (gyro zeroed, physical right/CW turn: angleNow went 0 -> +3,
+		         i.e. angleNow increases for a CW turn) -- 90+angleNow would
+		         integrate robot_x_cm/y_cm in the mirrored direction. This is
+		         a DIFFERENT local variable from sendTlm()'s world_deg
+		         (still 90+angleNow, deliberately) -- the Pi corrects THAT
+		         one on receipt (see serial_bridge_node.py), so don't
+		         "fix" it to match this formula or heading will invert again. */
+		      float world_angle_deg = 90.0f - angleNow;
 		      float world_angle_rad = world_angle_deg * (3.1415926535f / 180.0f);
 
 		      robot_x_cm += delta_s * cosf(world_angle_rad);
