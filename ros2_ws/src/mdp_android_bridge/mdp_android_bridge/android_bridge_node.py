@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import math
 import os
+import termios
 import threading
 import time
 from typing import Optional, Tuple
@@ -175,7 +176,7 @@ class AndroidBridgeNode(Node):
                     self.get_logger().info(f"[Tablet -> Pi]: {line}")
                     self._dispatch(line)
 
-            except (serial.SerialException, OSError, TypeError, AttributeError) as exc:
+            except (serial.SerialException, OSError, termios.error, TypeError, AttributeError) as exc:
                 if not self._running.is_set():
                     break
                 self.get_logger().warn(f"RFCOMM connection lost: {exc}")
@@ -197,7 +198,7 @@ class AndroidBridgeNode(Node):
                 self.get_logger().info(f"Connected to Android tablet on {self._device}!")
                 self._send_locked("STATUS,Connected to Robot")
                 return True
-            except (serial.SerialException, OSError) as exc:
+            except (serial.SerialException, OSError, termios.error) as exc:
                 self._serial = None
                 return False
 
@@ -455,8 +456,23 @@ class AndroidBridgeNode(Node):
             line = f"{text}\n".encode("utf-8")
             self._serial.write(line)
             self._serial.flush()
-        except (serial.SerialException, OSError) as exc:
+        except (serial.SerialException, OSError, termios.error) as exc:
+            # termios.error (pyserial's posix backend raises this from
+            # tcdrain() inside flush()) is NOT an OSError subclass -- it
+            # slipped through this catch entirely and took the whole node
+            # down with it (confirmed from a real crash: a transient RFCOMM
+            # I/O error during a POSE send killed android_bridge_node via
+            # an uncaught exception propagating out of the executor).
             self.get_logger().warn(f"RFCOMM write error: {exc}")
+            # Inlined _close_serial()'s body rather than calling it: every
+            # caller of _send_locked already holds _serial_lock (it's a
+            # plain Lock, not reentrant), so calling the lock-acquiring
+            # _close_serial() from here would deadlock.
+            try:
+                self._serial.close()
+            except Exception:
+                pass
+            self._serial = None
 
     def destroy_node(self) -> None:
         try:

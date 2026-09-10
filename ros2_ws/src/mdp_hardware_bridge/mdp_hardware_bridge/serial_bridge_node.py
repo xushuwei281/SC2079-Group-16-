@@ -24,6 +24,7 @@ for a long-running batch send/wait.
 
 import math
 import os
+import termios
 import threading
 import time
 from typing import Optional
@@ -189,7 +190,7 @@ class SerialBridgeNode(Node):
                     self._active_port = port
                     self.get_logger().info(f"Connected to STM32 on {port} @ {self._baud}")
                     return True
-                except (serial.SerialException, OSError) as exc:
+                except (serial.SerialException, OSError, termios.error) as exc:
                     self.get_logger().debug(f"Failed to open {port}: {exc}")
 
             now = time.monotonic()
@@ -240,7 +241,7 @@ class SerialBridgeNode(Node):
             try:
                 self._serial.write(b"Q\x00\x00\x00\x00")
                 self._serial.flush()
-            except (serial.SerialException, OSError) as exc:
+            except (serial.SerialException, OSError, termios.error) as exc:
                 self.get_logger().error(f"Failed to write E-STOP to STM32: {exc}")
                 self._close_serial_locked()
 
@@ -254,7 +255,7 @@ class SerialBridgeNode(Node):
                     try:
                         self._serial.write(b"R\x00\x00\x00\x00")
                         self._serial.flush()
-                    except (serial.SerialException, OSError) as exc:
+                    except (serial.SerialException, OSError, termios.error) as exc:
                         self.get_logger().warn(f"Failed to send reset packet to STM32: {exc}")
             self._x = self._initial_x
             self._y = self._initial_y
@@ -320,7 +321,7 @@ class SerialBridgeNode(Node):
                         # Trigger packet -- starts execution of everything just queued.
                         self._serial.write(b"#\x00\x00\x00\x00")
                         self._serial.flush()
-                    except (serial.SerialException, OSError) as exc:
+                    except (serial.SerialException, OSError, termios.error) as exc:
                         self.get_logger().error(f"Serial write error: {exc}")
                         self._close_serial_locked()
                         response.success = False
@@ -564,7 +565,7 @@ class SerialBridgeNode(Node):
                 if isinstance(in_waiting, int) and in_waiting <= 0:
                     return
                 line_bytes = self._serial.readline()
-            except (serial.SerialException, OSError) as exc:
+            except (serial.SerialException, OSError, termios.error) as exc:
                 self.get_logger().error(f"Serial read error in poll: {exc}")
                 self._close_serial_locked()
                 return
@@ -586,7 +587,7 @@ class SerialBridgeNode(Node):
                     return ""
                 try:
                     chunk = self._serial.readline()  # bounded by serial timeout=0.5s
-                except (serial.SerialException, OSError) as exc:
+                except (serial.SerialException, OSError, termios.error) as exc:
                     self.get_logger().error(f"Serial read error: {exc}")
                     self._close_serial_locked()
                     return ""
