@@ -216,6 +216,14 @@ class BluetoothLinkService {
         }
     }
 
+    /** Test-mode hook: feeds a line through the exact same parsing path as
+     * real inbound serial data (onDebug echo + structured callbacks), without
+     * needing an actual connection. Lets the UI be exercised with synthetic
+     * telemetry offline. */
+    public void injectTestLine(String line) {
+        dispatchLine(line);
+    }
+
     private void dispatchLine(String text) {
         if (text.isEmpty()) {
             return;
@@ -276,8 +284,8 @@ class BluetoothLinkService {
             float xCm = gridX * CM_PER_GRID_CELL + CM_PER_GRID_CELL / 2f;
             float yCm = gridY * CM_PER_GRID_CELL + CM_PER_GRID_CELL / 2f;
             mainHandler.post(() -> listener.onRobotPose(xCm, yCm, heading));
-        } catch (NumberFormatException ignored) {
-            // Malformed line -- already visible via onDebug, nothing more to do.
+        } catch (NumberFormatException e) {
+            emitParseError("ROBOT", payload, e);
         }
     }
 
@@ -325,8 +333,8 @@ class BluetoothLinkService {
             float yCm = Float.parseFloat(parts[1].trim());
             float headingDeg = Float.parseFloat(parts[2].trim());
             mainHandler.post(() -> listener.onRobotPose(xCm, yCm, headingDeg));
-        } catch (NumberFormatException ignored) {
-            // Malformed line -- already visible via onDebug, nothing more to do.
+        } catch (NumberFormatException e) {
+            emitParseError("POSE", payload, e);
         }
     }
 
@@ -339,8 +347,8 @@ class BluetoothLinkService {
             int obstacleId = Integer.parseInt(parts[0].trim());
             int symbolId = Integer.parseInt(parts[1].trim());
             mainHandler.post(() -> listener.onTarget(obstacleId, symbolId));
-        } catch (NumberFormatException ignored) {
-            // Malformed line -- already visible via onDebug, nothing more to do.
+        } catch (NumberFormatException e) {
+            emitParseError("TARGET", payload, e);
         }
     }
 
@@ -358,7 +366,8 @@ class BluetoothLinkService {
             String face = parts[4].trim();
             float remDistCm = parts.length > 5 ? Float.parseFloat(parts[5].trim()) : 0f;
             mainHandler.post(() -> listener.onT1State(state, currentLeg, totalLegs, obsId, face, remDistCm));
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            emitParseError("T1_STATE", payload, e);
         }
     }
 
@@ -375,7 +384,8 @@ class BluetoothLinkService {
             float confidence = Float.parseFloat(parts[3].trim());
             String face = parts[4].trim();
             mainHandler.post(() -> listener.onT1Target(obsId, symbolId, symbolName, confidence, face));
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            emitParseError("T1_TARGET", payload, e);
         }
     }
 
@@ -391,7 +401,8 @@ class BluetoothLinkService {
             String stepDesc = parts[2].trim();
             float elapsedSec = Float.parseFloat(parts[3].trim());
             mainHandler.post(() -> listener.onT2State(state, stepIdx, stepDesc, elapsedSec));
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            emitParseError("T2_STATE", payload, e);
         }
     }
 
@@ -407,7 +418,8 @@ class BluetoothLinkService {
             int symbolId = Integer.parseInt(parts[2].trim());
             float confidence = Float.parseFloat(parts[3].trim());
             mainHandler.post(() -> listener.onT2Arrow(obsNum, direction, symbolId, confidence));
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            emitParseError("T2_ARROW", payload, e);
         }
     }
 
@@ -422,7 +434,8 @@ class BluetoothLinkService {
             float irLeftCm = Float.parseFloat(parts[1].trim());
             float irRightCm = Float.parseFloat(parts[2].trim());
             mainHandler.post(() -> listener.onSensors(usCm, irLeftCm, irRightCm));
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            emitParseError("SENSORS", payload, e);
         }
     }
 
@@ -440,6 +453,14 @@ class BluetoothLinkService {
             mainHandler.post(() -> listener.onEstopAlert(sensor, distCm, threshCm, reason));
         } catch (Exception ignored) {
         }
+    }
+
+    // Only shown by MainActivity when its Verbose Debug switch is on (see
+    // VERBOSE_ONLY_PREFIXES there) -- the raw "← <line>" echo above already
+    // makes every malformed message visible unconditionally; this just adds
+    // the "why it didn't parse" detail for anyone who turns verbose on.
+    private void emitParseError(String tag, String payload, Exception e) {
+        mainHandler.post(() -> listener.onDebug("⚠ PARSE ERROR (" + tag + "): " + payload + " -- " + e));
     }
 
     private void postDisconnected(String reason) {

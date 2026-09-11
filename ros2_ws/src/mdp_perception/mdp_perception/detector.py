@@ -21,7 +21,13 @@ import numpy as np
 # 37: Down Arrow
 # 38: Right Arrow
 # 39: Left Arrow
-# 40: Stop / Circle / Target Bullseye
+# 40: Stop (the "circle" training label)
+#
+# "target" is a distinct dataset class from "circle": it's the bullseye
+# orbit-recovery fixture, not a numbered competition symbol, so it does NOT
+# share ID 40 with Stop -- it gets sentinel 0 (outside 11-40) and is matched
+# by name, not by ID, wherever is_marker is decided (see perception_node's
+# _evaluate_consensus and planner_node's sample-result handling).
 _LABEL_TO_SYMBOL_ID: Dict[str, int] = {
     # Digits
     "1": 11, "2": 12, "3": 13, "4": 14, "5": 15,
@@ -35,9 +41,11 @@ _LABEL_TO_SYMBOL_ID: Dict[str, int] = {
     "down": 37,
     "right": 38,
     "left": 39,
-    # Target / Circle / Stop
+    # Stop sign
     "circle": 40,
-    "target": 40,
+    # Bullseye orbit-recovery marker -- not a competition symbol, sentinel
+    # value only (see module docstring above).
+    "target": 0,
 }
 
 

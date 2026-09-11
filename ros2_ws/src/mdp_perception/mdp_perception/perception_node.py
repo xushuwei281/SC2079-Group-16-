@@ -193,9 +193,9 @@ class PerceptionNode(Node):
                     if sid not in best_per_symbol or conf > best_per_symbol[sid][2]:
                         best_per_symbol[sid] = (name, sid, conf, box, f)
 
-        # 1. Real target symbols (IDs 11 to 39: digits, letters, arrows)
+        # 1. Real target symbols (IDs 11 to 40: digits, letters, arrows, Stop)
         target_candidates = [
-            (sid, count) for sid, count in symbol_counts.items() if 11 <= sid <= 39 and count >= min_frames
+            (sid, count) for sid, count in symbol_counts.items() if 11 <= sid <= 40 and count >= min_frames
         ]
         if target_candidates:
             target_candidates.sort(key=lambda item: (item[1], best_per_symbol[item[0]][2]), reverse=True)
@@ -205,18 +205,21 @@ class PerceptionNode(Node):
 
         # 2. Single high-confidence detection (conf >= 0.70)
         single_confident = [
-            (sid, data) for sid, data in best_per_symbol.items() if 11 <= sid <= 39 and data[2] >= 0.70
+            (sid, data) for sid, data in best_per_symbol.items() if 11 <= sid <= 40 and data[2] >= 0.70
         ]
         if single_confident:
             single_confident.sort(key=lambda item: item[1][2], reverse=True)
             name, sid, conf, box, f = single_confident[0][1]
             return (name, sid, conf, box, f, False)
 
-        # 3. Bull's Eye marker (symbol_id == 40 or name in ('target', 'circle'))
+        # 3. Bull's Eye marker -- the "target" class only. "circle" (Stop) is
+        # a real target handled above and must NOT be treated as a marker;
+        # they are distinct classes with distinct IDs (see detector.py's
+        # _LABEL_TO_SYMBOL_ID), so this checks the name, not a shared ID.
         marker_candidates = [
             (sid, count)
             for sid, count in symbol_counts.items()
-            if (sid == 40 or best_per_symbol[sid][0] in ("target", "circle")) and count >= min_frames
+            if best_per_symbol[sid][0] == "target" and count >= min_frames
         ]
         if marker_candidates:
             best_sid = marker_candidates[0][0]

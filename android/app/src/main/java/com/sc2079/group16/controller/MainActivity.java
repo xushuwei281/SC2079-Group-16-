@@ -15,11 +15,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.Switch;
@@ -31,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -59,11 +62,13 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private ListView deviceListView;
     private View devicePickerPanel;
     private View controlPanel;
-    private TextView connectedDeviceLabel;
+    private View disconnectButton;
     private View statusDot;
     private TextView linkStatusText;
     private TextView statusTextView;
     private ScrollView statusScrollView;
+    private View statusLogContainer;
+    private View statusLogDragHandle;
     private JoystickView joystickView;
     private View joystickPanel;
     private View arenaPanel;
@@ -155,6 +160,22 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private boolean linkConnected = false;
     private long lastLinkRxAtMillis = 0L;
 
+    // ---- Test mode: synthetic ROBOT, line for exercising the status log --
+    private static final char[] CARDINAL_DIRECTIONS = {'N', 'E', 'S', 'W'};
+    private final Random testRandom = new Random();
+
+    // ---- Draggable status log / map split -----------------------------
+    // Dragging statusLogDragHandle re-weights the visible mode panel (which
+    // hosts the map/arena view) against statusLogContainer within the same
+    // vertical LinearLayout, so pulling down hands space to the map and
+    // pulling up grows the log -- both sides share the pixel pool captured
+    // at drag start, so the split tracks the finger exactly.
+    private static final float MIN_STATUS_LOG_HEIGHT_DP = 90f;
+    private static final float MIN_MODE_PANEL_HEIGHT_DP = 160f;
+    private float dragStartRawY;
+    private float dragStartModePx;
+    private float dragStartStatusPx;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -163,11 +184,13 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         deviceListView = findViewById(R.id.deviceList);
         devicePickerPanel = findViewById(R.id.devicePickerPanel);
         controlPanel = findViewById(R.id.controlPanel);
-        connectedDeviceLabel = findViewById(R.id.connectedDeviceLabel);
+        disconnectButton = findViewById(R.id.disconnectButton);
         statusDot = findViewById(R.id.statusDot);
         linkStatusText = findViewById(R.id.linkStatusText);
         statusTextView = findViewById(R.id.statusText);
         statusScrollView = findViewById(R.id.statusScrollView);
+        statusLogContainer = findViewById(R.id.statusLogContainer);
+        statusLogDragHandle = findViewById(R.id.statusLogDragHandle);
         joystickView = findViewById(R.id.joystick);
         joystickPanel = findViewById(R.id.joystickPanel);
         arenaPanel = findViewById(R.id.arenaPanel);
@@ -245,12 +268,13 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         tabTask2.setOnClickListener(v -> setMode(Mode.TASK2));
 
         findViewById(R.id.refreshButton).setOnClickListener(v -> refreshDeviceList());
-        findViewById(R.id.disconnectButton).setOnClickListener(v -> disconnect());
+        disconnectButton.setOnClickListener(v -> disconnect());
 
         findViewById(R.id.startTask1Button).setOnClickListener(v -> {
             resetT1Views();
             startT1Timer();
             updateT1StateBadge("PLANNING");
+            appendStatus("Task 1 started");
             linkService.sendLine("START");
         });
 
@@ -258,6 +282,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             resetT2Views();
             startT2Timer();
             updateT2StateBadge("APPROACH_OBS1");
+            appendStatus("Task 2 started");
             linkService.sendLine("START_TASK2");
         });
 
@@ -265,6 +290,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             resetT1Views();
             resetT2Views();
             arenaView.setRobotPose(20f, 20f, 90f);
+            appendStatus("Reset sent");
             linkService.sendLine("RESET");
         });
 
@@ -273,6 +299,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             stopT2Timer();
             updateT1StateBadge("ESTOP");
             updateT2StateBadge("ESTOP");
+            appendStatus("STOP sent");
             linkService.sendLine("STP");
         });
 
@@ -282,9 +309,19 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         findViewById(R.id.clearObstaclesButton).setOnClickListener(v -> arenaView.clearObstacles());
         findViewById(R.id.sendArenaButton).setOnClickListener(v -> sendArenaLayout());
         findViewById(R.id.clearLogsButton).setOnClickListener(v -> statusTextView.setText(""));
+        findViewById(R.id.testModeButton).setOnClickListener(v -> {
+            // Grid cells 0..19 over the 200cm arena (10cm/cell), matching
+            // the real ROBOT, wire format -- see BluetoothLinkService.
+            int gridX = testRandom.nextInt(20);
+            int gridY = testRandom.nextInt(20);
+            char direction = CARDINAL_DIRECTIONS[testRandom.nextInt(CARDINAL_DIRECTIONS.length)];
+            linkService.injectTestLine("ROBOT, " + gridX + ", " + gridY + ", " + direction);
+        });
         Switch verboseLogSwitch = findViewById(R.id.verboseLogSwitch);
-        verboseLogSwitch.setChecked(showTelemetryLogs);
-        verboseLogSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> showTelemetryLogs = isChecked);
+        verboseLogSwitch.setChecked(verboseDebugMode);
+        verboseLogSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> verboseDebugMode = isChecked);
+
+        setupStatusLogDragHandle();
 
         deviceListView.setOnItemClickListener(
                 (parent, view, position, id) -> connectTo(bondedDevices.get(position)));
@@ -482,7 +519,9 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             Toast.makeText(this, "No obstacles placed yet", Toast.LENGTH_SHORT).show();
             return;
         }
+        int obstacleCount = arenaView.getObstacleCount();
         linkService.sendLine(arenaView.buildAlgCommand());
+        appendStatus("Map sent to robot (" + obstacleCount + " obstacle" + (obstacleCount == 1 ? "" : "s") + ")");
     }
 
     /**
@@ -568,11 +607,13 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private void showDevicePicker() {
         devicePickerPanel.setVisibility(View.VISIBLE);
         controlPanel.setVisibility(View.GONE);
+        disconnectButton.setVisibility(View.GONE);
     }
 
     private void showControlPanel() {
         devicePickerPanel.setVisibility(View.GONE);
         controlPanel.setVisibility(View.VISIBLE);
+        disconnectButton.setVisibility(View.VISIBLE);
         setMode(Mode.MANUAL);
     }
 
@@ -813,9 +854,77 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         return String.format(Locale.US, "%.1f", cm);
     }
 
+    /** Returns whichever mode panel (and its embedded map/arena view) is
+     * currently on screen -- the one whose weight the drag handle should
+     * resize alongside statusLogContainer. */
+    private View getVisibleModePanel() {
+        if (panelManual.getVisibility() == View.VISIBLE) return panelManual;
+        if (panelTask1.getVisibility() == View.VISIBLE) return panelTask1;
+        return panelTask2;
+    }
+
+    @SuppressLint("ClickableViewAccessibility") // drag surface, not a click target
+    private void setupStatusLogDragHandle() {
+        statusLogDragHandle.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    dragStartRawY = event.getRawY();
+                    dragStartModePx = getVisibleModePanel().getHeight();
+                    dragStartStatusPx = statusLogContainer.getHeight();
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    float totalPx = dragStartModePx + dragStartStatusPx;
+                    if (totalPx <= 0f) return true;
+                    float minStatusPx = dpToPx(MIN_STATUS_LOG_HEIGHT_DP);
+                    float minModePx = dpToPx(MIN_MODE_PANEL_HEIGHT_DP);
+                    float maxStatusPx = Math.max(minStatusPx, totalPx - minModePx);
+                    float deltaY = event.getRawY() - dragStartRawY;
+                    // Dragging the handle down shrinks the log (deltaY > 0
+                    // reduces newStatusPx), handing the freed space to the
+                    // map above; dragging up grows the log instead.
+                    float newStatusPx = dragStartStatusPx - deltaY;
+                    newStatusPx = Math.max(minStatusPx, Math.min(maxStatusPx, newStatusPx));
+                    applyLogSplitWeights(totalPx - newStatusPx, newStatusPx);
+                    return true;
+                }
+                default:
+                    return true;
+            }
+        });
+    }
+
+    /** Applies the same mode-panel weight to all three mode panels (only the
+     * visible one matters for layout, but keeping them in sync means the
+     * split survives switching between Manual/Task 1/Task 2 tabs). */
+    private void applyLogSplitWeights(float modeWeight, float statusWeight) {
+        setWeight(panelManual, modeWeight);
+        setWeight(panelTask1, modeWeight);
+        setWeight(panelTask2, modeWeight);
+        setWeight(statusLogContainer, statusWeight);
+    }
+
+    private void setWeight(View view, float weight) {
+        ViewGroup.LayoutParams rawParams = view.getLayoutParams();
+        if (rawParams instanceof LinearLayout.LayoutParams) {
+            LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) rawParams;
+            params.weight = weight;
+            view.setLayoutParams(params);
+        }
+    }
+
+    private float dpToPx(float dp) {
+        return dp * getResources().getDisplayMetrics().density;
+    }
+
+    private static final java.text.SimpleDateFormat STATUS_TIMESTAMP_FORMAT =
+            new java.text.SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
+
     private void appendStatus(String text) {
         Log.i("StatusLog", text); // mirror to logcat -- `adb logcat -s StatusLog` for debugging
-        statusTextView.append(text + "\n");
+        String line = verboseDebugMode
+                ? "[" + STATUS_TIMESTAMP_FORMAT.format(new java.util.Date()) + "] " + text
+                : text;
+        statusTextView.append(line + "\n");
         // statusTextView is wrap_content inside statusScrollView -- it's the
         // ScrollView that actually scrolls, not the TextView itself, so that's
         // what needs telling to follow new lines. Posted because the layout
@@ -833,7 +942,6 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
 
     @Override
     public void onConnected(BluetoothDevice device) {
-        connectedDeviceLabel.setText(getString(R.string.connected_prefix) + " " + safeName(device));
         appendStatus("Connected to " + safeName(device));
         linkConnected = true;
         lastLinkRxAtMillis = System.currentTimeMillis();
@@ -924,18 +1032,26 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         appendStatus("DONE");
     }
 
-    // Default off: ROBOT/POSE/SENSORS stream ~20Hz and flood the status log
-    // if shown. Toggled live via verboseLogSwitch (see onCreate).
-    private boolean showTelemetryLogs = false;
-    private static final String[] HIGH_FREQUENCY_PREFIXES = {"← ROBOT,", "← POSE,", "← SENSORS,"};
+    // Default off: the status log should read as a short list of things
+    // that actually happened (connected, map sent, task started, DONE,
+    // ESTOP...), not a wire dump. Every raw "← "/"→ "/"… queuing " line --
+    // continuous telemetry in (ROBOT/POSE/SENSORS ~20Hz), continuous
+    // joystick VEL: commands out, per-write send confirmations -- either
+    // duplicates a curated appendStatus() call made at the point of action
+    // or is pure protocol noise, so all of it (plus "⚠ PARSE ERROR" detail)
+    // is gated behind this one switch (verboseLogSwitch, see onCreate) and
+    // stacks with a per-line timestamp in appendStatus() when on.
+    private boolean verboseDebugMode = false;
 
-    private boolean isHighFrequencyTelemetry(String line) {
-        for (String prefix : HIGH_FREQUENCY_PREFIXES) {
-            if (line.startsWith(prefix)) {
-                return true;
-            }
+    // "→ CRASHED" is the one exception: an unexpected sendLine() crash has
+    // no curated counterpart anywhere else, so it must stay visible
+    // regardless of this switch (see BluetoothLinkService#sendLine).
+    private boolean isVerboseOnlyDebugLine(String line) {
+        if (line.startsWith("→ CRASHED")) {
+            return false;
         }
-        return false;
+        return line.startsWith("← ") || line.startsWith("→ ") || line.startsWith("… queuing ")
+                || line.startsWith("⚠ PARSE ERROR");
     }
 
     @Override
@@ -947,13 +1063,13 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         if (line.startsWith("← ")) {
             markLinkAlive();
         }
-        if (!showTelemetryLogs && isHighFrequencyTelemetry(line)) {
+        if (!verboseDebugMode && isVerboseOnlyDebugLine(line)) {
             return;
         }
         appendStatus(line);
     }
 
-    /** ROBOT/POSE/SENSORS liveness must not depend on showTelemetryLogs --
+    /** ROBOT/POSE/SENSORS liveness must not depend on verboseDebugMode --
      * onRobotPose/onSensors below mark liveness themselves too, since those
      * structured callbacks fire independently of whatever onDebug displays. */
     private void markLinkAlive() {

@@ -580,7 +580,7 @@ class PlannerNode(Node):
             sample_result = self._query_perception_sampler(leg.obstacle_id)
             if sample_result:
                 sid, sname, conf, is_marker = sample_result
-                if not is_marker and 11 <= sid <= 39:
+                if not is_marker and 11 <= sid <= 40:
                     self.get_logger().info(
                         f"🎉 Success! Target confirmed on {cand_face} face: Symbol {sid} ({sname}) [conf={conf:.2f}]"
                     )
@@ -688,7 +688,7 @@ class PlannerNode(Node):
 
             if sample_res:
                 sid, sname, conf, is_marker = sample_res
-                if not is_marker and 11 <= sid <= 39:
+                if not is_marker and 11 <= sid <= 40:
                     recognized_symbol = sid
                     self.get_logger().info(
                         f"⚡ Target Confirmed: Obstacle {leg.obstacle_id} -> Symbol {sid} ({sname}) [Conf: {conf:.2f}]"

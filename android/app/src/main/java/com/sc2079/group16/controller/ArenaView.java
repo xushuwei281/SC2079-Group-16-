@@ -31,7 +31,18 @@ class ArenaView extends View {
     static final int ARENA_SIZE_CM = 200;
     static final int OBSTACLE_SIZE_CM = 10;
     static final int ROBOT_SIZE_CM = 20;
-    private static final int GRID_CELLS = 10; // 20cm per cell
+    private static final int GRID_CELLS = 20; // 10cm per cell -- matches PLACEMENT_GRID_CM below,
+    // so a snapped obstacle always visibly fits inside one drawn grid cell.
+
+    // Obstacles snap their CENTER to the middle of a 10cm placement cell
+    // (5, 15, 25, ... 195) rather than to the grid lines themselves (0, 10,
+    // 20, ...) -- since the obstacle footprint is exactly one cell wide,
+    // centering it on the cell is what makes it land flush between two grid
+    // lines instead of straddling one.
+    private static final float PLACEMENT_GRID_CM = 10f;
+    private static final float PLACEMENT_HALF_CM = PLACEMENT_GRID_CM / 2f;
+    private static final float PLACEMENT_MIN_CM = PLACEMENT_HALF_CM; // first cell's center
+    private static final float PLACEMENT_MAX_CM = ARENA_SIZE_CM - PLACEMENT_HALF_CM; // last cell's center
 
     private static final char[] FACE_CYCLE = {'N', 'E', 'S', 'W'};
 
@@ -84,6 +95,8 @@ class ArenaView extends View {
     private final Paint robotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint robotHeadingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint axisLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dragCoordBadgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dragCoordTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private static final int AXIS_LABEL_STEP_CM = 10; // marks at 10, 20, ..., 200
     private static final float DRAG_MARGIN_CM = 15f; // Boundary margin allowing visual feedback for deletion outside arena
@@ -116,6 +129,9 @@ class ArenaView extends View {
         robotHeadingPaint.setColor(context.getColor(R.color.on_info));
         robotHeadingPaint.setStrokeWidth(6f);
         axisLabelPaint.setColor(context.getColor(R.color.text_secondary));
+        dragCoordBadgePaint.setColor(context.getColor(R.color.accent));
+        dragCoordTextPaint.setColor(context.getColor(R.color.on_accent));
+        dragCoordTextPaint.setTextAlign(Paint.Align.CENTER);
 
         minTouchRadiusPx = 24f * context.getResources().getDisplayMetrics().density;
     }
@@ -128,13 +144,70 @@ class ArenaView extends View {
         arenaTopPx = (h - arenaPixelSize) / 2f;
         obstacleTextPaint.setTextSize(arenaPixelSize * 0.03f);
         axisLabelPaint.setTextSize(arenaPixelSize * 0.018f);
+        dragCoordTextPaint.setTextSize(arenaPixelSize * 0.05f);
     }
 
     // ---- Public API, called from MainActivity ------------------------------
 
     void addObstacle() {
-        obstacles.add(new Obstacle(nextObstacleId++, ARENA_SIZE_CM / 2f, ARENA_SIZE_CM / 2f, 'N'));
+        float[] pos = findFreeGridPosition();
+        obstacles.add(new Obstacle(nextObstacleId++, pos[0], pos[1], 'N'));
         invalidate();
+    }
+
+    /** Finds a free 10cm grid cell for a newly added obstacle, spiralling
+     * outward ring-by-ring from the arena center so repeated taps of "Add
+     * Obstacle" fan obstacles out across the grid instead of stacking them
+     * on top of each other. Falls back to the center cell if every ring up
+     * to the arena's edge is somehow full. */
+    private float[] findFreeGridPosition() {
+        float centerCm = snapToGrid(ARENA_SIZE_CM / 2f);
+        if (!isCellOccupied(centerCm, centerCm)) {
+            return new float[] {centerCm, centerCm};
+        }
+
+        int maxRing = Math.round((PLACEMENT_MAX_CM - PLACEMENT_MIN_CM) / PLACEMENT_GRID_CM);
+        for (int ring = 1; ring <= maxRing; ring++) {
+            float offset = ring * PLACEMENT_GRID_CM;
+            for (float dy = -offset; dy <= offset; dy += PLACEMENT_GRID_CM) {
+                for (float dx = -offset; dx <= offset; dx += PLACEMENT_GRID_CM) {
+                    // Only the ring's perimeter -- interior cells were already
+                    // checked by smaller rings.
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) != offset) {
+                        continue;
+                    }
+                    float xCm = centerCm + dx;
+                    float yCm = centerCm + dy;
+                    if (xCm < PLACEMENT_MIN_CM || xCm > PLACEMENT_MAX_CM
+                            || yCm < PLACEMENT_MIN_CM || yCm > PLACEMENT_MAX_CM) {
+                        continue;
+                    }
+                    if (!isCellOccupied(xCm, yCm)) {
+                        return new float[] {xCm, yCm};
+                    }
+                }
+            }
+        }
+        return new float[] {centerCm, centerCm};
+    }
+
+    private boolean isCellOccupied(float xCm, float yCm) {
+        for (Obstacle o : obstacles) {
+            if (Math.round(o.xCm) == Math.round(xCm) && Math.round(o.yCm) == Math.round(yCm)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Snaps to the nearest placement cell's center (5, 15, 25, ... 195), then
+     * re-clamps: snapping a value near the arena edge (e.g. 198) can round
+     * outward past the last cell's center (195), which clampInsideArena
+     * alone wouldn't catch since it runs before snapping. */
+    static float snapToGrid(float valCm) {
+        float snapped = Math.round((valCm - PLACEMENT_HALF_CM) / PLACEMENT_GRID_CM) * PLACEMENT_GRID_CM
+                + PLACEMENT_HALF_CM;
+        return Math.max(PLACEMENT_MIN_CM, Math.min(snapped, PLACEMENT_MAX_CM));
     }
 
     void clearObstacles() {
@@ -251,6 +324,7 @@ class ArenaView extends View {
         }
 
         drawRobot(canvas);
+        drawDragCoordBadge(canvas);
     }
 
     /** Cm scale marks along the bottom (X) and left (Y) edges, at
@@ -325,6 +399,49 @@ class ArenaView extends View {
         canvas.drawLine(cx, cy, cmXToPx(noseXCm), cmYToPx(noseYCm), robotHeadingPaint);
     }
 
+    /** Small pill showing the obstacle's live (x, y) while it's being
+     * dragged; only drawn while draggingObstacle is non-null, so it appears
+     * on the first ACTION_MOVE and disappears the instant finishDrag() clears
+     * draggingObstacle on release. */
+    private void drawDragCoordBadge(Canvas canvas) {
+        if (draggingObstacle == null) {
+            return;
+        }
+        String label = String.format(Locale.US, "(%.0f, %.0f)", draggingObstacle.xCm, draggingObstacle.yCm);
+
+        float half = OBSTACLE_SIZE_CM / 2f;
+        float cx = cmXToPx(draggingObstacle.xCm);
+        // Cleared by finger size (minTouchRadiusPx), not the obstacle's own
+        // cell size -- a fingertip is comfortably wider than one grid cell,
+        // so a cell-relative gap still left the badge tucked under it.
+        float gapPx = minTouchRadiusPx * 2.2f;
+
+        float textWidth = dragCoordTextPaint.measureText(label);
+        float paddingH = dragCoordTextPaint.getTextSize() * 0.6f;
+        float paddingV = dragCoordTextPaint.getTextSize() * 0.4f;
+        float badgeHeight = dragCoordTextPaint.getTextSize() + paddingV * 2f;
+
+        float topEdgePx = cmYToPx(draggingObstacle.yCm + half);
+        float badgeBottom = topEdgePx - gapPx;
+        float badgeTop = badgeBottom - badgeHeight;
+        if (badgeTop < arenaTopPx) {
+            // Not enough room above (obstacle near the top edge) -- show the
+            // badge below the obstacle instead so it stays fully on screen.
+            float bottomEdgePx = cmYToPx(draggingObstacle.yCm - half);
+            badgeTop = bottomEdgePx + gapPx;
+            badgeBottom = badgeTop + badgeHeight;
+        }
+
+        float badgeLeft = cx - textWidth / 2f - paddingH;
+        float badgeRight = cx + textWidth / 2f + paddingH;
+        float radius = badgeHeight / 2f;
+        canvas.drawRoundRect(badgeLeft, badgeTop, badgeRight, badgeBottom, radius, radius, dragCoordBadgePaint);
+
+        float textCenterY = (badgeTop + badgeBottom) / 2f;
+        float baseline = textCenterY - (dragCoordTextPaint.ascent() + dragCoordTextPaint.descent()) / 2f;
+        canvas.drawText(label, cx, baseline, dragCoordTextPaint);
+    }
+
     // ---- Touch: drag to move, tap to cycle face ----------------------------
 
     @Override
@@ -369,8 +486,14 @@ class ArenaView extends View {
                 float rawYCm = pxToYCm(y);
                 // Clamp position reasonably within arena bounds plus a delete buffer
                 // so the obstacle does not jump uncontrollably off-screen
-                draggingObstacle.xCm = clampDragCm(rawXCm);
-                draggingObstacle.yCm = clampDragCm(rawYCm);
+                float clampedXCm = clampDragCm(rawXCm);
+                float clampedYCm = clampDragCm(rawYCm);
+                // Snap live while still over the arena so the grid-snap is
+                // visible as it happens; skip it past the edge so the
+                // continuous drag-to-delete gesture (finishDrag) stays smooth.
+                boolean pastEdge = isOutsideArena(clampedXCm, clampedYCm);
+                draggingObstacle.xCm = pastEdge ? clampedXCm : snapToGrid(clampedXCm);
+                draggingObstacle.yCm = pastEdge ? clampedYCm : snapToGrid(clampedYCm);
                 invalidate();
                 return true;
             }
@@ -434,9 +557,10 @@ class ArenaView extends View {
                 obstacleListener.onObstacleDeleted(obstacle);
             }
         } else {
-            // Keep obstacle fully within arena bounds when placed
-            obstacle.xCm = clampInsideArena(obstacle.xCm);
-            obstacle.yCm = clampInsideArena(obstacle.yCm);
+            // Keep obstacle fully within arena bounds, then snap to the 10cm
+            // placement grid (e.g. (143, 158) -> (140, 160)) when placed.
+            obstacle.xCm = snapToGrid(clampInsideArena(obstacle.xCm));
+            obstacle.yCm = snapToGrid(clampInsideArena(obstacle.yCm));
             if (obstacleListener != null) {
                 obstacleListener.onObstacleMoved(obstacle);
             }
