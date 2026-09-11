@@ -4,24 +4,89 @@
          Values are the "dark" half of astryx's neutral theme's [light, dark]
          token tuples. -->
 
+    <!-- Background -->
     <color name="background_body">#1B1B1B</color>
     <color name="background_surface">#262626</color>
     <color name="background_card">#1B1B1B</color>
+    <color name="background_popover">#262626</color>
+    <color name="background_muted">#2E2E2E</color>
 
+    <!-- Text -->
     <color name="text_primary">#FAFAFA</color>
     <color name="text_secondary">#A3A3A3</color>
     <color name="text_disabled">#525252</color>
+    <color name="text_accent">#EBEBEB</color>
 
+    <!-- Neutral accent -->
     <color name="accent">#EBEBEB</color>
+    <color name="accent_muted">#2E2E2E</color>
     <color name="on_accent">#171717</color>
 
+    <!-- Border -->
     <color name="border">#1AFFFFFF</color>
     <color name="border_emphasized">#525252</color>
+    <color name="border_subtle">#333333</color>
 
+    <!-- Astryx Status System (Dark mode optimized) -->
     <color name="status_accent_fill">#6D9CFE</color>
+    <color name="status_accent_subtle">#1E3A8A</color>
+    <color name="on_info">#171717</color>
+
     <color name="status_error_fill">#FF705D</color>
+    <color name="status_error_subtle">#7F1D1D</color>
     <color name="on_error">#171717</color>
 
+    <color name="status_success_fill">#4ADE80</color>
+    <color name="status_success_subtle">#14532D</color>
+    <color name="on_success">#171717</color>
+
+    <color name="status_warning_fill">#FBBF24</color>
+    <color name="status_warning_subtle">#78350F</color>
+    <color name="on_warning">#171717</color>
+
+    <!-- Categorical: orange -->
     <color name="categorical_orange_icon">#FFA258</color>
     <color name="categorical_orange_bg">#3DFFA258</color>
+
+    <!-- Astryx Segmented Control & Tabs -->
+    <color name="segmented_track_bg">#262626</color>
+    <color name="segmented_thumb_bg">#EBEBEB</color>
+    <color name="segmented_thumb_text">#171717</color>
+    <color name="segmented_unselected_text">#A3A3A3</color>
+
+    <!-- Astryx Stepper Tokens -->
+    <color name="stepper_pending_bg">#262626</color>
+    <color name="stepper_pending_text">#525252</color>
+    <color name="stepper_active_bg">#6D9CFE</color>
+    <color name="stepper_active_text">#171717</color>
+    <color name="stepper_completed_bg">#4ADE80</color>
+    <color name="stepper_completed_text">#171717</color>
+    <color name="stepper_rail">#525252</color>
+
+    <!-- Astryx Chip Tokens -->
+    <color name="chip_bg">#2E2E2E</color>
+    <color name="chip_bg_selected">#EBEBEB</color>
+    <color name="chip_text">#FAFAFA</color>
+    <color name="chip_text_selected">#171717</color>
+
+    <!-- Legacy aliases mapped to Astryx dark mode tokens -->
+    <color name="background">@color/background_body</color>
+    <color name="status_background">@color/background_card</color>
+    <color name="stop_red">@color/status_error_fill</color>
+    <color name="task1_green">@color/status_success_fill</color>
+    <color name="task2_blue">@color/status_accent_fill</color>
+    <color name="reset_gray">@color/accent</color>
+    <color name="tab_active">@color/segmented_thumb_bg</color>
+    <color name="tab_inactive">@color/segmented_track_bg</color>
+    <color name="card_background">@color/background_surface</color>
+
+    <!-- Telemetry Badges and Indicators -->
+    <color name="badge_text">#171717</color>
+    <color name="badge_idle">@color/text_secondary</color>
+    <color name="badge_active">@color/status_accent_fill</color>
+    <color name="badge_warning">@color/status_warning_fill</color>
+    <color name="badge_success">@color/status_success_fill</color>
+    <color name="badge_estop">@color/status_error_fill</color>
+    <color name="arrow_left">@color/status_success_fill</color>
+    <color name="arrow_right">@color/status_accent_fill</color>
 </resources>

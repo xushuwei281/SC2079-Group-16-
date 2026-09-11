@@ -3,7 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="24dp"
+    android:padding="@dimen/spacing_6"
     android:background="@color/background_body">
 
     <TextView
@@ -12,7 +12,7 @@
         android:text="@string/app_name"
         style="@style/TextAppearance.Heading"
         android:textSize="24sp"
-        android:layout_marginBottom="16dp" />
+        android:layout_marginBottom="@dimen/spacing_4" />
 
     <LinearLayout
         android:id="@+id/devicePickerPanel"
@@ -27,22 +27,35 @@
             android:layout_height="wrap_content"
             android:text="@string/paired_devices_label"
             style="@style/TextAppearance.Label"
-            android:textSize="18sp"
-            android:layout_marginBottom="8dp" />
+            android:textSize="16sp"
+            android:layout_marginBottom="@dimen/spacing_2" />
 
-        <Button
-            android:id="@+id/refreshButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/refresh_button"
-            style="@style/Widget.Button.Secondary"
-            android:layout_marginBottom="8dp" />
-
-        <ListView
-            android:id="@+id/deviceList"
+        <LinearLayout
+            android:id="@+id/devicePickerCard"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1" />
+            android:layout_weight="1"
+            android:background="@drawable/bg_card"
+            android:elevation="@dimen/elevation_low"
+            android:orientation="vertical"
+            android:padding="@dimen/spacing_3">
+
+            <Button
+                android:id="@+id/refreshButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/refresh_button"
+                style="@style/Widget.Button.Secondary"
+                android:layout_marginBottom="@dimen/spacing_2" />
+
+            <ListView
+                android:id="@+id/deviceList"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:divider="@color/border_subtle"
+                android:dividerHeight="1dp" />
+        </LinearLayout>
     </LinearLayout>
 
     <LinearLayout
@@ -64,7 +77,7 @@
                 android:id="@+id/statusDot"
                 android:layout_width="10dp"
                 android:layout_height="10dp"
-                android:layout_marginEnd="8dp"
+                android:layout_marginEnd="@dimen/spacing_2"
                 android:background="@drawable/shape_dot"
                 android:backgroundTint="@color/text_disabled" />
 
@@ -90,48 +103,56 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginStart="18dp"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="@dimen/spacing_2"
             android:textColor="@color/text_secondary"
             android:textSize="12sp"
             android:text="@string/link_status_not_connected" />
 
-        <!-- Mode Switcher Tabs: Manual (joystick/arena) vs autonomous Task 1/2 -->
+        <!-- Astryx SegmentedControl: Mode Switcher -->
         <LinearLayout
+            android:id="@+id/modeSegmentedTrack"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="42dp"
+            android:background="@drawable/bg_astryx_segmented_track"
             android:orientation="horizontal"
-            android:layout_marginBottom="8dp">
+            android:padding="3dp"
+            android:layout_marginBottom="@dimen/spacing_2">
 
-            <Button
+            <TextView
                 android:id="@+id/tabManual"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:layout_weight="1"
+                android:gravity="center"
+                android:background="@drawable/bg_astryx_segmented_thumb"
                 android:text="@string/mode_manual"
-                android:backgroundTint="@color/tab_active"
-                android:textColor="@android:color/white"
-                android:layout_marginEnd="2dp" />
+                android:textColor="@color/segmented_thumb_text"
+                android:textSize="13sp"
+                android:textStyle="bold" />
 
-            <Button
+            <TextView
                 android:id="@+id/tabTask1"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:layout_weight="1"
+                android:gravity="center"
+                android:background="@null"
                 android:text="@string/mode_task1"
-                android:backgroundTint="@color/tab_inactive"
-                android:textColor="@android:color/black"
-                android:layout_marginStart="2dp"
-                android:layout_marginEnd="2dp" />
+                android:textColor="@color/segmented_unselected_text"
+                android:textSize="13sp"
+                android:textStyle="bold" />
 
-            <Button
+            <TextView
                 android:id="@+id/tabTask2"
                 android:layout_width="0dp"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:layout_weight="1"
+                android:gravity="center"
+                android:background="@null"
                 android:text="@string/mode_task2"
-                android:backgroundTint="@color/tab_inactive"
-                android:textColor="@android:color/black"
-                android:layout_marginStart="2dp" />
+                android:textColor="@color/segmented_unselected_text"
+                android:textSize="13sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <!-- Mode Panels -->
@@ -142,32 +163,42 @@
             android:layout_height="0dp"
             android:layout_weight="3"
             android:orientation="vertical"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="@dimen/spacing_2"
             android:visibility="visible">
 
+            <!-- Astryx SegmentedControl: Drive / Arena Sub-Toggle -->
             <LinearLayout
+                android:id="@+id/driveArenaSegmentedTrack"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="36dp"
+                android:background="@drawable/bg_astryx_segmented_track"
                 android:orientation="horizontal"
-                android:layout_marginBottom="12dp">
+                android:padding="2dp"
+                android:layout_marginBottom="@dimen/spacing_2">
 
-                <Button
+                <TextView
                     android:id="@+id/driveModeButton"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:layout_weight="1"
-                    android:layout_marginEnd="4dp"
-                    style="@style/Widget.Button"
-                    android:text="@string/drive_mode_button" />
+                    android:gravity="center"
+                    android:background="@drawable/bg_astryx_segmented_thumb"
+                    android:text="@string/drive_mode_button"
+                    android:textColor="@color/segmented_thumb_text"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
 
-                <Button
+                <TextView
                     android:id="@+id/arenaModeButton"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:layout_weight="1"
-                    android:layout_marginStart="4dp"
-                    style="@style/Widget.Button"
-                    android:text="@string/arena_mode_button" />
+                    android:gravity="center"
+                    android:background="@null"
+                    android:text="@string/arena_mode_button"
+                    android:textColor="@color/segmented_unselected_text"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
             </LinearLayout>
 
             <FrameLayout
@@ -197,14 +228,14 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:layout_marginBottom="8dp">
+                    android:layout_marginBottom="@dimen/spacing_2">
 
                     <Button
                         android:id="@+id/addObstacleButton"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:layout_marginEnd="4dp"
+                        android:layout_marginEnd="@dimen/spacing_1"
                         style="@style/Widget.Button.Secondary"
                         android:text="@string/add_obstacle_button" />
 
@@ -213,8 +244,8 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:layout_marginStart="4dp"
-                        android:layout_marginEnd="4dp"
+                        android:layout_marginStart="@dimen/spacing_1"
+                        android:layout_marginEnd="@dimen/spacing_1"
                         style="@style/Widget.Button.Secondary"
                         android:text="@string/clear_obstacles_button" />
 
@@ -223,7 +254,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:layout_marginStart="4dp"
+                        android:layout_marginStart="@dimen/spacing_1"
                         style="@style/Widget.Button"
                         android:text="@string/send_arena_button" />
                 </LinearLayout>
@@ -234,7 +265,7 @@
                     android:layout_height="0dp"
                     android:layout_weight="1"
                     android:background="@drawable/bg_card"
-                    android:elevation="1dp">
+                    android:elevation="@dimen/elevation_low">
 
                     <com.sc2079.group16.controller.ArenaView
                         android:id="@+id/arenaView"
@@ -251,7 +282,7 @@
             android:layout_height="0dp"
             android:layout_weight="3"
             android:orientation="vertical"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="@dimen/spacing_2"
             android:visibility="gone">
 
             <!-- Control & Stopwatch Bar -->
@@ -260,7 +291,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
+                android:layout_marginBottom="@dimen/spacing_2">
 
                 <Button
                     android:id="@+id/startTask1Button"
@@ -271,14 +302,14 @@
                     android:textSize="13sp"
                     android:textStyle="bold"
                     android:backgroundTint="@color/task1_green"
-                    android:textColor="@android:color/white" />
+                    android:textColor="@color/on_success" />
 
                 <TextView
                     android:id="@+id/t1TimerText"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_marginEnd="8dp"
+                    android:layout_marginStart="@dimen/spacing_2"
+                    android:layout_marginEnd="@dimen/spacing_2"
                     android:fontFamily="monospace"
                     android:text="@string/timer_default_t1"
                     android:textColor="@color/text_primary"
@@ -291,12 +322,12 @@
                     android:layout_height="wrap_content"
                     android:background="@drawable/shape_badge"
                     android:backgroundTint="@color/badge_idle"
-                    android:paddingStart="8dp"
+                    android:paddingStart="@dimen/spacing_2"
                     android:paddingTop="3dp"
-                    android:paddingEnd="8dp"
+                    android:paddingEnd="@dimen/spacing_2"
                     android:paddingBottom="3dp"
                     android:text="@string/state_idle"
-                    android:textColor="@android:color/white"
+                    android:textColor="@color/badge_text"
                     android:textSize="11sp"
                     android:textStyle="bold" />
             </LinearLayout>
@@ -307,7 +338,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
+                android:layout_marginBottom="@dimen/spacing_2">
 
                 <TextView
                     android:id="@+id/t1LegText"
@@ -335,17 +366,18 @@
                 android:layout_height="0dp"
                 android:layout_weight="1"
                 android:background="@drawable/bg_card"
-                android:elevation="1dp" />
+                android:elevation="@dimen/elevation_low" />
 
             <!-- Target Summary Strip -->
             <LinearLayout
                 android:id="@+id/t1TargetsCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="@dimen/spacing_2"
                 android:background="@drawable/bg_card"
+                android:elevation="@dimen/elevation_low"
                 android:orientation="vertical"
-                android:padding="6dp">
+                android:padding="@dimen/spacing_2">
 
                 <TextView
                     android:id="@+id/t1TargetsText"
@@ -364,7 +396,7 @@
             android:layout_height="0dp"
             android:layout_weight="3"
             android:orientation="vertical"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="@dimen/spacing_2"
             android:visibility="gone">
 
             <!-- Sprint Control & Stopwatch Row -->
@@ -373,7 +405,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
+                android:layout_marginBottom="@dimen/spacing_2">
 
                 <Button
                     android:id="@+id/startTask2Button"
@@ -384,14 +416,14 @@
                     android:textSize="13sp"
                     android:textStyle="bold"
                     android:backgroundTint="@color/task2_blue"
-                    android:textColor="@android:color/white" />
+                    android:textColor="@color/on_info" />
 
                 <TextView
                     android:id="@+id/t2TimerText"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_marginEnd="8dp"
+                    android:layout_marginStart="@dimen/spacing_2"
+                    android:layout_marginEnd="@dimen/spacing_2"
                     android:fontFamily="monospace"
                     android:text="@string/timer_default_t2"
                     android:textColor="@color/text_primary"
@@ -404,12 +436,12 @@
                     android:layout_height="wrap_content"
                     android:background="@drawable/shape_badge"
                     android:backgroundTint="@color/badge_idle"
-                    android:paddingStart="8dp"
+                    android:paddingStart="@dimen/spacing_2"
                     android:paddingTop="3dp"
-                    android:paddingEnd="8dp"
+                    android:paddingEnd="@dimen/spacing_2"
                     android:paddingBottom="3dp"
                     android:text="@string/state_idle"
-                    android:textColor="@android:color/white"
+                    android:textColor="@color/badge_text"
                     android:textSize="11sp"
                     android:textStyle="bold" />
             </LinearLayout>
@@ -419,23 +451,25 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginBottom="6dp">
+                android:layout_marginBottom="@dimen/spacing_2">
 
                 <!-- Obstacle 1 Card -->
                 <LinearLayout
+                    android:id="@+id/t2Obs1Card"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:layout_marginEnd="3dp"
+                    android:layout_marginEnd="@dimen/spacing_1"
                     android:background="@drawable/bg_card"
+                    android:elevation="@dimen/elevation_low"
                     android:orientation="vertical"
-                    android:padding="8dp">
+                    android:padding="@dimen/spacing_2">
 
                     <TextView
+                        style="@style/TextAppearance.Label"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/obs1_label"
-                        android:textColor="@color/text_secondary"
                         android:textSize="10sp"
                         android:textStyle="bold" />
 
@@ -443,8 +477,8 @@
                         android:id="@+id/t2Obs1Arrow"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:layout_marginBottom="2dp"
+                        android:layout_marginTop="@dimen/spacing_1"
+                        android:layout_marginBottom="@dimen/spacing_1"
                         android:gravity="center"
                         android:text="@string/waiting_label"
                         android:textColor="@color/text_disabled"
@@ -463,19 +497,21 @@
 
                 <!-- Obstacle 2 Card -->
                 <LinearLayout
+                    android:id="@+id/t2Obs2Card"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:layout_marginStart="3dp"
+                    android:layout_marginStart="@dimen/spacing_1"
                     android:background="@drawable/bg_card"
+                    android:elevation="@dimen/elevation_low"
                     android:orientation="vertical"
-                    android:padding="8dp">
+                    android:padding="@dimen/spacing_2">
 
                     <TextView
+                        style="@style/TextAppearance.Label"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:text="@string/obs2_label"
-                        android:textColor="@color/text_secondary"
                         android:textSize="10sp"
                         android:textStyle="bold" />
 
@@ -483,8 +519,8 @@
                         android:id="@+id/t2Obs2Arrow"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:layout_marginBottom="2dp"
+                        android:layout_marginTop="@dimen/spacing_1"
+                        android:layout_marginBottom="@dimen/spacing_1"
                         android:gravity="center"
                         android:text="@string/waiting_label"
                         android:textColor="@color/text_disabled"
@@ -502,15 +538,16 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- 7-Step Pipeline Stepper Card -->
+            <!-- Astryx Stepper: 7-Step Pipeline Stepper Card -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
                 android:background="@drawable/bg_card"
+                android:elevation="@dimen/elevation_low"
                 android:orientation="vertical"
-                android:padding="8dp"
-                android:layout_marginBottom="6dp">
+                android:padding="@dimen/spacing_2"
+                android:layout_marginBottom="@dimen/spacing_2">
 
                 <TextView
                     android:id="@+id/t2StepTitle"
@@ -520,72 +557,269 @@
                     android:textColor="@color/text_primary"
                     android:textSize="12sp"
                     android:textStyle="bold"
-                    android:layout_marginBottom="4dp" />
+                    android:layout_marginBottom="@dimen/spacing_1" />
 
-                <TextView
-                    android:id="@+id/t2Step1"
+                <ScrollView
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="1. Approach Obstacle 1"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                    android:layout_height="0dp"
+                    android:layout_weight="1">
 
-                <TextView
-                    android:id="@+id/t2Step2"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="2. Scan Arrow 1 (Left / Right)"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
 
-                <TextView
-                    android:id="@+id/t2Step3"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="3. Slalom Obstacle 1"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                        <!-- Step 1 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
 
-                <TextView
-                    android:id="@+id/t2Step4"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="4. Approach Obstacle 2"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                            <TextView
+                                android:id="@+id/t2Indicator1"
+                                android:layout_width="@dimen/stepper_circle_size"
+                                android:layout_height="@dimen/stepper_circle_size"
+                                android:gravity="center"
+                                android:background="@drawable/bg_stepper_circle_pending"
+                                android:text="1"
+                                android:textColor="@color/stepper_pending_text"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="@dimen/spacing_2" />
 
-                <TextView
-                    android:id="@+id/t2Step5"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="5. Scan Arrow 2 (Left / Right)"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                            <TextView
+                                android:id="@+id/t2Step1"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Approach Obstacle 1"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+                        </LinearLayout>
 
-                <TextView
-                    android:id="@+id/t2Step6"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="6. Round Obs 2 &amp; Return Loop"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                        <View
+                            android:layout_width="@dimen/stepper_rail_width"
+                            android:layout_height="4dp"
+                            android:layout_marginStart="10dp"
+                            android:background="@color/stepper_rail" />
 
-                <TextView
-                    android:id="@+id/t2Step7"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="7. Carpark Sprint &amp; Finish"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
+                        <!-- Step 2 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/t2Indicator2"
+                                android:layout_width="@dimen/stepper_circle_size"
+                                android:layout_height="@dimen/stepper_circle_size"
+                                android:gravity="center"
+                                android:background="@drawable/bg_stepper_circle_pending"
+                                android:text="2"
+                                android:textColor="@color/stepper_pending_text"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="@dimen/spacing_2" />
+
+                            <TextView
+                                android:id="@+id/t2Step2"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Scan Arrow 1 (Left / Right)"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="@dimen/stepper_rail_width"
+                            android:layout_height="4dp"
+                            android:layout_marginStart="10dp"
+                            android:background="@color/stepper_rail" />
+
+                        <!-- Step 3 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/t2Indicator3"
+                                android:layout_width="@dimen/stepper_circle_size"
+                                android:layout_height="@dimen/stepper_circle_size"
+                                android:gravity="center"
+                                android:background="@drawable/bg_stepper_circle_pending"
+                                android:text="3"
+                                android:textColor="@color/stepper_pending_text"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="@dimen/spacing_2" />
+
+                            <TextView
+                                android:id="@+id/t2Step3"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Slalom Obstacle 1"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="@dimen/stepper_rail_width"
+                            android:layout_height="4dp"
+                            android:layout_marginStart="10dp"
+                            android:background="@color/stepper_rail" />
+
+                        <!-- Step 4 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/t2Indicator4"
+                                android:layout_width="@dimen/stepper_circle_size"
+                                android:layout_height="@dimen/stepper_circle_size"
+                                android:gravity="center"
+                                android:background="@drawable/bg_stepper_circle_pending"
+                                android:text="4"
+                                android:textColor="@color/stepper_pending_text"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="@dimen/spacing_2" />
+
+                            <TextView
+                                android:id="@+id/t2Step4"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Approach Obstacle 2"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="@dimen/stepper_rail_width"
+                            android:layout_height="4dp"
+                            android:layout_marginStart="10dp"
+                            android:background="@color/stepper_rail" />
+
+                        <!-- Step 5 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/t2Indicator5"
+                                android:layout_width="@dimen/stepper_circle_size"
+                                android:layout_height="@dimen/stepper_circle_size"
+                                android:gravity="center"
+                                android:background="@drawable/bg_stepper_circle_pending"
+                                android:text="5"
+                                android:textColor="@color/stepper_pending_text"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="@dimen/spacing_2" />
+
+                            <TextView
+                                android:id="@+id/t2Step5"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Scan Arrow 2 (Left / Right)"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="@dimen/stepper_rail_width"
+                            android:layout_height="4dp"
+                            android:layout_marginStart="10dp"
+                            android:background="@color/stepper_rail" />
+
+                        <!-- Step 6 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/t2Indicator6"
+                                android:layout_width="@dimen/stepper_circle_size"
+                                android:layout_height="@dimen/stepper_circle_size"
+                                android:gravity="center"
+                                android:background="@drawable/bg_stepper_circle_pending"
+                                android:text="6"
+                                android:textColor="@color/stepper_pending_text"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="@dimen/spacing_2" />
+
+                            <TextView
+                                android:id="@+id/t2Step6"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Round Obs 2 &amp; Return Loop"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="@dimen/stepper_rail_width"
+                            android:layout_height="4dp"
+                            android:layout_marginStart="10dp"
+                            android:background="@color/stepper_rail" />
+
+                        <!-- Step 7 -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/t2Indicator7"
+                                android:layout_width="@dimen/stepper_circle_size"
+                                android:layout_height="@dimen/stepper_circle_size"
+                                android:gravity="center"
+                                android:background="@drawable/bg_stepper_circle_pending"
+                                android:text="7"
+                                android:textColor="@color/stepper_pending_text"
+                                android:textSize="10sp"
+                                android:textStyle="bold"
+                                android:layout_marginEnd="@dimen/spacing_2" />
+
+                            <TextView
+                                android:id="@+id/t2Step7"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Carpark Sprint &amp; Finish"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </ScrollView>
             </LinearLayout>
 
             <!-- Sensor and Maneuver Row -->
             <LinearLayout
+                android:id="@+id/t2SensorRowCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:background="@drawable/bg_card"
+                android:elevation="@dimen/elevation_low"
                 android:orientation="horizontal"
-                android:padding="6dp">
+                android:padding="@dimen/spacing_2">
 
                 <TextView
                     android:id="@+id/t2SensorText"
@@ -615,7 +849,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center"
-            android:layout_marginBottom="8dp">
+            android:layout_marginBottom="@dimen/spacing_2">
 
             <Button
                 android:id="@+id/stopButton"
@@ -624,7 +858,7 @@
                 android:layout_weight="2"
                 style="@style/Widget.Button.Danger"
                 android:text="@string/stop_button"
-                android:layout_marginEnd="4dp" />
+                android:layout_marginEnd="@dimen/spacing_1" />
 
             <Button
                 android:id="@+id/resetButton"
@@ -633,7 +867,7 @@
                 android:layout_weight="1"
                 style="@style/Widget.Button.Secondary"
                 android:text="@string/reset_button"
-                android:layout_marginStart="4dp" />
+                android:layout_marginStart="@dimen/spacing_1" />
         </LinearLayout>
 
         <LinearLayout
@@ -656,13 +890,13 @@
                 android:text="@string/verbose_log_label"
                 style="@style/TextAppearance.Label"
                 android:textSize="11sp"
-                android:layout_marginEnd="4dp" />
+                android:layout_marginEnd="@dimen/spacing_1" />
 
             <Switch
                 android:id="@+id/verboseLogSwitch"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp" />
+                android:layout_marginEnd="@dimen/spacing_2" />
 
             <Button
                 android:id="@+id/clearLogsButton"
@@ -678,13 +912,14 @@
             android:layout_height="0dp"
             android:layout_weight="1"
             android:background="@drawable/bg_card"
-            android:elevation="1dp">
+            android:padding="@dimen/spacing_2"
+            android:clipToPadding="false"
+            android:elevation="@dimen/elevation_low">
 
             <TextView
                 android:id="@+id/statusText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:padding="8dp"
                 android:textColor="@color/text_primary"
                 android:fontFamily="monospace"
                 android:textSize="13sp" />

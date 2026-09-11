@@ -2,22 +2,26 @@
 <resources>
     <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">@font/figtree</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:colorBackground">@color/background_body</item>
+        <item name="android:windowBackground">@color/background_body</item>
     </style>
 
     <style name="Widget.Button" parent="android:Widget.Material.Button">
         <item name="android:fontFamily">@font/figtree</item>
         <item name="android:background">@drawable/ripple_button_primary</item>
         <item name="android:textColor">@color/on_accent</item>
-        <item name="android:paddingTop">12dp</item>
-        <item name="android:paddingBottom">12dp</item>
-        <item name="android:elevation">2dp</item>
+        <item name="android:paddingTop">@dimen/spacing_3</item>
+        <item name="android:paddingBottom">@dimen/spacing_3</item>
+        <item name="android:elevation">@dimen/elevation_low</item>
         <item name="android:stateListAnimator">@null</item>
     </style>
 
     <style name="Widget.Button.Secondary">
         <item name="android:background">@drawable/ripple_button_secondary</item>
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:elevation">0dp</item>
+        <item name="android:elevation">@dimen/elevation_none</item>
     </style>
 
     <style name="Widget.Button.Danger">
@@ -31,6 +35,7 @@
     </style>
 
     <style name="TextAppearance.Label" parent="">
+        <item name="android:fontFamily">@font/figtree</item>
         <item name="android:textColor">@color/text_secondary</item>
     </style>
 </resources>

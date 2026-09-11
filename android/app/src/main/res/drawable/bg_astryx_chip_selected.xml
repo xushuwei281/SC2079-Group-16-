@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <corners android:radius="@dimen/radius_inner" />
-    <solid android:color="@color/badge_idle" />
+    <solid android:color="@color/chip_bg_selected" />
+    <corners android:radius="@dimen/radius_pill" />
 </shape>

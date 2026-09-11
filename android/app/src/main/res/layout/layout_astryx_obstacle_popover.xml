@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="260dp"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_astryx_popover"
+    android:elevation="@dimen/elevation_mid"
+    android:orientation="vertical"
+    android:padding="@dimen/spacing_3">
+
+    <!-- Header: Title & Face Badge -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:layout_marginBottom="@dimen/spacing_1">
+
+        <TextView
+            android:id="@+id/popoverTitle"
+            style="@style/TextAppearance.Heading"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Obstacle #1"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/popoverFaceBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/shape_badge"
+            android:backgroundTint="@color/status_accent_fill"
+            android:paddingStart="@dimen/spacing_2"
+            android:paddingTop="2dp"
+            android:paddingEnd="@dimen/spacing_2"
+            android:paddingBottom="2dp"
+            android:text="FACE: N"
+            android:textColor="@color/on_info"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Coordinates Row -->
+    <TextView
+        android:id="@+id/popoverCoords"
+        style="@style/TextAppearance.Label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pos: (100 cm, 100 cm)"
+        android:textSize="12sp"
+        android:layout_marginBottom="@dimen/spacing_2" />
+
+    <!-- Face Selection Title -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Target Face Direction"
+        android:textColor="@color/text_secondary"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="@dimen/spacing_1" />
+
+    <!-- 4 Face Selector Chips (N, E, S, W) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="34dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="@dimen/spacing_2">
+
+        <Button
+            android:id="@+id/btnFaceN"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/bg_astryx_chip"
+            android:text="N"
+            android:textColor="@color/chip_text"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnFaceE"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/bg_astryx_chip"
+            android:text="E"
+            android:textColor="@color/chip_text"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnFaceS"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/bg_astryx_chip"
+            android:text="S"
+            android:textColor="@color/chip_text"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnFaceW"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:background="@drawable/bg_astryx_chip"
+            android:text="W"
+            android:textColor="@color/chip_text"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Recognition Info (Visible when symbol detected) -->
+    <LinearLayout
+        android:id="@+id/popoverTargetRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/bg_card"
+        android:padding="@dimen/spacing_2"
+        android:layout_marginBottom="@dimen/spacing_2"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/popoverTargetText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🎯 Target: #38"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Actions Row: Delete and Close -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnDeleteObstacle"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="@dimen/spacing_1"
+            style="@style/Widget.Button.Danger"
+            android:text="Delete"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnClosePopover"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_weight="1"
+            android:layout_marginStart="@dimen/spacing_1"
+            style="@style/Widget.Button.Secondary"
+            android:text="Done"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+</LinearLayout>

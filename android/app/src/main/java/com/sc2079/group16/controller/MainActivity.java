@@ -70,15 +70,18 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private ArenaView arenaView;
     private FrameLayout manualArenaContainer;
     private FrameLayout task1ArenaContainer;
-    private Button driveModeButton;
-    private Button arenaModeButton;
+    private TextView driveModeButton;
+    private TextView arenaModeButton;
 
     private View panelManual;
     private View panelTask1;
     private View panelTask2;
-    private Button tabManual;
-    private Button tabTask1;
-    private Button tabTask2;
+    private TextView tabManual;
+    private TextView tabTask1;
+    private TextView tabTask2;
+
+    // Astryx Core Layer (popover anchored to obstacles with 12dp clearance)
+    private AstryxLayer activeObstacleLayer;
 
     // ---- Task 1 UI & Stopwatch -------------------------------------------
     private TextView t1TimerText;
@@ -101,14 +104,15 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private TextView t2Obs2Details;
     private TextView t2StepTitle;
     private final TextView[] t2Steps = new TextView[7];
+    private final TextView[] t2StepIndicators = new TextView[7];
     private static final String[] T2_STEP_LABELS = {
-        "1. Approach Obstacle 1",
-        "2. Scan Arrow 1 (Left / Right)",
-        "3. Slalom Obstacle 1",
-        "4. Approach Obstacle 2",
-        "5. Scan Arrow 2 (Left / Right)",
-        "6. Round Obs 2 & Return Loop",
-        "7. Carpark Sprint & Finish"
+        "Approach Obstacle 1",
+        "Scan Arrow 1 (Left / Right)",
+        "Slalom Obstacle 1",
+        "Approach Obstacle 2",
+        "Scan Arrow 2 (Left / Right)",
+        "Round Obs 2 & Return Loop",
+        "Carpark Sprint & Finish"
     };
     private TextView t2SensorText;
     private TextView t2ManeuverText;
@@ -214,8 +218,38 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         t2Steps[4] = findViewById(R.id.t2Step5);
         t2Steps[5] = findViewById(R.id.t2Step6);
         t2Steps[6] = findViewById(R.id.t2Step7);
+
+        t2StepIndicators[0] = findViewById(R.id.t2Indicator1);
+        t2StepIndicators[1] = findViewById(R.id.t2Indicator2);
+        t2StepIndicators[2] = findViewById(R.id.t2Indicator3);
+        t2StepIndicators[3] = findViewById(R.id.t2Indicator4);
+        t2StepIndicators[4] = findViewById(R.id.t2Indicator5);
+        t2StepIndicators[5] = findViewById(R.id.t2Indicator6);
+        t2StepIndicators[6] = findViewById(R.id.t2Indicator7);
+
         t2SensorText = findViewById(R.id.t2SensorText);
         t2ManeuverText = findViewById(R.id.t2ManeuverText);
+
+        arenaView.setObstacleListener(new ArenaView.ObstacleListener() {
+            @Override
+            public void onObstacleTapped(ArenaView.Obstacle obstacle, float canvasPxX, float canvasPxY, float widthPx, float heightPx) {
+                showObstacleLayer(obstacle, canvasPxX, canvasPxY, widthPx, heightPx);
+            }
+
+            @Override
+            public void onObstacleMoved(ArenaView.Obstacle obstacle) {
+                if (activeObstacleLayer != null && activeObstacleLayer.isShowing()) {
+                    activeObstacleLayer.dismiss();
+                }
+            }
+
+            @Override
+            public void onObstacleDeleted(ArenaView.Obstacle obstacle) {
+                if (activeObstacleLayer != null && activeObstacleLayer.isShowing()) {
+                    activeObstacleLayer.dismiss();
+                }
+            }
+        });
 
         tabManual.setOnClickListener(v -> setMode(Mode.MANUAL));
         tabTask1.setOnClickListener(v -> setMode(Mode.TASK1));
@@ -458,14 +492,13 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         setModeButtonActive(arenaModeButton, driveModeButton);
     }
 
-    /** Gives the two mode-toggle buttons a real selected-state distinction --
-     * without this, DRIVE and ARENA are visually identical regardless of
-     * which one is actually showing. */
-    private void setModeButtonActive(Button active, Button inactive) {
-        active.setBackgroundResource(R.drawable.ripple_button_primary);
-        active.setTextColor(getColor(R.color.on_accent));
-        inactive.setBackgroundResource(R.drawable.ripple_button_secondary);
-        inactive.setTextColor(getColor(R.color.text_primary));
+    /** Gives the two mode-toggle buttons a real selected-state distinction using
+     * Astryx SegmentedControl styling. */
+    private void setModeButtonActive(TextView active, TextView inactive) {
+        active.setBackgroundResource(R.drawable.bg_astryx_segmented_thumb);
+        active.setTextColor(getColor(R.color.segmented_thumb_text));
+        inactive.setBackground(null);
+        inactive.setTextColor(getColor(R.color.segmented_unselected_text));
     }
 
     /** Sends the current obstacle layout as one ALG|id,x,y,face|... command --
@@ -478,6 +511,86 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             return;
         }
         linkService.sendLine(arenaView.buildAlgCommand());
+    }
+
+    /**
+     * Shows an anchored Astryx Core Layer popover with 12dp clearance offset
+     * over the tapped obstacle for inspecting coordinates, selecting target
+     * face chips, and deleting obstacles.
+     */
+    private void showObstacleLayer(ArenaView.Obstacle obstacle, float xPx, float yPx, float widthPx, float heightPx) {
+        if (activeObstacleLayer != null && activeObstacleLayer.isShowing()) {
+            activeObstacleLayer.dismiss();
+        }
+
+        View popoverView = getLayoutInflater().inflate(R.layout.layout_astryx_obstacle_popover, null);
+        TextView title = popoverView.findViewById(R.id.popoverTitle);
+        TextView faceBadge = popoverView.findViewById(R.id.popoverFaceBadge);
+        TextView coords = popoverView.findViewById(R.id.popoverCoords);
+        Button btnN = popoverView.findViewById(R.id.btnFaceN);
+        Button btnE = popoverView.findViewById(R.id.btnFaceE);
+        Button btnS = popoverView.findViewById(R.id.btnFaceS);
+        Button btnW = popoverView.findViewById(R.id.btnFaceW);
+        View targetRow = popoverView.findViewById(R.id.popoverTargetRow);
+        TextView targetText = popoverView.findViewById(R.id.popoverTargetText);
+        Button btnDelete = popoverView.findViewById(R.id.btnDeleteObstacle);
+        Button btnClose = popoverView.findViewById(R.id.btnClosePopover);
+
+        title.setText(getString(R.string.obstacle_title, obstacle.id));
+        faceBadge.setText("FACE: " + obstacle.face);
+        coords.setText(String.format(Locale.US, "Pos: (%d cm, %d cm)", Math.round(obstacle.xCm), Math.round(obstacle.yCm)));
+
+        updateChipState(btnN, obstacle.face == 'N');
+        updateChipState(btnE, obstacle.face == 'E');
+        updateChipState(btnS, obstacle.face == 'S');
+        updateChipState(btnW, obstacle.face == 'W');
+
+        View.OnClickListener faceClick = v -> {
+            char newFace;
+            int id = v.getId();
+            if (id == R.id.btnFaceN) newFace = 'N';
+            else if (id == R.id.btnFaceE) newFace = 'E';
+            else if (id == R.id.btnFaceS) newFace = 'S';
+            else newFace = 'W';
+
+            arenaView.setObstacleFace(obstacle.id, newFace);
+            obstacle.face = newFace;
+            faceBadge.setText("FACE: " + newFace);
+            updateChipState(btnN, newFace == 'N');
+            updateChipState(btnE, newFace == 'E');
+            updateChipState(btnS, newFace == 'S');
+            updateChipState(btnW, newFace == 'W');
+        };
+        btnN.setOnClickListener(faceClick);
+        btnE.setOnClickListener(faceClick);
+        btnS.setOnClickListener(faceClick);
+        btnW.setOnClickListener(faceClick);
+
+        if (obstacle.recognizedSymbol != null) {
+            targetRow.setVisibility(View.VISIBLE);
+            targetText.setText(String.format(Locale.US, "🎯 Confirmed Symbol: #%d", obstacle.recognizedSymbol));
+        } else {
+            targetRow.setVisibility(View.GONE);
+        }
+
+        AstryxLayer layer = new AstryxLayer(this);
+        layer.setPlacement(AstryxLayer.Placement.ABOVE);
+        layer.setOffsetDp(12); // 12dp clearance offset matching Astryx Storybook core-layer--offset
+        layer.setContentView(popoverView);
+
+        btnDelete.setOnClickListener(v -> {
+            arenaView.removeObstacle(obstacle.id);
+            layer.dismiss();
+        });
+        btnClose.setOnClickListener(v -> layer.dismiss());
+
+        activeObstacleLayer = layer;
+        layer.showAtCoordinates(arenaView, xPx, yPx, widthPx, heightPx);
+    }
+
+    private void updateChipState(Button chip, boolean isSelected) {
+        chip.setBackgroundResource(isSelected ? R.drawable.bg_astryx_chip_selected : R.drawable.bg_astryx_chip);
+        chip.setTextColor(getColor(isSelected ? R.color.chip_text_selected : R.color.chip_text));
     }
 
     private void showDevicePicker() {
@@ -493,21 +606,22 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
 
     private void setMode(Mode mode) {
         currentMode = mode;
+        if (activeObstacleLayer != null && activeObstacleLayer.isShowing()) {
+            activeObstacleLayer.dismiss();
+        }
+
         panelManual.setVisibility(mode == Mode.MANUAL ? View.VISIBLE : View.GONE);
         panelTask1.setVisibility(mode == Mode.TASK1 ? View.VISIBLE : View.GONE);
         panelTask2.setVisibility(mode == Mode.TASK2 ? View.VISIBLE : View.GONE);
 
-        tabManual.setBackgroundTintList(ColorStateList.valueOf(
-                getColor(mode == Mode.MANUAL ? R.color.tab_active : R.color.tab_inactive)));
-        tabManual.setTextColor(getColor(mode == Mode.MANUAL ? android.R.color.white : android.R.color.black));
+        tabManual.setBackgroundResource(mode == Mode.MANUAL ? R.drawable.bg_astryx_segmented_thumb : 0);
+        tabManual.setTextColor(getColor(mode == Mode.MANUAL ? R.color.segmented_thumb_text : R.color.segmented_unselected_text));
 
-        tabTask1.setBackgroundTintList(ColorStateList.valueOf(
-                getColor(mode == Mode.TASK1 ? R.color.tab_active : R.color.tab_inactive)));
-        tabTask1.setTextColor(getColor(mode == Mode.TASK1 ? android.R.color.white : android.R.color.black));
+        tabTask1.setBackgroundResource(mode == Mode.TASK1 ? R.drawable.bg_astryx_segmented_thumb : 0);
+        tabTask1.setTextColor(getColor(mode == Mode.TASK1 ? R.color.segmented_thumb_text : R.color.segmented_unselected_text));
 
-        tabTask2.setBackgroundTintList(ColorStateList.valueOf(
-                getColor(mode == Mode.TASK2 ? R.color.tab_active : R.color.tab_inactive)));
-        tabTask2.setTextColor(getColor(mode == Mode.TASK2 ? android.R.color.white : android.R.color.black));
+        tabTask2.setBackgroundResource(mode == Mode.TASK2 ? R.drawable.bg_astryx_segmented_thumb : 0);
+        tabTask2.setTextColor(getColor(mode == Mode.TASK2 ? R.color.segmented_thumb_text : R.color.segmented_unselected_text));
 
         // Seamless 2D Arena reparenting: share single ArenaView between Manual and Task 1
         if (mode == Mode.TASK1) {
@@ -590,6 +704,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             colorRes = R.color.badge_active;
         }
         t1StateBadge.setBackgroundTintList(ColorStateList.valueOf(getColor(colorRes)));
+        t1StateBadge.setTextColor(getColor(R.color.badge_text));
     }
 
     private void resetT1Views() {
@@ -650,25 +765,47 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             colorRes = R.color.badge_active;
         }
         t2StateBadge.setBackgroundTintList(ColorStateList.valueOf(getColor(colorRes)));
+        t2StateBadge.setTextColor(getColor(R.color.badge_text));
     }
 
     private void updateT2PipelineStep(int activeStep) {
         for (int i = 0; i < t2Steps.length; i++) {
             if (t2Steps[i] == null) continue;
             int stepNum = i + 1;
+            TextView indicator = t2StepIndicators[i];
             if (activeStep == 0) {
+                if (indicator != null) {
+                    indicator.setBackgroundResource(R.drawable.bg_stepper_circle_pending);
+                    indicator.setText(String.valueOf(stepNum));
+                    indicator.setTextColor(getColor(R.color.stepper_pending_text));
+                }
                 t2Steps[i].setText(T2_STEP_LABELS[i]);
                 t2Steps[i].setTextColor(getColor(R.color.text_secondary));
                 t2Steps[i].setTypeface(null, Typeface.NORMAL);
             } else if (stepNum < activeStep || activeStep >= 8) {
-                t2Steps[i].setText("✓ " + T2_STEP_LABELS[i]);
-                t2Steps[i].setTextColor(getColor(R.color.badge_success));
+                if (indicator != null) {
+                    indicator.setBackgroundResource(R.drawable.bg_stepper_circle_completed);
+                    indicator.setText("✓");
+                    indicator.setTextColor(getColor(R.color.on_success));
+                }
+                t2Steps[i].setText(T2_STEP_LABELS[i]);
+                t2Steps[i].setTextColor(getColor(R.color.status_success_fill));
                 t2Steps[i].setTypeface(null, Typeface.BOLD);
             } else if (stepNum == activeStep) {
-                t2Steps[i].setText("▶ " + T2_STEP_LABELS[i]);
-                t2Steps[i].setTextColor(getColor(R.color.task2_blue));
+                if (indicator != null) {
+                    indicator.setBackgroundResource(R.drawable.bg_stepper_circle_active);
+                    indicator.setText(String.valueOf(stepNum));
+                    indicator.setTextColor(getColor(R.color.on_info));
+                }
+                t2Steps[i].setText(T2_STEP_LABELS[i]);
+                t2Steps[i].setTextColor(getColor(R.color.status_accent_fill));
                 t2Steps[i].setTypeface(null, Typeface.BOLD);
             } else {
+                if (indicator != null) {
+                    indicator.setBackgroundResource(R.drawable.bg_stepper_circle_pending);
+                    indicator.setText(String.valueOf(stepNum));
+                    indicator.setTextColor(getColor(R.color.stepper_pending_text));
+                }
                 t2Steps[i].setText(T2_STEP_LABELS[i]);
                 t2Steps[i].setTextColor(getColor(R.color.text_secondary));
                 t2Steps[i].setTypeface(null, Typeface.NORMAL);
@@ -925,6 +1062,9 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (activeObstacleLayer != null && activeObstacleLayer.isShowing()) {
+            activeObstacleLayer.dismiss();
+        }
         joystickHandler.removeCallbacksAndMessages(null);
         linkStatusHandler.removeCallbacksAndMessages(null);
         t1TimerHandler.removeCallbacksAndMessages(null);

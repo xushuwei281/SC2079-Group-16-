@@ -48,4 +48,5 @@
     <string name="waiting_label">WAITING</string>
     <string name="obs1_label">OBSTACLE 1</string>
     <string name="obs2_label">OBSTACLE 2</string>
+    <string name="obstacle_title">Obstacle #%1$d</string>
 </resources>

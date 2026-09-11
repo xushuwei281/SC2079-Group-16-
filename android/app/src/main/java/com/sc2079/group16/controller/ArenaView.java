@@ -50,6 +50,18 @@ class ArenaView extends View {
         }
     }
 
+    public interface ObstacleListener {
+        void onObstacleTapped(Obstacle obstacle, float canvasPxX, float canvasPxY, float widthPx, float heightPx);
+        void onObstacleMoved(Obstacle obstacle);
+        void onObstacleDeleted(Obstacle obstacle);
+    }
+
+    private ObstacleListener obstacleListener;
+
+    public void setObstacleListener(ObstacleListener listener) {
+        this.obstacleListener = listener;
+    }
+
     private final List<Obstacle> obstacles = new ArrayList<>();
     private int nextObstacleId = 1;
 
@@ -74,11 +86,17 @@ class ArenaView extends View {
     private final Paint axisLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private static final int AXIS_LABEL_STEP_CM = 10; // marks at 10, 20, ..., 200
+    private static final float DRAG_MARGIN_CM = 15f; // Boundary margin allowing visual feedback for deletion outside arena
 
     private Obstacle draggingObstacle;
+    private int activePointerId = MotionEvent.INVALID_POINTER_ID;
     private float dragDownPx;
     private float dragDownPy;
     private float dragTotalMovementPx;
+
+    ArenaView() {
+        super(null);
+    }
 
     public ArenaView(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -92,10 +110,10 @@ class ArenaView extends View {
         borderPaint.setStrokeWidth(4f);
         obstaclePaint.setColor(context.getColor(R.color.categorical_orange_icon));
         obstacleFacePaint.setColor(context.getColor(R.color.status_error_fill)); // marks the target face
-        obstacleTextPaint.setColor(Color.WHITE); // fixed: readable against the orange fill in both themes
+        obstacleTextPaint.setColor(context.getColor(R.color.badge_text)); // high contrast against orange fill in both themes
         obstacleTextPaint.setTextAlign(Paint.Align.CENTER);
         robotPaint.setColor(context.getColor(R.color.status_accent_fill)); // reserved for live/info markers
-        robotHeadingPaint.setColor(Color.WHITE);
+        robotHeadingPaint.setColor(context.getColor(R.color.on_info));
         robotHeadingPaint.setStrokeWidth(6f);
         axisLabelPaint.setColor(context.getColor(R.color.text_secondary));
 
@@ -120,6 +138,8 @@ class ArenaView extends View {
     }
 
     void clearObstacles() {
+        draggingObstacle = null;
+        activePointerId = MotionEvent.INVALID_POINTER_ID;
         obstacles.clear();
         nextObstacleId = 1;
         invalidate();
@@ -129,8 +149,39 @@ class ArenaView extends View {
         return obstacles.size();
     }
 
+    void setObstacleFace(int obstacleId, char face) {
+        for (Obstacle o : obstacles) {
+            if (o.id == obstacleId) {
+                o.face = face;
+                invalidate();
+                return;
+            }
+        }
+    }
+
+    void removeObstacle(int obstacleId) {
+        if (draggingObstacle != null && draggingObstacle.id == obstacleId) {
+            draggingObstacle = null;
+            activePointerId = MotionEvent.INVALID_POINTER_ID;
+        }
+        for (int i = 0; i < obstacles.size(); i++) {
+            if (obstacles.get(i).id == obstacleId) {
+                Obstacle removed = obstacles.remove(i);
+                if (obstacleListener != null) {
+                    obstacleListener.onObstacleDeleted(removed);
+                }
+                invalidate();
+                return;
+            }
+        }
+    }
+
     /** Builds the exact ALG|id,x,y,face|... string planner_node.py parses. */
     String buildAlgCommand() {
+        return buildAlgCommand(this.obstacles);
+    }
+
+    static String buildAlgCommand(List<Obstacle> obstacles) {
         StringBuilder sb = new StringBuilder("ALG");
         for (Obstacle o : obstacles) {
             sb.append('|')
@@ -280,42 +331,126 @@ class ArenaView extends View {
     public boolean onTouchEvent(MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
-                draggingObstacle = findObstacleNear(event.getX(), event.getY());
-                dragDownPx = event.getX();
-                dragDownPy = event.getY();
+                activePointerId = event.getPointerId(0);
+                int pointerIndex = event.findPointerIndex(activePointerId);
+                if (pointerIndex == -1) {
+                    draggingObstacle = null;
+                    activePointerId = MotionEvent.INVALID_POINTER_ID;
+                    return false;
+                }
+                dragDownPx = event.getX(pointerIndex);
+                dragDownPy = event.getY(pointerIndex);
+                draggingObstacle = findObstacleNear(dragDownPx, dragDownPy);
                 dragTotalMovementPx = 0f;
+                if (draggingObstacle == null) {
+                    activePointerId = MotionEvent.INVALID_POINTER_ID;
+                    return false;
+                }
+                return true;
+            }
+            case MotionEvent.ACTION_POINTER_DOWN: {
+                // Secondary pointer touched down: maintain activePointerId to prevent
+                // multi-touch gestures from hijacking or corrupting draggingObstacle state
                 return draggingObstacle != null;
             }
             case MotionEvent.ACTION_MOVE: {
-                if (draggingObstacle == null) {
+                if (draggingObstacle == null || activePointerId == MotionEvent.INVALID_POINTER_ID) {
                     return false;
                 }
-                dragTotalMovementPx = (float) Math.hypot(event.getX() - dragDownPx, event.getY() - dragDownPy);
-                draggingObstacle.xCm = pxToXCm(event.getX());
-                draggingObstacle.yCm = pxToYCm(event.getY());
+                int pointerIndex = event.findPointerIndex(activePointerId);
+                if (pointerIndex == -1 || pointerIndex >= event.getPointerCount()) {
+                    return false;
+                }
+                float x = event.getX(pointerIndex);
+                float y = event.getY(pointerIndex);
+                dragTotalMovementPx = (float) Math.hypot(x - dragDownPx, y - dragDownPy);
+
+                float rawXCm = pxToXCm(x);
+                float rawYCm = pxToYCm(y);
+                // Clamp position reasonably within arena bounds plus a delete buffer
+                // so the obstacle does not jump uncontrollably off-screen
+                draggingObstacle.xCm = clampDragCm(rawXCm);
+                draggingObstacle.yCm = clampDragCm(rawYCm);
                 invalidate();
                 return true;
             }
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL: {
+            case MotionEvent.ACTION_POINTER_UP: {
+                if (draggingObstacle == null || activePointerId == MotionEvent.INVALID_POINTER_ID) {
+                    return false;
+                }
+                int actionIndex = event.getActionIndex();
+                int pointerId = event.getPointerId(actionIndex);
+                if (pointerId == activePointerId) {
+                    // Active dragging finger was lifted; commit drag/tap/delete
+                    finishDrag();
+                    return true;
+                }
+                // Secondary finger was lifted; continue dragging with active pointer
+                return true;
+            }
+            case MotionEvent.ACTION_UP: {
                 if (draggingObstacle == null) {
                     return false;
                 }
-                if (dragTotalMovementPx < minTouchRadiusPx) {
-                    // Treated as a tap, not a drag: cycle the marked face
-                    // instead of committing whatever tiny position jitter
-                    // occurred, and put it back exactly where it was.
-                    draggingObstacle.face = nextFace(draggingObstacle.face);
-                } else if (isOutsideArena(draggingObstacle.xCm, draggingObstacle.yCm)) {
-                    obstacles.remove(draggingObstacle);
-                }
-                draggingObstacle = null;
-                invalidate();
+                finishDrag();
                 return true;
+            }
+            case MotionEvent.ACTION_CANCEL: {
+                if (draggingObstacle != null) {
+                    draggingObstacle = null;
+                    activePointerId = MotionEvent.INVALID_POINTER_ID;
+                    invalidate();
+                    return true;
+                }
+                return false;
             }
             default:
                 return super.onTouchEvent(event);
         }
+    }
+
+    private void finishDrag() {
+        if (draggingObstacle == null) {
+            activePointerId = MotionEvent.INVALID_POINTER_ID;
+            return;
+        }
+        Obstacle obstacle = draggingObstacle;
+        draggingObstacle = null;
+        activePointerId = MotionEvent.INVALID_POINTER_ID;
+
+        if (dragTotalMovementPx < minTouchRadiusPx) {
+            if (obstacleListener != null) {
+                float half = OBSTACLE_SIZE_CM / 2f;
+                float leftPx = cmXToPx(obstacle.xCm - half);
+                float topPx = cmYToPx(obstacle.yCm + half);
+                float sizePx = (OBSTACLE_SIZE_CM / (float) ARENA_SIZE_CM) * arenaPixelSize;
+                obstacleListener.onObstacleTapped(obstacle, leftPx, topPx, sizePx, sizePx);
+            } else {
+                obstacle.face = nextFace(obstacle.face);
+            }
+        } else if (isOutsideArena(obstacle.xCm, obstacle.yCm)) {
+            obstacles.remove(obstacle);
+            if (obstacleListener != null) {
+                obstacleListener.onObstacleDeleted(obstacle);
+            }
+        } else {
+            // Keep obstacle fully within arena bounds when placed
+            obstacle.xCm = clampInsideArena(obstacle.xCm);
+            obstacle.yCm = clampInsideArena(obstacle.yCm);
+            if (obstacleListener != null) {
+                obstacleListener.onObstacleMoved(obstacle);
+            }
+        }
+        invalidate();
+    }
+
+    static float clampDragCm(float rawCm) {
+        return Math.max(-DRAG_MARGIN_CM, Math.min(rawCm, ARENA_SIZE_CM + DRAG_MARGIN_CM));
+    }
+
+    static float clampInsideArena(float val) {
+        float half = OBSTACLE_SIZE_CM / 2f;
+        return Math.max(half, Math.min(val, ARENA_SIZE_CM - half));
     }
 
     private Obstacle findObstacleNear(float px, float py) {
@@ -334,11 +469,11 @@ class ArenaView extends View {
         return null;
     }
 
-    private boolean isOutsideArena(float xCm, float yCm) {
+    static boolean isOutsideArena(float xCm, float yCm) {
         return xCm < 0 || xCm > ARENA_SIZE_CM || yCm < 0 || yCm > ARENA_SIZE_CM;
     }
 
-    private static char nextFace(char face) {
+    static char nextFace(char face) {
         for (int i = 0; i < FACE_CYCLE.length; i++) {
             if (FACE_CYCLE[i] == face) {
                 return FACE_CYCLE[(i + 1) % FACE_CYCLE.length];

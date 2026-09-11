@@ -6,5 +6,28 @@
     <dimen name="radius_inner">6dp</dimen>     <!-- 0.375rem -->
     <dimen name="radius_element">10dp</dimen>  <!-- 0.625rem: buttons -->
     <dimen name="radius_container">12dp</dimen> <!-- 0.75rem: cards/panels -->
+    <dimen name="radius_pill">100dp</dimen>    <!-- Full rounded capsule -->
     <dimen name="radius_page">28dp</dimen>     <!-- 1.75rem -->
+
+    <!-- Spacing scale ported from Astryx (4px grid standard) -->
+    <dimen name="spacing_1">4dp</dimen>
+    <dimen name="spacing_2">8dp</dimen>
+    <dimen name="spacing_3">12dp</dimen>
+    <dimen name="spacing_4">16dp</dimen>
+    <dimen name="spacing_5">20dp</dimen>
+    <dimen name="spacing_6">24dp</dimen>
+    <dimen name="spacing_8">32dp</dimen>
+
+    <!-- Elevation tokens from Astryx shadow scale -->
+    <dimen name="elevation_none">0dp</dimen>
+    <dimen name="elevation_low">2dp</dimen>
+    <dimen name="elevation_mid">4dp</dimen>
+    <dimen name="elevation_high">8dp</dimen>
+
+    <!-- Astryx Core Layer clearance offset (Storybook core-layer-offset: 12px) -->
+    <dimen name="astryx_layer_offset">12dp</dimen>
+
+    <!-- Stepper dimensions -->
+    <dimen name="stepper_circle_size">22dp</dimen>
+    <dimen name="stepper_rail_width">2dp</dimen>
 </resources>
