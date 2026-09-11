@@ -86,7 +86,7 @@ class PlannerNode(Node):
     def __init__(self) -> None:
         super().__init__("planner_node")
 
-        self.declare_parameter("turning_radius_cm", 42.0)
+        self.declare_parameter("turning_radius_cm", 21.0)
         self.declare_parameter("camera_view_dist_cm", 25.0)
         self.declare_parameter("auto_start", True)
         self.declare_parameter("enable_collision_avoidance", True)

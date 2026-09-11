@@ -77,7 +77,7 @@ def generate_launch_description():
     )
     turning_radius_arg = DeclareLaunchArgument(
         "turning_radius_cm",
-        default_value="42.0",
+        default_value="21.0",
         description="Turning radius in cm for Reeds-Shepp path planner",
     )
     run_perception_arg = DeclareLaunchArgument(
