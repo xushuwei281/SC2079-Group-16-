@@ -24,6 +24,8 @@ that the refactor has been flashed or tested on the moving robot.
   1.75 rad/s yaw limit, and 0.21 m calibrated minimum turning radius.
 - The Pi sends zero after 200 ms without input. The independent MCU fallback
   watchdog stops velocity motion after 750 ms without a new `V` packet.
+  Its stop report clears the expired Pi target but does not require RESET; only
+  a later fresh velocity command can resume motion.
   Independent firmware proximity protection can stop forward motion without
   waiting for the Pi. Front sensing does not cover reverse travel.
 - A stop fault requires explicit tablet RESET. Reset stops and cancels old
@@ -53,8 +55,10 @@ GC/G0/TO requests. Verify that remappings preserve one base `/cmd_vel` publisher
 | `telemetry_timeout_sec` | 0.40 s | Controller and serial bridge freshness checks. |
 | `batch_timeout_sec` | 30 s | Controller deadline for each primitive; bridge maintenance timeout. |
 
-Ordinary input expiry sends zero and releases manual control. Sensor/telemetry
+Ordinary input expiry and `STOP:WATCHDOG` release manual control. Sensor/telemetry
 faults and E-STOP latch motion until `RESET` (or `ALG:RESET`) on `/android/cmd`.
+After RESET, velocity remains zero until the first fresh telemetry frame arrives;
+a joystick update racing that frame does not create another E-stop.
 
 From `/home/mdp/dev/SC2079-Group-16/ros2_ws`, run offline checks and builds:
 

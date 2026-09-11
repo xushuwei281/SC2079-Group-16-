@@ -74,7 +74,7 @@ limited to the configured minimum turning radius.
 
 Range sampling, command reception, motor updates, and telemetry run independently
 of a requested travel distance. The firmware watchdog stops velocity motion if
-no fresh setpoint arrives for 300 ms. Forward proximity protection uses local raw
+no fresh setpoint arrives for 750 ms. Forward proximity protection uses local raw
 sensor readings, so it does not depend on ROS callbacks, filtering, or a `FIN`
 response. Front sensors do not provide rear collision coverage.
 
@@ -83,8 +83,10 @@ does not clear a latch. `R` is an explicit reset: it stops and clears old motion
 state; subsequent movement requires a fresh command. `STOP:PROXIMITY`,
 `STOP:WATCHDOG`, `STOP:SENSOR_STALE`, and `STOP:INVALID_VELOCITY` are asynchronous
 stop reports. The Pi
-aborts active motion on a stop report and requires explicit RESET. A firmware
-watchdog stop alone does not latch the MCU, but the Pi still latches the fault.
+aborts active motion on proximity, stale-sensor, or invalid-target reports and
+requires explicit RESET. A firmware watchdog report clears the expired Pi target
+without latching either side, so only a later fresh command can resume motion.
+After RESET, the Pi holds zero until fresh STM32 telemetry arrives.
 
 Task 1 proximity interruption enters the stopped state. It does not automatically
 reset the latch and reverse into unobserved space. Bull's Eye orbit recovery is

@@ -18,9 +18,12 @@ Persistent notes about work done in this repo so later agents don't re-derive it
   nonzero targets after 750 ms without refresh; 300 ms caused observed false
   `STOP:WATCHDOG` trips despite a nominal 50 ms tablet stream. Local
   raw front protection uses US <=12 cm or IR <=10 cm; stale required sensors
-  stop forward motion. There is no rear sensor protection. `STOP:*` aborts Pi
-  motion and requires explicit RESET. `Q` latches, zero velocity does not reset,
-  and `R` discards old motion state rather than resuming a canceled request.
+  stop forward motion. There is no rear sensor protection. `STOP:WATCHDOG`
+  discards the expired Pi target without latching; a fresh command may resume.
+  Other `STOP:*` reports require explicit RESET. `Q` latches, zero velocity does
+  not reset, and `R` discards old motion state rather than resuming a canceled
+  request. After `R`, both Pi layers hold zero until the first fresh TLM frame,
+  preventing joystick/reset ordering from creating a false stale-telemetry stop.
 - Task 1/2 START does not clear E-STOP. Task 1 no longer automatically resets
   and backs up after a proximity stop; the old recovery distance parameter is
   retained for configuration compatibility. Perception-driven orbit recovery

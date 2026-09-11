@@ -58,8 +58,9 @@ deployment rather than assuming the previous distance-loop tuning transfers.
 The firmware stops nonzero velocity output after 750 ms without a fresh setpoint.
 The Pi normally sends zero after its shorter 200 ms input timeout.
 An expired zero target does not trigger `STOP:WATCHDOG`.
-Its watchdog stop permits a later fresh `V` at firmware level, but the Pi treats
-the asynchronous stop report as a latched fault requiring explicit RESET.
+Its watchdog stop permits a later fresh `V` at firmware level. The Pi discards
+the expired target and also waits for a fresh command instead of latching an
+E-stop. This preserves cmd_vel timeout semantics while keeping the motor cutoff.
 RESET cancels an in-flight `ExecuteMoves` operation; it never resumes the old
 primitive from a saved target.
 

@@ -77,6 +77,19 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.assertEqual(self.packets(), [b"Q\0\0\0\0"])
         self.assertTrue(self.node._estop_event.is_set())
 
+    def test_first_post_reset_command_holds_zero_until_feedback(self):
+        self.node._on_android_cmd(String(data="RESET"))
+        self.port.write.reset_mock()
+        msg = Twist()
+        msg.linear.x = 0.1
+        self.node._on_cmd_vel(msg)
+        self.assertEqual(self.packets(), [b"V\0\0\0\0"])
+        self.assertFalse(self.node._estop_event.is_set())
+
+        self.node._handle_telemetry_line("TLM:20,20,90,50,40,40")
+        self.node._velocity_tick()
+        self.assertEqual(self.packets()[-1], b"V" + struct.pack("<hh", 100, 0))
+
     def test_estop_needs_explicit_reset(self):
         with patch.object(self.node._estop_pub, "publish") as publish:
             self.node._on_estop(Empty())
@@ -108,6 +121,16 @@ class TestSerialBridgeNode(unittest.TestCase):
         count = len(self.packets())
         self.node._on_estop(Empty())
         self.assertEqual(count, len(self.packets()))
+
+    def test_watchdog_notification_is_recoverable(self):
+        self.port.in_waiting = 100
+        self.port.read.return_value = b"STOP:WATCHDOG\r\n"
+        with patch.object(self.node._estop_pub, "publish") as publish:
+            self.node._poll_telemetry()
+            publish.assert_not_called()
+        self.assertFalse(self.node._estop_event.is_set())
+        self.assertIsNone(self.node._teleop_target)
+        self.assertEqual(self.node._last_status, "STOP:WATCHDOG")
 
     def test_invalid_telemetry_cannot_refresh_watchdog(self):
         self.node._telemetry_stamp = 1.0

@@ -9,9 +9,11 @@ import time
 from typing import Optional
 
 import rclpy
+from rclpy._rclpy_pybind11 import RCLError
 from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.exceptions import InvalidHandle
 from rclpy.node import Node
 from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
@@ -52,6 +54,7 @@ class MotionControllerNode(Node):
         self._control_lock = threading.RLock()
         self._busy = threading.Event()
         self._estop_event = threading.Event()
+        self._shutdown_event = threading.Event()
         self._generation = 0
         self._stop_reason = "ESTOPPED"
         self._raw_pose = None
@@ -144,9 +147,18 @@ class MotionControllerNode(Node):
         return ""
 
     def _publish_velocity(self, speed: float, yaw: float) -> None:
+        # ROS launch may invalidate the context before node destruction runs.
+        # Never publish through an invalid rclpy publisher during teardown.
+        if not rclpy.ok():
+            return
         msg = Twist()
         msg.linear.x, msg.angular.z = float(speed), float(yaw)
-        self._velocity_pub.publish(msg)
+        try:
+            self._velocity_pub.publish(msg)
+        except (InvalidHandle, RCLError):
+            # A concurrent ROS shutdown can invalidate the publisher between
+            # the context check and publish call.
+            return
 
     def _latch_stop(self, reason: str, publish_estop: bool = True) -> None:
         with self._control_lock:
@@ -206,7 +218,15 @@ class MotionControllerNode(Node):
                 self._teleop_target = None
                 self._publish_velocity(0.0, 0.0)
             elif not self._telemetry_fresh():
-                self._latch_stop("STALE_TELEMETRY")
+                # RESET clears cached feedback in both control layers.  A
+                # joystick sample can arrive before the first post-reset pose;
+                # keep the vehicle stopped while waiting rather than latching
+                # a false E-stop.  Loss after feedback was acquired is still
+                # treated as a safety fault.
+                if self._raw_pose is None:
+                    self._publish_velocity(0.0, 0.0)
+                else:
+                    self._latch_stop("STALE_TELEMETRY")
             else:
                 error = self._forward_safety_error(self._teleop_target[0] > 0)
                 if error:
@@ -254,6 +274,8 @@ class MotionControllerNode(Node):
         return response
 
     def _motion_error(self, generation: int, deadline: float) -> str:
+        if self._shutdown_event.is_set() or not rclpy.ok():
+            return "SHUTDOWN"
         if generation != self._generation:
             return self._stop_reason if self._estop_event.is_set() else "CANCELLED"
         if self._estop_event.is_set():
@@ -326,6 +348,9 @@ class MotionControllerNode(Node):
         deadline = time.monotonic() + self._batch_timeout_sec
         while time.monotonic() < deadline:
             with self._control_lock:
+                if self._shutdown_event.is_set() or not rclpy.ok():
+                    future.cancel()
+                    return "SHUTDOWN"
                 if generation != self._generation or self._estop_event.is_set():
                     future.cancel()
                     return self._stop_reason if self._estop_event.is_set() else "CANCELLED"
@@ -343,12 +368,17 @@ class MotionControllerNode(Node):
         self._latch_stop("TIMEOUT")
         return "TIMEOUT"
 
-    def destroy_node(self) -> None:
+    def request_shutdown(self) -> None:
+        """Interrupt active motion before the executor is joined."""
+        self._shutdown_event.set()
         with self._control_lock:
             self._generation += 1
             self._estop_event.set()
             self._teleop_target = None
             self._publish_velocity(0.0, 0.0)
+
+    def destroy_node(self) -> None:
+        self.request_shutdown()
         self._timer.cancel()
         return super().destroy_node()
 
@@ -363,7 +393,8 @@ def main(args: Optional[list[str]] = None) -> None:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        node.request_shutdown()
         node.destroy_node()
-        executor.shutdown()
+        executor.shutdown(timeout_sec=2.0)
         if rclpy.ok():
             rclpy.shutdown()

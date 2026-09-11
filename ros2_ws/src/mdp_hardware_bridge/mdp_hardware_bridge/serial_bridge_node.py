@@ -392,6 +392,13 @@ class SerialBridgeNode(Node):
                 self._write_packet(self._velocity_packet(0.0, 0.0))
                 return
             if not self._telemetry_fresh():
+                # RESET deliberately clears cached feedback.  Hold zero until
+                # the first post-reset TLM frame arrives instead of turning a
+                # normal startup race into a latched E-stop.  Once feedback
+                # has been acquired, losing it during motion remains a fault.
+                if self._raw_pose is None:
+                    self._write_packet(self._velocity_packet(0.0, 0.0))
+                    return
                 self._latch_stop("STALE_TELEMETRY")
                 return
             if not self._write_packet(self._teleop_target):
@@ -614,7 +621,21 @@ class SerialBridgeNode(Node):
                 if line.startswith("TLM:"):
                     self._handle_telemetry_line(line)
                 elif line.startswith("STOP:"):
-                    self._latch_stop(line)
+                    if line == "STOP:WATCHDOG":
+                        # The firmware watchdog has already cut motor power.
+                        # A command-stream timeout is recoverable in cmd_vel:
+                        # discard the expired target and wait for a new one.
+                        # Proximity, stale-sensor and malformed-command stops
+                        # still use the latched E-stop path below.
+                        with self._control_lock:
+                            self._teleop_target = None
+                            self._last_status = line
+                            self._status_seq += 1
+                        self.get_logger().warn(
+                            "STM32 velocity watchdog stopped motion; awaiting fresh cmd_vel"
+                        )
+                    else:
+                        self._latch_stop(line)
                 elif line:
                     with self._control_lock:
                         self._last_status = line

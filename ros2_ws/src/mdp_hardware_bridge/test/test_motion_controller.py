@@ -127,6 +127,19 @@ class TestMotionController(unittest.TestCase):
         self.node._teleop_tick()
         self.assertEqual(len(self.velocities()), count)
 
+    def test_first_post_reset_teleop_holds_zero_until_feedback(self):
+        self.node._on_android_cmd(String(data="RESET"))
+        self.node._velocity_pub.reset_mock()
+        msg = Twist()
+        msg.linear.x = 0.1
+        self.node._on_teleop(msg)
+        self.assertEqual(self.velocities(), [(0, 0)])
+        self.assertFalse(self.node._estop_event.is_set())
+
+        self.feedback()
+        self.node._teleop_tick()
+        self.assertEqual(self.velocities()[-1], (0.1, 0))
+
     def test_teleop_continuously_stops_for_raw_proximity(self):
         msg = Twist()
         msg.linear.x = 0.1

@@ -61,6 +61,7 @@ class PerceptionNode(Node):
         # Live rolling detection buffer for zero-wait consensus sampling
         # Stores tuples: (timestamp, detections, raw_frame_copy)
         self._buffer_lock = threading.Lock()
+        self._shutdown_event = threading.Event()
         self._detection_history: deque = deque(maxlen=10)
 
         # Callback groups
@@ -117,6 +118,8 @@ class PerceptionNode(Node):
 
     def _on_image(self, msg: Image) -> None:
         """Process incoming frame from the Raspberry Pi camera with duty-cycling."""
+        if self._shutdown_event.is_set() or not rclpy.ok():
+            return
         try:
             # Convert ROS Image to OpenCV BGR
             frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -226,6 +229,13 @@ class PerceptionNode(Node):
         self, request: SampleTarget.Request, response: SampleTarget.Response
     ) -> SampleTarget.Response:
         """Handle sample request from planner_node with fast on-demand or consensus sampling."""
+        if self._shutdown_event.is_set() or not rclpy.ok():
+            response.success = False
+            response.symbol_id = 0
+            response.symbol_name = "SHUTDOWN"
+            response.confidence = 0.0
+            response.is_marker = False
+            return response
         t_start = time.time()
         obs_id = request.obstacle_id
         deadline = t_start + 0.35  # Up to 350ms settle window if arriving concurrently
@@ -233,6 +243,8 @@ class PerceptionNode(Node):
         consensus = None
         if self._continuous_inference:
             while time.time() < deadline:
+                if self._shutdown_event.is_set() or not rclpy.ok():
+                    break
                 consensus = self._evaluate_consensus(
                     min_frames=2, conf_threshold=self._detector.conf_threshold
                 )
@@ -296,6 +308,10 @@ class PerceptionNode(Node):
 
         return response
 
+    def request_shutdown(self) -> None:
+        """Stop accepting new image/service work before executor teardown."""
+        self._shutdown_event.set()
+
 
 def main(args: Optional[list[str]] = None) -> None:
     rclpy.init(args=args)
@@ -307,8 +323,9 @@ def main(args: Optional[list[str]] = None) -> None:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        node.request_shutdown()
         try:
-            executor.shutdown()
+            executor.shutdown(timeout_sec=2.0)
         except (Exception, KeyboardInterrupt):
             pass
         try:

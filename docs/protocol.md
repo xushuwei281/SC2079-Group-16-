@@ -81,6 +81,10 @@ ultrasonic and IR samples before forwarding it. It latches at 12 cm ultrasonic o
 10 cm IR, and it covers Android teleoperation and both autonomous modes. The STM32
 also applies those thresholds as a last-resort cutoff and zeros velocity after
 750 ms without a fresh setpoint. The Pi sends zero after 200 ms without input.
+A watchdog report confirms that the firmware already stopped the motors; the Pi
+discards the expired target and accepts a later fresh command without requiring
+RESET. Other `STOP` reasons remain latched. Immediately after RESET, both Pi
+control layers hold zero until the first fresh STM32 telemetry frame arrives.
 A zero range means no return/out of range; sensor
 freshness follows the acquisition-task heartbeat instead of requiring a positive
 echo. Front sensors do not protect reverse travel. Telemetry reception and stop

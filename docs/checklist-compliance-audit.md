@@ -15,7 +15,7 @@ The project is **not yet checklist-complete**. The largest known gaps are Androi
 | A — hardware and robot functions | Partial | Perception and serial interfaces exist; network setup and physical accuracy are not demonstrated. |
 | B — simulator and planning | Partial | Simulator and distance-based TSP exist; shortest-time optimisation is not demonstrated. |
 | C — Android/checklist GUI | Partial | Core teleoperation/map code exists, but C.2 and C.6–C.9 have concrete divergences. |
-| Automated tests | Passing | 87 Python tests passed, plus the firmware controller host test and PlatformIO build. |
+| Automated tests | Passing | 91 Python tests passed in the aggregate Pixi suite. Firmware host/build results are tracked separately. |
 
 ## Checklist matrix
 
@@ -50,6 +50,8 @@ The project is **not yet checklist-complete**. The largest known gaps are Androi
 6. Document or implement the RPi WiFi AP/static-IP/webserver setup required by A.1.
 7. Add a time/velocity objective or measured timing evidence for B.3.
 8. Record physical stopping-distance and motion-accuracy measurements before evaluation.
+9. Verify clean launch shutdown while a movement is active; the motion controller now
+   has an explicit cancellation path for this case.
 
 ## Automated test record
 
@@ -63,11 +65,9 @@ PATH=/home/mdp/.pixi/bin:$PATH \
 Result:
 
 - Algorithm suite: **13 passed**.
-- Hardware/motion-controller suite: **39 passed**.
+- Hardware/motion-controller suite: **43 passed**.
 - Android bridge suite: **16 passed**.
 - Planner suite: **19 passed**.
-- STM32 velocity-controller host test: **passed**.
-- STM32 PlatformIO release build and UART upload: **passed**.
 
 ## Evidence locations
 
