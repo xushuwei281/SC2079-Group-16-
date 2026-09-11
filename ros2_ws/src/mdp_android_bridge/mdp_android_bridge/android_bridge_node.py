@@ -127,7 +127,11 @@ class AndroidBridgeNode(Node):
         self._last_pose_time: float = 0.0
         self._last_hires_pose_time: float = 0.0
 
-        # Sensor distance tracking (cm)
+        # Sensor distance tracking (cm) -- Kalman-filtered, for the tablet's
+        # live readout and ESTOP cause attribution. This is the same topic
+        # motion_controller_node latches /estop off (see its
+        # _forward_safety_error), so there is one sensor pipeline shared by
+        # monitoring and the safety path instead of a second raw one.
         self._us_cm: float = -1.0
         self._ir_l_cm: float = -1.0
         self._ir_r_cm: float = -1.0
@@ -165,7 +169,6 @@ class AndroidBridgeNode(Node):
         self._ir_r_sub = self.create_subscription(
             Range, "/sensors/ir_right", self._on_ir_r_range, 10, callback_group=callback_group
         )
-
         # Service Clients
         self._move_client = self.create_client(
             ExecuteMoves, "/execute_moves", callback_group=callback_group
@@ -245,7 +248,12 @@ class AndroidBridgeNode(Node):
                 self._serial = None
 
     def _get_proximity_cause(self, threshold_cm: float = 15.0) -> Optional[Tuple[str, float]]:
-        """Return (sensor_name, dist_cm) if any front sensor reads <= threshold_cm, else None."""
+        """Return (sensor_name, dist_cm) if any front sensor reads <= threshold_cm, else None.
+
+        Reads the same Kalman-filtered ranges motion_controller_node latches
+        /estop off of (see its _forward_safety_error), so cause attribution
+        can't disagree with what actually stopped the robot.
+        """
         candidates = []
         if 0.0 <= self._us_cm <= threshold_cm:
             candidates.append(("Ultrasonic", self._us_cm))
@@ -380,20 +388,10 @@ class AndroidBridgeNode(Node):
             self.send_to_tablet(f"STATUS,Value out of range: {value}")
             return
 
-        # Forward Proximity Safety Guard for teleop
-        if code in ("FC", "FL", "FR"):
-            cause = self._get_proximity_cause(threshold_cm=12.0)
-            if cause is not None:
-                sensor_name, val_cm = cause
-                self.get_logger().warn(
-                    f"Forward move rejected: obstacle detected by {sensor_name} at {val_cm:.1f} cm (< 12.0 cm)"
-                )
-                self._estop_pub.publish(Empty())
-                self._last_estop_alert_time = time.monotonic()
-                self.send_to_tablet(f"STATUS,ESTOP: Obstacle detected by {sensor_name} ({val_cm:.1f} cm <= 12.0 cm)")
-                self.send_to_tablet(f"ESTOP_ALERT,{sensor_name},{val_cm:.1f},12.0")
-                return
-
+        # Forward proximity is enforced centrally by motion_controller_node
+        # (the sole /cmd_vel safety owner) once this dispatches to
+        # /execute_moves; it rejects the primitive and latches /estop itself,
+        # which _on_estop below reports to the tablet with sensor cause.
         with self._move_lock:
             if self._is_moving:
                 # Buffer the latest streaming command (overwriting prior pending move)

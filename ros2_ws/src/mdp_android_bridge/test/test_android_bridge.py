@@ -290,17 +290,20 @@ class TestAndroidBridge(unittest.TestCase):
         self.assertTrue(any("STATUS,ESTOP: Obstacle detected by Ultrasonic (8.4 cm)" in c for c in calls))
         self.assertTrue(any("ESTOP_ALERT,Ultrasonic,8.4,12.0" in c for c in calls))
 
-    def test_forward_move_prevented_by_proximity(self):
-        """Test that forward move is rejected and triggers estop if front obstacle is detected."""
+    def test_forward_move_dispatch_does_not_preempt_safety_locally(self):
+        """Proximity is enforced centrally by motion_controller_node (see its
+        _forward_safety_error); this bridge just dispatches to /execute_moves
+        and reports whatever /estop it observes, rather than deciding
+        locally off a second sensor reading."""
         self.node._ir_l_cm = 7.5
+        self.node._move_client.wait_for_service = MagicMock(return_value=True)
+        self.node._move_client.call_async = MagicMock()
         self.node._estop_pub.publish = MagicMock()
-        self.mock_serial.reset_mock()
 
         self.node._dispatch("FW:20")
-        self.node._estop_pub.publish.assert_called_once()
-        calls = [c[0][0].decode("utf-8") for c in self.mock_serial.write.call_args_list]
-        self.assertTrue(any("STATUS,ESTOP: Obstacle detected by IR Left (7.5 cm <= 12.0 cm)" in c for c in calls))
-        self.assertTrue(any("ESTOP_ALERT,IR Left,7.5,12.0" in c for c in calls))
+
+        self.node._move_client.call_async.assert_called_once()
+        self.node._estop_pub.publish.assert_not_called()
 
 
 if __name__ == "__main__":

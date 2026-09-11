@@ -1,7 +1,11 @@
 """Measured primitive controller and teleoperation arbiter publishing ROS Twist.
 
 Only this node owns ExecuteMoves. The UART driver consumes /cmd_vel and never
-interprets movement primitives; autonomous completion uses unfiltered feedback.
+interprets movement primitives. Autonomous completion and the central forward
+safety check both read the same Kalman-filtered /sensors/* topics used for
+monitoring/display, so there is a single sensor pipeline (with its own
+outlier gating, see kalman_filter.py) rather than a second raw path that can
+drift out of sync with it.
 """
 import math
 import threading
@@ -65,9 +69,9 @@ class MotionControllerNode(Node):
         self._generation = 0
         self._stop_reason = "ESTOPPED"
         self._raw_pose = None
-        self._raw_us = float("nan")
-        self._raw_ir_left = float("nan")
-        self._raw_ir_right = float("nan")
+        self._us_range_m = float("nan")
+        self._ir_left_range_m = float("nan")
+        self._ir_right_range_m = float("nan")
         self._telemetry_stamp = 0.0
         self._range_stamp = 0.0
         self._teleop_target = None
@@ -79,13 +83,13 @@ class MotionControllerNode(Node):
             PoseStamped, "/robot_pose/raw", self._on_pose, _LATEST_VALUE_QOS,
             callback_group=group)
         self._range_sub = self.create_subscription(
-            Range, "/sensors/ultrasonic/raw", self._on_range, _LATEST_VALUE_QOS,
+            Range, "/sensors/ultrasonic", self._on_range, _LATEST_VALUE_QOS,
             callback_group=group)
         self._ir_left_sub = self.create_subscription(
-            Range, "/sensors/ir_left/raw", self._on_ir_left, _LATEST_VALUE_QOS,
+            Range, "/sensors/ir_left", self._on_ir_left, _LATEST_VALUE_QOS,
             callback_group=group)
         self._ir_right_sub = self.create_subscription(
-            Range, "/sensors/ir_right/raw", self._on_ir_right, _LATEST_VALUE_QOS,
+            Range, "/sensors/ir_right", self._on_ir_right, _LATEST_VALUE_QOS,
             callback_group=group)
         self._estop_sub = self.create_subscription(
             Empty, "/estop", self._on_estop, 10, callback_group=group)
@@ -124,19 +128,19 @@ class MotionControllerNode(Node):
         if not self._recent_header(msg):
             return
         with self._control_lock:
-            self._raw_us = msg.range
+            self._us_range_m = msg.range
             self._range_stamp = time.monotonic()
 
     def _on_ir_left(self, msg: Range) -> None:
         if self._recent_header(msg):
             with self._control_lock:
-                self._raw_ir_left = msg.range
+                self._ir_left_range_m = msg.range
                 self._range_stamp = time.monotonic()
 
     def _on_ir_right(self, msg: Range) -> None:
         if self._recent_header(msg):
             with self._control_lock:
-                self._raw_ir_right = msg.range
+                self._ir_right_range_m = msg.range
                 self._range_stamp = time.monotonic()
 
     def _telemetry_fresh(self) -> bool:
@@ -144,16 +148,21 @@ class MotionControllerNode(Node):
                 and time.monotonic() - self._telemetry_stamp < self._telemetry_timeout)
 
     def _forward_safety_error(self, forward: bool) -> str:
-        """Return a central safety fault for a requested forward velocity."""
+        """Return a central safety fault for a requested forward velocity.
+
+        Reads the same Kalman-filtered ranges published for monitoring/display
+        (see kalman_filter.py) rather than a second raw pipeline, so spike
+        rejection is defined in exactly one place.
+        """
         if not forward:
             return ""
         if (self._range_stamp <= 0
                 or time.monotonic() - self._range_stamp >= self._telemetry_timeout):
             return "SENSOR_STALE"
         for name, value, threshold in (
-                ("ULTRASONIC", self._raw_us, self._front_stop),
-                ("IR_LEFT", self._raw_ir_left, self._ir_stop),
-                ("IR_RIGHT", self._raw_ir_right, self._ir_stop)):
+                ("ULTRASONIC", self._us_range_m, self._front_stop),
+                ("IR_LEFT", self._ir_left_range_m, self._ir_stop),
+                ("IR_RIGHT", self._ir_right_range_m, self._ir_stop)):
             if math.isfinite(value) and 0 < value <= threshold:
                 return f"PROXIMITY:{name}"
         return ""
@@ -196,7 +205,7 @@ class MotionControllerNode(Node):
             self._generation += 1
             self._estop_event.clear()
             self._teleop_target = None
-            self._raw_us = self._raw_ir_left = self._raw_ir_right = float("nan")
+            self._us_range_m = self._ir_left_range_m = self._ir_right_range_m = float("nan")
             self._raw_pose = None
             self._telemetry_stamp = self._range_stamp = 0.0
             self._publish_velocity(0.0, 0.0)
@@ -326,10 +335,10 @@ class MotionControllerNode(Node):
                     complete = remaining <= min(math.radians(1.0), goal * 0.1)
                 elif mc.command in {"FU", "BU"}:
                     if (time.monotonic() - self._range_stamp >= self._telemetry_timeout
-                            or not math.isfinite(self._raw_us) or self._raw_us <= 0):
+                            or not math.isfinite(self._us_range_m) or self._us_range_m <= 0):
                         self._latch_stop("INVALID_RANGE")
                         return "INVALID_RANGE"
-                    remaining = (self._raw_us - goal) * direction
+                    remaining = (self._us_range_m - goal) * direction
                     complete = remaining <= 0
                 else:
                     progress = direction * ((x - start[0]) * math.cos(start[2])

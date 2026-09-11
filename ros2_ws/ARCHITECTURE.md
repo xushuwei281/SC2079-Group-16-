@@ -92,10 +92,19 @@ Task 1 proximity interruption enters the stopped state. It does not automaticall
 reset the latch and reverse into unobserved space. Bull's Eye orbit recovery is
 a separate perception-driven maneuver and retains normal collision validation.
 
-Continuous velocity and raw-feedback topics use best-effort keep-last depth 1
+Continuous velocity and pose-feedback topics use best-effort keep-last depth 1
 QoS. Both Pi layers coalesce bursts to 20 Hz. A transient UART write timeout
 discards the target and reconnects without latching `/estop`; sustained loss is
 covered by the MCU watchdog and stale-feedback latch.
+
+`motion_controller_node`'s central forward safety check and `android_bridge_node`'s
+E-STOP cause attribution both read the Kalman-filtered `/sensors/ultrasonic`,
+`/sensors/ir_left`, `/sensors/ir_right` topics -- the same readings used for
+monitoring/display -- rather than the `*/raw` topics. This closed a gap where a
+single-frame HC-SR04/IR reflection spike on the raw topics (the same noise
+`KalmanFilter1D`'s outlier gate exists to reject, see `kalman_filter.py`) could
+latch a global E-STOP with zero smoothing. `*/raw` topics remain published for
+diagnostics only; no node stops motion off them.
 
 The configured control rate and timeout values are design settings, not measured
 braking latency. The measured full-lock radius is 21–22 cm, and the planner and
@@ -122,8 +131,8 @@ absolute-speed loop still requires physical speed/tracking and stopping checks.
 | `/estop` | `std_msgs/msg/Empty` | Asynchronous latched stop. |
 | `/robot_pose` | `geometry_msgs/msg/PoseStamped` | Live display/planner pose, optionally filtered, ROS metres and radians. |
 | `/robot_pose/raw` | `geometry_msgs/msg/PoseStamped` | Unfiltered live feedback used by the motion controller for measured progress. |
-| `/sensors/ultrasonic/raw` | `sensor_msgs/msg/Range` | Unfiltered range used for FU/BU completion. |
-| `/sensors/ultrasonic`, `/sensors/ir_left`, `/sensors/ir_right` | `sensor_msgs/msg/Range` | Live range readings in metres. |
+| `/sensors/ultrasonic/raw`, `/sensors/ir_left/raw`, `/sensors/ir_right/raw` | `sensor_msgs/msg/Range` | Unfiltered ranges published for diagnostics only; no node stops motion off these. |
+| `/sensors/ultrasonic`, `/sensors/ir_left`, `/sensors/ir_right` | `sensor_msgs/msg/Range` | Kalman-filtered range readings in metres. Single shared pipeline: the motion controller's central forward safety check, FU/BU completion, and the Android bridge's E-STOP cause attribution all read these, not a separate raw path. |
 | `/perception/sample_target` | `mdp_interfaces/srv/SampleTarget` | Target symbol consensus for an obstacle. |
 | `/android/cmd` | `std_msgs/msg/String` | Tablet commands including explicit RESET. |
 | `/android/status` | `std_msgs/msg/String` | Human-readable status for the tablet. |

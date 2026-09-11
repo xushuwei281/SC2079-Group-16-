@@ -142,12 +142,15 @@ class TestMotionController(unittest.TestCase):
         self.node._teleop_tick()
         self.assertEqual(self.velocities()[-1], (0.1, 0))
 
-    def test_teleop_continuously_stops_for_raw_proximity(self):
+    def test_teleop_continuously_stops_for_proximity(self):
         msg = Twist()
         msg.linear.x = 0.1
         self.node._on_teleop(msg)
         self.node._teleop_tick()
         self.assertGreater(self.velocities()[-1][0], 0)
+        # This node trusts the shared Kalman-filtered range topic (see
+        # kalman_filter.py / test_kalman_filter.py for spike rejection);
+        # it does not re-filter, so one close filtered reading stops it.
         self.feedback(us=0.12)
         self.node._teleop_tick()
         self.assertTrue(self.node._estop_event.is_set())
@@ -157,6 +160,14 @@ class TestMotionController(unittest.TestCase):
     def test_zero_no_echo_is_not_a_proximity_fault(self):
         self.feedback(us=0.0)
         self.assertEqual(self.node._forward_safety_error(True), "")
+
+    def test_execute_moves_primitive_stops_for_proximity(self):
+        """The /execute_moves path shares _forward_safety_error with teleop."""
+        self.feedback(us=0.08)
+        response = self.execute("FC", 50)
+        self.assertFalse(response.success)
+        self.assertEqual(response.status, "PROXIMITY:ULTRASONIC")
+        self.assertTrue(self.node._estop_event.is_set())
 
     def test_service_owns_output_and_drops_teleop_during_motion(self):
         msg = Twist()

@@ -104,9 +104,14 @@ drift apart.
 
 - **Continuous Range Safety Ownership**: `motion_controller_node` is the Pi-side
   safety owner for every forward `/cmd_vel` source (teleop, Task 1, and Task 2),
-  using unfiltered ultrasonic/IR data at 12/10 cm. Firmware retains an independent
-  fallback. STM32 range value zero is no-return/out-of-range; freshness tracks the
-  sensor task heartbeat so an open arena does not produce `STOP:SENSOR_STALE`.
+  at 12/10 cm ultrasonic/IR thresholds. It reads the Kalman-filtered
+  `/sensors/*` topics (same pipeline `android_bridge_node`'s E-STOP cause
+  attribution and the tablet's live readout use) rather than the `*/raw`
+  topics, closing a false-latch source where a single-frame reflection spike
+  on the raw feed tripped E-STOP with no smoothing (2026-09-11). Firmware
+  retains an independent fallback. STM32 range value zero is no-return/
+  out-of-range; freshness tracks the sensor task heartbeat so an open arena
+  does not produce `STOP:SENSOR_STALE`.
 - **Measured Turning Radius**: Physical full-lock radius is 21–22 cm. The planner
   and continuous velocity controller use 21 cm; calibrated servo endpoints remain
   `SERVOLEFT=101`, `SERVOCENTER=146`, and `SERVORIGHT=206`.
