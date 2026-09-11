@@ -77,6 +77,7 @@ class MissionState(str, Enum):
     SAMPLING_TARGET = "SAMPLING_TARGET"
     ORBIT_RECOVERY = "ORBIT_RECOVERY"
     MISSION_COMPLETE = "MISSION_COMPLETE"
+    MISSION_FAILED = "MISSION_FAILED"
     ESTOP = "ESTOP"
 
 
@@ -612,6 +613,7 @@ class PlannerNode(Node):
         arena_map = default_arena()
         arena_map["obstacles"] = self._obstacles
 
+        mission_failed = False
         for i, leg in enumerate(self._current_plan.legs):
             if not self._is_executing:
                 self.get_logger().warn("Mission execution interrupted.")
@@ -682,6 +684,7 @@ class PlannerNode(Node):
             # 1. Query live perception consensus sampler service
             sample_res = self._query_perception_sampler(leg.obstacle_id)
             recognized_symbol = None
+            target_ob = next((ob for ob in self._obstacles if ob.id == leg.obstacle_id), None)
 
             if sample_res:
                 sid, sname, conf, is_marker = sample_res
@@ -701,7 +704,6 @@ class PlannerNode(Node):
                     )
                     self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: Marker (Bull's Eye)"))
                     if self._enable_orbit_recovery:
-                        target_ob = next((ob for ob in self._obstacles if ob.id == leg.obstacle_id), None)
                         if target_ob:
                             orbit_res = self._inspect_adjacent_faces(leg, target_ob, arena_map)
                             if orbit_res:
@@ -710,7 +712,6 @@ class PlannerNode(Node):
                     self.get_logger().warn(f"No confident target at Obstacle {leg.obstacle_id}.")
                     self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: Unrecognized"))
                     if self._enable_orbit_recovery:
-                        target_ob = next((ob for ob in self._obstacles if ob.id == leg.obstacle_id), None)
                         if target_ob:
                             orbit_res = self._inspect_adjacent_faces(leg, target_ob, arena_map)
                             if orbit_res:
@@ -720,18 +721,33 @@ class PlannerNode(Node):
                 recognized_symbol = self._wait_for_recognition(
                     leg.obstacle_id, timeout_s=self._recognition_timeout_s
                 )
+                if recognized_symbol is None and self._enable_orbit_recovery and target_ob:
+                    self.get_logger().warn(
+                        f"No target result for Obs {leg.obstacle_id}; "
+                        "attempting adjacent-face recovery."
+                    )
+                    orbit_res = self._inspect_adjacent_faces(leg, target_ob, arena_map)
+                    if orbit_res:
+                        recognized_symbol = orbit_res[0]
 
             if recognized_symbol is None:
-                # Standalone fallback if perception node is offline or exhausted
-                self.get_logger().info(f"Using nominal fallback ID for Obstacle {leg.obstacle_id}")
-                recognized_symbol = 10 + leg.obstacle_id
-                self._target_pub.publish(String(data=f"{leg.obstacle_id},{recognized_symbol}"))
+                mission_failed = True
+                self.get_logger().error(
+                    f"No valid image confirmed for Obstacle {leg.obstacle_id}; stopping mission."
+                )
+                self._status_pub.publish(
+                    String(data=f"TARGET_UNCONFIRMED,{leg.obstacle_id}")
+                )
+                break
 
-        if self._is_executing:
+        if self._is_executing and not mission_failed:
             self._current_rem_dist = 0.0
             self._transition_state(MissionState.MISSION_COMPLETE, "All obstacles visited")
             self.get_logger().info("=== ALL TARGETS VISITED SUCCESSFULLY ===")
             self._status_pub.publish(String(data="MISSION COMPLETE"))
+        elif self._is_executing and mission_failed:
+            self._transition_state(MissionState.MISSION_FAILED, "Target recognition failed")
+            self._status_pub.publish(String(data="MISSION FAILED: TARGET UNCONFIRMED"))
 
         self._is_executing = False
 

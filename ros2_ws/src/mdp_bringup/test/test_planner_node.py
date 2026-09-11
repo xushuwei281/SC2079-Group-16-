@@ -143,6 +143,45 @@ class TestPlannerNode(unittest.TestCase):
         self.assertEqual(result[0], 15)
         self.assertEqual(result[1], "arrow_up")
 
+    def test_unconfirmed_target_does_not_get_fabricated_id(self):
+        """A failed CV sample must fail the mission, never publish a fake ID."""
+        from arena import Obstacle
+        from planner import FullMissionPlan, PlanLeg
+
+        obstacle = Obstacle(id=1, x=60, y=60, face="N")
+        leg = PlanLeg(
+            obstacle_id=1,
+            target_face="N",
+            start_pose=self.node._current_pose,
+            vantage_pose=self.node._current_pose,
+            poses=[],
+            commands=[],
+            raw_strings=[],
+            distance_cm=0.0,
+        )
+        self.node._obstacles = [obstacle]
+        self.node._current_plan = FullMissionPlan(
+            start_pose=self.node._current_pose,
+            legs=[leg],
+            total_distance_cm=0.0,
+            all_commands=[],
+            all_poses=[],
+        )
+        self.node._is_executing = True
+        self.node._move_client.wait_for_service = MagicMock(return_value=True)
+        self.node._query_perception_sampler = MagicMock(return_value=None)
+        self.node._wait_for_recognition = MagicMock(return_value=None)
+        self.node._inspect_adjacent_faces = MagicMock(return_value=None)
+        self.node._target_pub.publish = MagicMock()
+        self.node._status_pub.publish = MagicMock()
+
+        self.node._execute_mission_loop()
+
+        self.assertEqual(self.node._state, MissionState.MISSION_FAILED)
+        self.node._target_pub.publish.assert_not_called()
+        statuses = [call.args[0].data for call in self.node._status_pub.publish.call_args_list]
+        self.assertIn("TARGET_UNCONFIRMED,1", statuses)
+
     def test_start_does_not_clear_estop(self) -> None:
         """A new START cannot restart a mission after a latched safety stop."""
         self.node._current_plan = MagicMock()

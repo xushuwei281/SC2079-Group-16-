@@ -61,7 +61,8 @@ stateDiagram-v2
         RE_SAMPLE --> TRY_NEXT_FACE: Still marker / none
     }
 
-    ORBIT_RECOVERY --> NEXT_LEG: Target found or candidates exhausted
+    ORBIT_RECOVERY --> NEXT_LEG: Target found
+    ORBIT_RECOVERY --> MISSION_FAILED: Candidates exhausted
     NEXT_LEG --> NAVIGATING: Next obstacle remaining
     NEXT_LEG --> MISSION_COMPLETE: All targets visited
     
@@ -75,11 +76,12 @@ stateDiagram-v2
 | :--- | :--- | :--- |
 | `IDLE` | Resting at start zone or waiting for layout. | Transitions to `PLANNING` on receiving obstacle layout string. |
 | `PLANNING` | Parsing obstacles, solving TSP permutation, computing Reeds-Shepp trajectories. | Transitions to `NAVIGATING` once plan is generated (if `auto_start=True` or upon `START`). |
-| `NAVIGATING` | Dispatching discrete move primitives to STM32 (`/execute_moves`) with active proximity monitoring. | Transitions to `SAMPLING_TARGET` upon arriving at vantage pose, or `AVOIDANCE_RECOVERY` on proximity alert. |
-| `AVOIDANCE_RECOVERY` | Emergency stop triggered by front ultrasonic or IR sensor (< 12 cm); executes reverse clearance backup (`BC008`). | Re-plans trajectory from new resting pose and resumes `NAVIGATING`. |
+| `NAVIGATING` | Calls `/execute_moves`; the motion controller measures primitives from live feedback and emits `/cmd_vel`. | Transitions to `SAMPLING_TARGET` at the vantage pose, or `ESTOP` on proximity. |
+| `AVOIDANCE_RECOVERY` | Reserved legacy state; automatic blind reverse recovery is disabled. | Proximity faults use the latched `ESTOP` path and require explicit RESET. |
 | `SAMPLING_TARGET` | Stationed at vantage pose; queries `/perception/sample_target` consensus buffer (< 50 ms). | Transitions to `ORBIT_RECOVERY` if marker/bull's eye or unrecognized, or proceeds to next leg. |
-| `ORBIT_RECOVERY` | Executes 90° orbit maneuvers around the obstacle footprint to inspect neighbouring faces (Algorithms Briefing §2.3). | Transitions to next leg once target confirmed or candidate faces exhausted. |
+| `ORBIT_RECOVERY` | Executes orbit maneuvers around the obstacle footprint to inspect neighbouring faces (Algorithms Briefing §2.3). | Transitions to the next leg when confirmed, or `MISSION_FAILED` when all candidates are exhausted. |
 | `MISSION_COMPLETE` | All obstacles successfully visited, classified, and reported to Android. | Mission finishes; publishes `MISSION COMPLETE`. |
+| `MISSION_FAILED` | Navigation reached an obstacle but no valid target could be confirmed after recovery. | Publishes `TARGET_UNCONFIRMED,<id>` and `MISSION FAILED`; never fabricates a symbol ID. |
 | `ESTOP` | Emergency halt triggered by user command (`STP`/`STOP`) or critical failure. | Node remains halted until `RESET` is received. |
 
 ---
@@ -153,6 +155,8 @@ In §2.3 of the Algorithms Briefing:
 ### 4.3. Target Recognition Output
 - **Topic**: `/android/target` $\rightarrow$ RFCOMM: `TARGET,<obs_id>,<symbol_id>`
 - Only confirmed real target symbols (11–39) are transmitted. Bull's Eye markers (ID 40) are suppressed from direct tablet update until orbit recovery confirms the true symbol.
+- If the sampler, legacy recognition fallback, and adjacent-face recovery all fail,
+  the planner enters `MISSION_FAILED`. It does not publish a nominal/fabricated ID.
 
 ---
 
@@ -182,7 +186,7 @@ pixi run -e pi test-all
 
 **Results Summary**:
 - **Algorithm unit tests (`test-algo`)**: 13/13 passed (Reeds-Shepp generation, TSP solver, kinematic bounds, waypoint discretization).
-- **Hardware bridge tests (`mdp_hardware_bridge`)**: 12/12 passed (UART packet encoding, telemetry parsing, queue chaining, E-stop).
-- **Android bridge tests (`mdp_android_bridge`)**: 10/10 passed (Checklist C.10 pose formatting, command routing, move buffering).
-- **Planner FSM & Recovery tests (`mdp_bringup`)**: 6/6 passed (multi-format layout parsing, state transitions, Bull's Eye orbit recovery).
-- **Total**: **41 / 41 tests passing (100%)**.
+- **Hardware/motion tests (`mdp_hardware_bridge`)**: 43/43 passed.
+- **Android bridge tests (`mdp_android_bridge`)**: 16/16 passed.
+- **Planner FSM & Recovery tests (`mdp_bringup`)**: 20/20 passed.
+- **Total**: **92 / 92 tests passing (100%)**.

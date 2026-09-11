@@ -27,7 +27,9 @@ Persistent notes about work done in this repo so later agents don't re-derive it
 - Task 1/2 START does not clear E-STOP. Task 1 no longer automatically resets
   and backs up after a proximity stop; the old recovery distance parameter is
   retained for configuration compatibility. Perception-driven orbit recovery
-  remains a separate collision-checked behavior.
+  remains a separate collision-checked behavior. If direct sampling, legacy
+  recognition, and all adjacent-face attempts fail, Task 1 enters
+  `MISSION_FAILED`; it does not fabricate or publish a fallback symbol ID.
 - The measured full-lock radius is 21–22 cm; planner/controller use 21 cm and
   retain existing calibrated steering endpoints. The absolute-speed PI loop is
   new and requires physical speed/tracking and stopping checks. Firmware build

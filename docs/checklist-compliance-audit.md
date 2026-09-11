@@ -15,7 +15,7 @@ The project is **not yet checklist-complete**. The largest known gaps are Androi
 | A — hardware and robot functions | Partial | Perception and serial interfaces exist; network setup and physical accuracy are not demonstrated. |
 | B — simulator and planning | Partial | Simulator and distance-based TSP exist; shortest-time optimisation is not demonstrated. |
 | C — Android/checklist GUI | Partial | Core teleoperation/map code exists, but C.2 and C.6–C.9 have concrete divergences. |
-| Automated tests | Passing | 91 Python tests passed in the aggregate Pixi suite. Firmware host/build results are tracked separately. |
+| Automated tests | Passing | 92 Python tests passed in the aggregate Pixi suite. Firmware host/build results are tracked separately. |
 
 ## Checklist matrix
 
@@ -67,7 +67,7 @@ Result:
 - Algorithm suite: **13 passed**.
 - Hardware/motion-controller suite: **43 passed**.
 - Android bridge suite: **16 passed**.
-- Planner suite: **19 passed**.
+- Planner suite: **20 passed**.
 
 ## Evidence locations
 
