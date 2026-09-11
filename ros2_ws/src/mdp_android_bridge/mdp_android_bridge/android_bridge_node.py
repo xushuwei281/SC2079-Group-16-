@@ -36,6 +36,8 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves
+
+_CURVATURE_EPSILON_RPS = 0.001
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
@@ -76,7 +78,7 @@ class AndroidBridgeNode(Node):
         self.declare_parameter("baud_rate", 115200)
         self.declare_parameter("service_wait_sec", 5.0)
         self.declare_parameter("teleop_max_speed_mps", 0.30)
-        self.declare_parameter("teleop_max_yaw_rps", 1.20)
+        self.declare_parameter("teleop_max_yaw_rps", 1.50)
         self.declare_parameter("teleop_min_turn_radius_m", 0.21)
         self.declare_parameter("distance_in_mm", False)  # True if tablet sends mm, False if cm
         self.declare_parameter("use_angle_brackets_for_pose", True)  # Format: ROBOT,<x>,<y>,<dir>
@@ -96,7 +98,7 @@ class AndroidBridgeNode(Node):
             self.get_parameter("teleop_min_turn_radius_m").value
         )
         if not (0 < self._teleop_max_speed <= 0.30
-                and 0 < self._teleop_max_yaw <= 1.20
+                and 0 < self._teleop_max_yaw <= 1.50
                 and self._teleop_radius >= 0.21):
             raise ValueError("Unsafe Android teleop velocity configuration")
         self._distance_in_mm = self.get_parameter("distance_in_mm").value
@@ -332,7 +334,8 @@ class AndroidBridgeNode(Node):
             if (abs(linear_mps) > self._teleop_max_speed
                     or abs(yaw_rps) > self._teleop_max_yaw):
                 raise ValueError("velocity exceeds configured limits")
-            if abs(yaw_rps) > abs(linear_mps) / self._teleop_radius + 1e-9:
+            if (abs(yaw_rps) > abs(linear_mps) / self._teleop_radius
+                    + _CURVATURE_EPSILON_RPS):
                 raise ValueError("Ackermann curvature limit exceeded")
         except (ValueError, ZeroDivisionError) as exc:
             self.get_logger().warn(f"Invalid velocity command {raw_line!r}: {exc}")

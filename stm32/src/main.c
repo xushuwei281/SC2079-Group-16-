@@ -1486,18 +1486,16 @@ void StartDefaultTask(void *argument)
 
     ir1_cm = irSensor1Raw ? IR1_RawToCm(irSensor1Raw) : 0;
     ir2_cm = irSensor2Raw ? IR_RawToCm(irSensor2Raw) : 0;
-    if (irSensor1Raw && irSensor2Raw) {
-        irValidTick = HAL_GetTick();
-        irValid = 1;
-    }
+    /* Freshness tracks the acquisition task, not whether a sensor returned a
+       positive range. A zero is the established no-return/out-of-range value. */
+    irValidTick = HAL_GetTick();
+    irValid = 1;
 
     uint32_t raw_echo = 0;
     us_cm = HCSR04_ReadCm(&raw_echo);
     us_raw_us = raw_echo;
-    if (us_cm > 0) {
-        usValidTick = HAL_GetTick();
-        usValid = 1;
-    }
+    usValidTick = HAL_GetTick();
+    usValid = 1;
 
     uint32_t primask = __get_PRIMASK();
     __disable_irq();

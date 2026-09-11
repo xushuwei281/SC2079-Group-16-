@@ -46,6 +46,8 @@ class TestSerialBridgeNode(unittest.TestCase):
     def test_wire_units_and_invalid_curvature(self):
         self.assertEqual(self.node._velocity_packet(-0.15, -0.6),
                          b"V" + struct.pack("<hh", -150, -600))
+        self.assertEqual(self.node._velocity_packet(0.3, 1.429),
+                         b"V" + struct.pack("<hh", 300, 1429))
         for speed, yaw in ((math.nan, 0), (0.31, 0), (0, 0.2), (0.1, 0.6)):
             with self.assertRaises(ValueError):
                 self.node._velocity_packet(speed, yaw)

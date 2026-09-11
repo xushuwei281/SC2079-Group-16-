@@ -38,6 +38,7 @@ _MAX_BATCH = 40
 # Retries when the firmware answers BUS (a previous batch was still
 # executing or in mechanical settling when our trigger landed).
 _BUS_RETRIES = 10
+_CURVATURE_EPSILON_RPS = 0.001
 
 # Standard candidate device nodes for STM32 USB-CDC / UART
 _DEFAULT_CANDIDATE_PORTS = [
@@ -82,7 +83,7 @@ class SerialBridgeNode(Node):
 
         self.declare_parameter("velocity_speed_mps", 0.15)
         self.declare_parameter("velocity_max_speed_mps", 0.30)
-        self.declare_parameter("velocity_max_yaw_rps", 1.20)
+        self.declare_parameter("velocity_max_yaw_rps", 1.50)
         self.declare_parameter("velocity_turn_radius_m", 0.21)
         self.declare_parameter("cmd_vel_timeout_sec", 0.20)
         self.declare_parameter("telemetry_timeout_sec", 0.40)
@@ -93,7 +94,7 @@ class SerialBridgeNode(Node):
         self._cmd_timeout = float(self.get_parameter("cmd_vel_timeout_sec").value)
         self._telemetry_timeout = float(self.get_parameter("telemetry_timeout_sec").value)
         if not (0 < self._speed <= self._max_speed <= 0.30 and self._radius >= 0.21
-                and 0 < self._max_yaw <= 1.20 and 0 < self._cmd_timeout <= 0.20
+                and 0 < self._max_yaw <= 1.50 and 0 < self._cmd_timeout <= 0.20
                 and 0 < self._telemetry_timeout <= 0.40):
             raise ValueError("Unsafe continuous velocity configuration")
 
@@ -178,6 +179,8 @@ class SerialBridgeNode(Node):
         self._pose_pub = self.create_publisher(PoseStamped, "/robot_pose", 10)
         self._raw_pose_pub = self.create_publisher(PoseStamped, "/robot_pose/raw", 1)
         self._raw_us_pub = self.create_publisher(Range, "/sensors/ultrasonic/raw", 1)
+        self._raw_ir_left_pub = self.create_publisher(Range, "/sensors/ir_left/raw", 1)
+        self._raw_ir_right_pub = self.create_publisher(Range, "/sensors/ir_right/raw", 1)
         self._us_pub = self.create_publisher(Range, "/sensors/ultrasonic", 10)
         self._ir_left_pub = self.create_publisher(Range, "/sensors/ir_left", 10)
         self._ir_right_pub = self.create_publisher(Range, "/sensors/ir_right", 10)
@@ -320,7 +323,7 @@ class SerialBridgeNode(Node):
             raise ValueError("Velocity must be finite")
         if abs(speed) > self._max_speed or abs(yaw) > self._max_yaw:
             raise ValueError("Velocity exceeds configured limits")
-        if abs(yaw) > abs(speed) / self._radius + 1e-9:
+        if abs(yaw) > abs(speed) / self._radius + _CURVATURE_EPSILON_RPS:
             raise ValueError("Ackermann curvature limit exceeded")
         return b"V" + struct.pack("<hh", round(speed * 1000), round(yaw * 1000))
 
@@ -567,6 +570,17 @@ class SerialBridgeNode(Node):
             raw_range.min_range, raw_range.max_range = 0.02, 3.0
             raw_range.field_of_view = 0.26
             self._raw_us_pub.publish(raw_range)
+            for value, frame_id, publisher in (
+                    (ir1_cm / 100.0, "ir_left_link", self._raw_ir_left_pub),
+                    (ir2_cm / 100.0, "ir_right_link", self._raw_ir_right_pub)):
+                raw_ir = Range()
+                raw_ir.header = raw_pose.header
+                raw_ir.header.frame_id = frame_id
+                raw_ir.range = value
+                raw_ir.radiation_type = Range.INFRARED
+                raw_ir.min_range, raw_ir.max_range = 0.10, 0.80
+                raw_ir.field_of_view = 0.10
+                publisher.publish(raw_ir)
             self._publish_current_pose()
             ranges = (us_cm / 100.0, ir1_cm / 100.0, ir2_cm / 100.0)
             if self._enable_sensor_kalman:

@@ -33,7 +33,7 @@ For an ordinary stop, transmit `56 00 00 00 00`.
 The ROS input is `/cmd_vel` (`geometry_msgs/msg/Twist`), with `linear.x` in m/s
 and `angular.z` in rad/s. The bridge validates finite values and supported axes
 and rejects unsupported targets before scaling to wire units. Defaults are 0.30 m/s maximum
-speed, 1.20 rad/s maximum yaw rate, and a calibrated minimum 0.21 m turning radius.
+speed, 1.50 rad/s maximum yaw rate, and a calibrated minimum 0.21 m turning radius.
 
 Each `V` replaces the previous velocity target; it never joins an instruction
 queue and needs no `#` trigger. There is no per-packet `RUN`/`FIN` handshake.
@@ -62,10 +62,12 @@ the asynchronous stop report as a latched fault requiring explicit RESET.
 RESET cancels an in-flight `ExecuteMoves` operation; it never resumes the old
 primitive from a saved target.
 
-Forward motion is stopped locally when valid raw ultrasonic distance is at or
-below 12 cm or either valid raw IR distance is at or below 10 cm. Sensor freshness
-is checked locally with a 300 ms limit. Local proximity/stale-sensor faults are
-latched. Front sensors do not protect the rear during reverse travel. These
+Forward motion is stopped locally when a positive raw ultrasonic distance is at
+or below 12 cm or either positive raw IR distance is at or below 10 cm. Sensor-task
+freshness is checked locally with a 300 ms limit. Zero is the established
+no-return/out-of-range value and does not by itself mean the acquisition task is
+stale. Local proximity/stale-sensor faults are latched. Front sensors do not
+protect the rear during reverse travel. These
 thresholds are firmware settings and must be reconciled with physical stopping
 distance and sensor coverage; filtered ROS readings are not the local stop input.
 

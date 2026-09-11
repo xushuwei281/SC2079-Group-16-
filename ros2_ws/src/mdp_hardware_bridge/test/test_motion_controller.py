@@ -121,6 +121,21 @@ class TestMotionController(unittest.TestCase):
         self.node._teleop_tick()
         self.assertEqual(len(self.velocities()), count)
 
+    def test_teleop_continuously_stops_for_raw_proximity(self):
+        msg = Twist()
+        msg.linear.x = 0.1
+        self.node._on_teleop(msg)
+        self.assertGreater(self.velocities()[-1][0], 0)
+        self.feedback(us=0.12)
+        self.node._teleop_tick()
+        self.assertTrue(self.node._estop_event.is_set())
+        self.assertEqual(self.node._stop_reason, "PROXIMITY:ULTRASONIC")
+        self.assertEqual(self.velocities()[-1], (0, 0))
+
+    def test_zero_no_echo_is_not_a_proximity_fault(self):
+        self.feedback(us=0.0)
+        self.assertEqual(self.node._forward_safety_error(True), "")
+
     def test_service_owns_output_and_drops_teleop_during_motion(self):
         msg = Twist()
         msg.linear.x = -0.3

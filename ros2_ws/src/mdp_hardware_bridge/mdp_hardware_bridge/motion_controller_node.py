@@ -21,14 +21,17 @@ from mdp_interfaces.srv import ExecuteMoves
 
 _VALID_COMMANDS = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU", "GC", "G0", "TO"}
 _MAX_BATCH = 40
+_CURVATURE_EPSILON_RPS = 0.001
 
 
 class MotionControllerNode(Node):
     def __init__(self) -> None:
         super().__init__("motion_controller_node")
         for name, default in (("velocity_speed_mps", 0.15), ("velocity_turn_radius_m", 0.21),
-                              ("velocity_max_yaw_rps", 1.2), ("batch_timeout_sec", 30.0),
-                              ("telemetry_timeout_sec", 0.4), ("cmd_vel_timeout_sec", 0.2)):
+                              ("velocity_max_yaw_rps", 1.5), ("batch_timeout_sec", 30.0),
+                              ("telemetry_timeout_sec", 0.4), ("cmd_vel_timeout_sec", 0.2),
+                              ("front_stop_distance_m", 0.12),
+                              ("ir_stop_distance_m", 0.10)):
             self.declare_parameter(name, default)
         self._speed = float(self.get_parameter("velocity_speed_mps").value)
         self._radius = float(self.get_parameter("velocity_turn_radius_m").value)
@@ -36,9 +39,12 @@ class MotionControllerNode(Node):
         self._batch_timeout_sec = float(self.get_parameter("batch_timeout_sec").value)
         self._telemetry_timeout = float(self.get_parameter("telemetry_timeout_sec").value)
         self._cmd_timeout = float(self.get_parameter("cmd_vel_timeout_sec").value)
+        self._front_stop = float(self.get_parameter("front_stop_distance_m").value)
+        self._ir_stop = float(self.get_parameter("ir_stop_distance_m").value)
         if not (0 < self._speed <= 0.3 and self._radius >= 0.21
-                and 0 < self._max_yaw <= 1.2 and 0 < self._telemetry_timeout <= 0.4
-                and 0 < self._cmd_timeout <= 0.2 and self._batch_timeout_sec > 0):
+                and 0 < self._max_yaw <= 1.5 and 0 < self._telemetry_timeout <= 0.4
+                and 0 < self._cmd_timeout <= 0.2 and self._batch_timeout_sec > 0
+                and self._front_stop >= 0.12 and self._ir_stop >= 0.10):
             raise ValueError("Unsafe motion controller configuration")
         self._control_lock = threading.RLock()
         self._busy = threading.Event()
@@ -47,6 +53,8 @@ class MotionControllerNode(Node):
         self._stop_reason = "ESTOPPED"
         self._raw_pose = None
         self._raw_us = float("nan")
+        self._raw_ir_left = float("nan")
+        self._raw_ir_right = float("nan")
         self._telemetry_stamp = 0.0
         self._range_stamp = 0.0
         self._teleop_target = None
@@ -58,6 +66,10 @@ class MotionControllerNode(Node):
             PoseStamped, "/robot_pose/raw", self._on_pose, 1, callback_group=group)
         self._range_sub = self.create_subscription(
             Range, "/sensors/ultrasonic/raw", self._on_range, 1, callback_group=group)
+        self._ir_left_sub = self.create_subscription(
+            Range, "/sensors/ir_left/raw", self._on_ir_left, 1, callback_group=group)
+        self._ir_right_sub = self.create_subscription(
+            Range, "/sensors/ir_right/raw", self._on_ir_right, 1, callback_group=group)
         self._estop_sub = self.create_subscription(
             Empty, "/estop", self._on_estop, 10, callback_group=group)
         self._reset_sub = self.create_subscription(
@@ -97,9 +109,36 @@ class MotionControllerNode(Node):
             self._raw_us = msg.range
             self._range_stamp = time.monotonic()
 
+    def _on_ir_left(self, msg: Range) -> None:
+        if self._recent_header(msg):
+            with self._control_lock:
+                self._raw_ir_left = msg.range
+                self._range_stamp = time.monotonic()
+
+    def _on_ir_right(self, msg: Range) -> None:
+        if self._recent_header(msg):
+            with self._control_lock:
+                self._raw_ir_right = msg.range
+                self._range_stamp = time.monotonic()
+
     def _telemetry_fresh(self) -> bool:
         return (self._raw_pose is not None and self._telemetry_stamp > 0
                 and time.monotonic() - self._telemetry_stamp < self._telemetry_timeout)
+
+    def _forward_safety_error(self, forward: bool) -> str:
+        """Return a central safety fault for a requested forward velocity."""
+        if not forward:
+            return ""
+        if (self._range_stamp <= 0
+                or time.monotonic() - self._range_stamp >= self._telemetry_timeout):
+            return "SENSOR_STALE"
+        for name, value, threshold in (
+                ("ULTRASONIC", self._raw_us, self._front_stop),
+                ("IR_LEFT", self._raw_ir_left, self._ir_stop),
+                ("IR_RIGHT", self._raw_ir_right, self._ir_stop)):
+            if math.isfinite(value) and 0 < value <= threshold:
+                return f"PROXIMITY:{name}"
+        return ""
 
     def _publish_velocity(self, speed: float, yaw: float) -> None:
         msg = Twist()
@@ -129,6 +168,7 @@ class MotionControllerNode(Node):
             self._generation += 1
             self._estop_event.clear()
             self._teleop_target = None
+            self._raw_us = self._raw_ir_left = self._raw_ir_right = float("nan")
             self._raw_pose = None
             self._telemetry_stamp = self._range_stamp = 0.0
             self._publish_velocity(0.0, 0.0)
@@ -140,7 +180,7 @@ class MotionControllerNode(Node):
             speed, yaw = msg.linear.x, msg.angular.z
             if (not math.isfinite(speed) or not math.isfinite(yaw)
                     or abs(speed) > 0.3 or abs(yaw) > self._max_yaw
-                    or abs(yaw) > abs(speed) / self._radius + 1e-9
+                    or abs(yaw) > abs(speed) / self._radius + _CURVATURE_EPSILON_RPS
                     or any(v != 0 for v in (msg.linear.y, msg.linear.z,
                                            msg.angular.x, msg.angular.y))):
                 self._teleop_target = None
@@ -164,7 +204,11 @@ class MotionControllerNode(Node):
             elif not self._telemetry_fresh():
                 self._latch_stop("STALE_TELEMETRY")
             else:
-                self._publish_velocity(*self._teleop_target)
+                error = self._forward_safety_error(self._teleop_target[0] > 0)
+                if error:
+                    self._latch_stop(error)
+                else:
+                    self._publish_velocity(*self._teleop_target)
 
     def _handle_execute_moves(self, request: ExecuteMoves.Request,
                               response: ExecuteMoves.Response) -> ExecuteMoves.Response:
@@ -258,6 +302,10 @@ class MotionControllerNode(Node):
                 if complete:
                     self._publish_velocity(0.0, 0.0)
                     return "FIN"
+                error = self._forward_safety_error(direction > 0)
+                if error:
+                    self._latch_stop(error)
+                    return error
                 # Slow near the measured goal without claiming time-based progress.
                 distance_left = remaining * self._radius if turning else remaining
                 speed = direction * min(self._speed, max(0.04, distance_left * 1.5))

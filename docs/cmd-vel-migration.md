@@ -21,7 +21,7 @@ that the refactor has been flashed or tested on the moving robot.
 - A continuous input may publish `/cmd_vel/teleop` (`Twist`), refreshing
   `linear.x` in m/s and `angular.z` in rad/s. Defaults: 20 Hz transmission,
   0.20 s command expiry, 0.40 s telemetry expiry, 0.30 m/s speed limit,
-  1.20 rad/s yaw limit, and 0.21 m calibrated minimum turning radius.
+  1.50 rad/s yaw limit, and 0.21 m calibrated minimum turning radius.
 - The MCU watchdog stops velocity motion after 300 ms without a new `V` packet.
   Independent firmware proximity protection can stop forward motion without
   waiting for the Pi. Front sensing does not cover reverse travel.
@@ -44,8 +44,9 @@ GC/G0/TO requests. Verify that remappings preserve one base `/cmd_vel` publisher
 | Setting | Default | Owner |
 | --- | --- | --- |
 | `velocity_speed_mps` | 0.15 m/s | Motion controller primitive speed. |
+| Android joystick maximum | 0.30 m/s | Full-deflection manual speed; 1.43 rad/s at the calibrated 21 cm radius. |
 | `velocity_turn_radius_m` | 0.21 m | Controller and serial bridge; keep consistent. |
-| `velocity_max_yaw_rps` | 1.20 rad/s | Controller and serial bridge. |
+| `velocity_max_yaw_rps` | 1.50 rad/s | Controller and serial bridge; allows 0.30 m/s at 21 cm radius. |
 | `velocity_max_speed_mps` | 0.30 m/s | Serial bridge; firmware also enforces its limit. |
 | `cmd_vel_timeout_sec` | 0.20 s | Controller teleop input and serial bridge base input. |
 | `telemetry_timeout_sec` | 0.40 s | Controller and serial bridge freshness checks. |

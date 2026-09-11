@@ -8,7 +8,8 @@
 #include <stdint.h>
 
 #define VELOCITY_MAX_MM_S 300
-#define VELOCITY_MAX_MRAD_S 1200
+#define VELOCITY_MAX_MRAD_S 1500
+#define VELOCITY_MAX_WHEEL_MM_S 410.0f
 #define VELOCITY_WATCHDOG_MS 300U
 #define VELOCITY_SENSOR_TIMEOUT_MS 300U
 #define VELOCITY_FRONT_STOP_CM 12U
@@ -67,9 +68,9 @@ static inline void velocity_targets(int16_t speed, int16_t yaw,
     *right = speed * (1.0f + curvature * VELOCITY_TRACK_MM * 0.5f);
     /* Keep individual wheel speeds within the same commissioned speed limit. */
     float peak = fmaxf(fabsf(*left), fabsf(*right));
-    if (peak > VELOCITY_MAX_MM_S) {
-        *left *= VELOCITY_MAX_MM_S / peak;
-        *right *= VELOCITY_MAX_MM_S / peak;
+    if (peak > VELOCITY_MAX_WHEEL_MM_S) {
+        *left *= VELOCITY_MAX_WHEEL_MM_S / peak;
+        *right *= VELOCITY_MAX_WHEEL_MM_S / peak;
     }
 }
 
@@ -90,7 +91,8 @@ static inline int16_t velocity_pi(VelocityPI *state, float target, float measure
     return (int16_t)(direction * velocity_clamp(output, 0.0f, VELOCITY_PWM_MAX));
 }
 
-/* Forward-mounted sensors cannot protect reversing; never interpret zero as clear. */
+/* The validity timestamps are sensor-task heartbeats. A zero range is the wire
+ * protocol's no-return/out-of-range value, so only positive ranges are close. */
 static inline int velocity_safety(int forward, uint32_t now, uint32_t us_tick,
                                   uint32_t ir_tick, int us_valid, int ir_valid,
                                   uint16_t us, uint16_t ir1, uint16_t ir2)

@@ -90,6 +90,11 @@ drift apart.
 
 ## STM32 Firmware (`stm32/`)
 
+- **Continuous Range Safety Ownership**: `motion_controller_node` is the Pi-side
+  safety owner for every forward `/cmd_vel` source (teleop, Task 1, and Task 2),
+  using unfiltered ultrasonic/IR data at 12/10 cm. Firmware retains an independent
+  fallback. STM32 range value zero is no-return/out-of-range; freshness tracks the
+  sensor task heartbeat so an open arena does not produce `STOP:SENSOR_STALE`.
 - **Measured Turning Radius**: Physical full-lock radius is 21–22 cm. The planner
   and continuous velocity controller use 21 cm; calibrated servo endpoints remain
   `SERVOLEFT=101`, `SERVOCENTER=146`, and `SERVORIGHT=206`.
@@ -127,6 +132,11 @@ drift apart.
 
 ## Android Remote Control & Real-Time Dashboards (`android/`)
 
+- **Manual Turn Speed**: The Android joystick full-deflection speed is 0.30 m/s.
+  Yaw rate remains curvature-derived from the measured 21 cm radius and capped at
+  1.5 rad/s. At full lock, the required outer-wheel target is about 0.407 m/s;
+  firmware therefore uses a separate 0.410 m/s wheel target cap while retaining
+  the 0.30 m/s chassis-command cap.
 - **Task 1 Real-Time Mission Dashboard**:
   - **Live 2D Arena Map**: Single `ArenaView` instance dynamically reparented into `task1ArenaContainer` on tab switch, showing live dead-reckoned robot pose, obstacle positions, and target icons.
   - **FSM State Badge**: Color-coded mission state pill (`IDLE`, `PLANNING`, `NAVIGATING`, `SAMPLING_TARGET`, `ORBIT_RECOVERY`, `MISSION_COMPLETE`, `ESTOP`).

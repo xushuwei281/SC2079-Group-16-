@@ -2,8 +2,9 @@
 
 Assumes `train_edge.sh`/`train_server.sh` (`raspberry-pi/cv/`) has already
 produced weights. This is what's left to get from "trained model" to
-"robot reports recognized images during a run." Builds on
-[`week2-checklist.md`](week2-checklist.md) (comms loop) and adds the
+"robot reports recognized images during a run." Builds on the current
+[checklist audit](checklist-compliance-audit.md) (which records the comms gaps)
+and adds the
 message format in [`protocol.md`](protocol.md#image-recognition-results-raspberry-pi--algorithm-pc--android).
 
 | Task | Owner | Acceptance check |

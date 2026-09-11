@@ -494,6 +494,7 @@ HF like the rest of this project's models/datasets — worth doing once
   the bridge nodes (`mdp_hardware_bridge`'s `execute_moves` service,
   `android_bridge_node`).
 
-See the non-ROS implementation's `docs/week2-checklist.md` and
+See the historical non-ROS implementation checklist in
+`docs/archive/week2-checklist-historical.md` and
 `docs/cv-integration-checklist.md` for the equivalent checklist items —
 not yet ported to a ROS2-specific checklist.

@@ -76,12 +76,15 @@ limits, reset behavior, and legacy maintenance restrictions, and
 | STM32 → RPi | `TLM:<x>,<y>,<heading>,<us>,<ir_left>,<ir_right>\r\n` | `TLM:20,20,90,50,40,40` | Live pose/ranges in cm and legacy heading in degrees, throughout motion. |
 | STM32 → RPi | `STOP:<reason>\r\n` | `STOP:PROXIMITY` | Asynchronous stop: `PROXIMITY`, `WATCHDOG`, `SENSOR_STALE`, or `INVALID_VELOCITY`. |
 
-The STM32 watchdog zeros velocity after 300 ms without a fresh setpoint.
-Local raw front sensor checks can interrupt forward motion independently of
-the Pi; front sensors do not protect reverse travel. The Pi latches reported
-faults until explicit RESET. Telemetry reception and stop callbacks do not wait
-for `FIN`. The old `#`/`RUN`/`FIN` sequence is restricted to legacy maintenance;
-normal motion completion belongs to the Pi motion controller.
+The central Pi motion controller checks every forward velocity against fresh raw
+ultrasonic and IR samples before forwarding it. It latches at 12 cm ultrasonic or
+10 cm IR, and it covers Android teleoperation and both autonomous modes. The STM32
+also applies those thresholds as a last-resort cutoff and zeros velocity after
+300 ms without a fresh setpoint. A zero range means no return/out of range; sensor
+freshness follows the acquisition-task heartbeat instead of requiring a positive
+echo. Front sensors do not protect reverse travel. Telemetry reception and stop
+callbacks do not wait for `FIN`. The old `#`/`RUN`/`FIN` sequence is restricted to
+legacy maintenance; normal motion completion belongs to the Pi motion controller.
 
 
 ## Raspberry Pi ↔ Algorithm (PC) (TCP, JSON lines)
