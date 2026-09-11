@@ -114,12 +114,18 @@ class FastestCarNode(Node):
         self._carpark_y_cm = float(self.get_parameter("carpark_y_cm").value)
         self._default_turn = str(self.get_parameter("default_turn").value).upper()
         self._sample_retries = int(self.get_parameter("sample_retries").value)
+        self.declare_parameter("safety_stop_dist_cm", 12.0)
+        self._safety_stop_dist_cm = float(
+            self.get_parameter("safety_stop_dist_cm").value
+        )
 
         self._state = Task2State.IDLE
         self._is_running = False
         self._sprint_thread: Optional[threading.Thread] = None
 
         self._us_range_m = float("inf")
+        self._ir_left_range_m = float("inf")
+        self._ir_right_range_m = float("inf")
         self._current_x = 0.0
         self._current_y = 0.0
         self._current_yaw = 0.0
@@ -144,6 +150,20 @@ class FastestCarNode(Node):
             10,
             callback_group=callback_group,
         )
+        self._ir_left_sub = self.create_subscription(
+            Range,
+            "/sensors/ir_left",
+            self._on_ir_left_range,
+            10,
+            callback_group=callback_group,
+        )
+        self._ir_right_sub = self.create_subscription(
+            Range,
+            "/sensors/ir_right",
+            self._on_ir_right_range,
+            10,
+            callback_group=callback_group,
+        )
         self._pose_sub = self.create_subscription(
             PoseStamped, "/robot_pose", self._on_pose, 10, callback_group=callback_group
         )
@@ -160,7 +180,8 @@ class FastestCarNode(Node):
         )
 
         self.get_logger().info(
-            f"FastestCarNode initialized. Vantage dist: {self._vantage_dist_cm:.1f} cm, Default: {self._default_turn}"
+            f"FastestCarNode initialized. Vantage dist: {self._vantage_dist_cm:.1f} cm, Default: {self._default_turn}, "
+            f"Safety stop: {self._safety_stop_dist_cm:.1f} cm"
         )
 
     # -------------------------------------------------------------------------
@@ -173,6 +194,20 @@ class FastestCarNode(Node):
             self._us_range_m = float(msg.range)
         else:
             self._us_range_m = float("inf")
+
+    def _on_ir_left_range(self, msg: Range) -> None:
+        """Update live left IR reading (m)."""
+        if 0.05 <= msg.range <= 2.0:
+            self._ir_left_range_m = float(msg.range)
+        else:
+            self._ir_left_range_m = float("inf")
+
+    def _on_ir_right_range(self, msg: Range) -> None:
+        """Update live right IR reading (m)."""
+        if 0.05 <= msg.range <= 2.0:
+            self._ir_right_range_m = float(msg.range)
+        else:
+            self._ir_right_range_m = float("inf")
 
     def _on_pose(self, msg: PoseStamped) -> None:
         """Update live dead-reckoned pose."""
@@ -218,6 +253,9 @@ class FastestCarNode(Node):
 
     def start_sprint(self) -> None:
         """Trigger the fastest car sprint."""
+        if self._state == Task2State.ESTOP:
+            self._status_pub.publish(String(data="E-STOP active: RESET before starting."))
+            return
         if self._is_running:
             self.get_logger().warn("Task 2 sprint already running.")
             return
@@ -254,10 +292,39 @@ class FastestCarNode(Node):
         for s in cmd_strings:
             req.commands.append(parse_move_command(s))
 
+        is_forward = any(s.upper().startswith(("FC", "FL", "FR")) for s in cmd_strings)
         future = self._move_client.call_async(req)
         while rclpy.ok() and not future.done():
             if not self._is_running:
                 return False
+
+            if is_forward:
+                candidates = []
+                if not math.isinf(self._us_range_m):
+                    candidates.append(("Ultrasonic", self._us_range_m))
+                if not math.isinf(self._ir_left_range_m):
+                    candidates.append(("IR Left", self._ir_left_range_m))
+                if not math.isinf(self._ir_right_range_m):
+                    candidates.append(("IR Right", self._ir_right_range_m))
+
+                if candidates:
+                    cause_sensor, min_dist_m = min(candidates, key=lambda s: s[1])
+                    if min_dist_m < (self._safety_stop_dist_cm / 100.0):
+                        dist_cm = min_dist_m * 100.0
+                        self.get_logger().warn(
+                            f"⚠️ Task 2 PROXIMITY ALERT ({label})! Obstacle at {dist_cm:.1f} cm detected by {cause_sensor} "
+                            f"(< {self._safety_stop_dist_cm:.1f} cm). Halting."
+                        )
+                        self._estop_pub.publish(Empty())
+                        alert_msg = f"ESTOP: Obstacle detected by {cause_sensor} ({dist_cm:.1f} cm <= {self._safety_stop_dist_cm:.1f} cm)"
+                        self._status_pub.publish(String(data=alert_msg))
+                        self._telemetry_pub.publish(
+                            String(data=f"ESTOP_ALERT,{cause_sensor},{dist_cm:.1f},{self._safety_stop_dist_cm:.1f}")
+                        )
+                        self._transition(Task2State.ESTOP, f"Proximity alert ({cause_sensor}: {dist_cm:.1f} cm)")
+                        self._is_running = False
+                        return False
+
             time.sleep(0.02)
 
         if future.done() and future.result() and future.result().success:

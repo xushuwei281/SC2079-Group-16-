@@ -92,6 +92,15 @@ class TestFastestCarNode(unittest.TestCase):
         self.assertEqual(self.node._state, Task2State.ESTOP)
         self.assertFalse(self.node._is_running)
 
+    def test_start_does_not_clear_estop(self) -> None:
+        """A new sprint request cannot bypass an explicit reset after E-STOP."""
+        self.node._on_estop(Empty())
+        with patch("mdp_bringup.fastest_car_node.threading.Thread") as thread:
+            self.node.start_sprint()
+        thread.assert_not_called()
+        self.assertEqual(self.node._state, Task2State.ESTOP)
+        self.assertFalse(self.node._is_running)
+
     def test_ultrasonic_and_pose_updates(self):
         """Test live updates of ultrasonic sensor and dead-reckoned pose."""
         # Valid ultrasonic range: 0.35m = 35cm
@@ -211,6 +220,34 @@ class TestFastestCarNode(unittest.TestCase):
         # Final state stands by in IDLE
         self.assertEqual(self.node._state, Task2State.IDLE)
         self.assertFalse(self.node._is_running)
+
+    def test_proximity_estop_reports_sensor_and_distance(self):
+        """Test that proximity violation in Task 2 halts sprint and reports sensor cause and distance."""
+        self.node._is_running = True
+        self.node._safety_stop_dist_cm = 12.0
+        # IR Left reads 9.0 cm (0.09m)
+        self.node._us_range_m = float("inf")
+        self.node._ir_left_range_m = 0.09
+        self.node._ir_right_range_m = float("inf")
+
+        self.node._estop_pub.publish = MagicMock()
+        self.node._status_pub.publish = MagicMock()
+        self.node._telemetry_pub.publish = MagicMock()
+
+        mock_future = MagicMock()
+        mock_future.done.return_value = False
+        self.node._move_client.call_async = MagicMock(return_value=mock_future)
+
+        result = self.node._execute_move_list_sync(["FC030"], label="Task 2 Sprint")
+        self.assertFalse(result)
+        self.node._estop_pub.publish.assert_called()
+        self.assertEqual(self.node._state, Task2State.ESTOP)
+
+        status_calls = [c[0][0].data for c in self.node._status_pub.publish.call_args_list]
+        self.assertTrue(any("ESTOP: Obstacle detected by IR Left (9.0 cm" in s for s in status_calls))
+
+        telemetry_calls = [c[0][0].data for c in self.node._telemetry_pub.publish.call_args_list]
+        self.assertTrue(any("ESTOP_ALERT,IR Left,9.0,12.0" in t for t in telemetry_calls))
 
 
 if __name__ == "__main__":

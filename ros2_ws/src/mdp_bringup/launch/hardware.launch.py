@@ -88,6 +88,13 @@ def generate_launch_description():
     )
 
     # 2. STM32 Serial Hardware Bridge Node
+    motion_controller = Node(
+        package="mdp_hardware_bridge",
+        executable="motion_controller_node",
+        name="motion_controller_node",
+        output="screen",
+    )
+
     hardware_bridge = Node(
         package="mdp_hardware_bridge",
         executable="serial_bridge_node",
@@ -128,6 +135,7 @@ def generate_launch_description():
         period=2.0,
         actions=[
             hardware_bridge,
+            motion_controller,
             android_bridge,
             camera_launch,
             foxglove,

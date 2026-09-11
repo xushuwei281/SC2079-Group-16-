@@ -1,9 +1,7 @@
-# Send a batch of discrete move commands to the STM32 and run them as
-# one queued sequence (matches the firmware's own batching: N move
-# packets + a '#' trigger packet, executed back-to-back on the STM32
-# before it replies). Blocks until the STM32 replies FIN/BUS/FUL or the
-# bridge's timeout elapses -- the firmware gives no progress signal
-# during execution, so there's nothing meaningful to report mid-call.
+# Execute compatibility primitives under Pi-side live odometry supervision.
+# motion_controller_node owns this service and publishes cmd_vel while driving.
+# The service may block its caller, but the STM32 receives
+# replaceable velocity targets and can stop independently on sensor faults.
 MoveCommand[] commands
 ---
 bool success

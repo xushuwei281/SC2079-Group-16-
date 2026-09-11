@@ -143,6 +143,52 @@ class TestPlannerNode(unittest.TestCase):
         self.assertEqual(result[0], 15)
         self.assertEqual(result[1], "arrow_up")
 
+    def test_start_does_not_clear_estop(self) -> None:
+        """A new START cannot restart a mission after a latched safety stop."""
+        self.node._current_plan = MagicMock()
+        self.node._on_estop(Empty())
+        with patch("mdp_bringup.planner_node.threading.Thread") as thread:
+            self.node.start_mission()
+        thread.assert_not_called()
+        self.assertEqual(self.node._state, MissionState.ESTOP)
+        self.assertFalse(self.node._is_executing)
+
+    def test_proximity_estop_reports_sensor_and_distance(self):
+        """Test that proximity violation halts robot and reports which sensor and value caused it."""
+        self.node._is_executing = True
+        self.node._enable_avoidance = True
+        self.node._safety_dist_cm = 12.0
+        self.node._recovery_backup_cm = 8.0
+        # Ultrasonic reads 8.5 cm (0.085m)
+        self.node._us_range_m = 0.085
+        self.node._ir_left_range_m = float("inf")
+        self.node._ir_right_range_m = float("inf")
+
+        self.node._estop_pub.publish = MagicMock()
+        self.node._status_pub.publish = MagicMock()
+        self.node._telemetry_pub.publish = MagicMock()
+
+        # Mock future that never finishes on its own so proximity loop checks sensors
+        mock_future = MagicMock()
+        mock_future.done.return_value = False
+        self.node._move_client.call_async = MagicMock(return_value=mock_future)
+
+        result = self.node._execute_commands_sync([("FC", 20)], label="Forward Test")
+        self.assertFalse(result)
+        self.node._estop_pub.publish.assert_called()
+        self.assertEqual(self.node._state, MissionState.ESTOP)
+        self.assertFalse(self.node._is_executing)
+        # A latched stop must not dispatch an automatic reverse movement.
+        self.node._move_client.call_async.assert_called_once()
+
+        # Verify status publication contains sensor name and value
+        status_calls = [c[0][0].data for c in self.node._status_pub.publish.call_args_list]
+        self.assertTrue(any("ESTOP: Obstacle detected by Ultrasonic (8.5 cm" in s for s in status_calls))
+
+        # Verify telemetry publication contains ESTOP_ALERT with Ultrasonic and 8.5
+        telemetry_calls = [c[0][0].data for c in self.node._telemetry_pub.publish.call_args_list]
+        self.assertTrue(any("ESTOP_ALERT,Ultrasonic,8.5,12.0" in t for t in telemetry_calls))
+
 
 if __name__ == "__main__":
     unittest.main()

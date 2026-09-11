@@ -1,13 +1,13 @@
+"""UART driver's offline wire, freshness and emergency-stop regressions."""
 import math
-import os
+import struct
 import unittest
 from unittest.mock import MagicMock, patch
 
-import pytest
 import rclpy
+from geometry_msgs.msg import Twist
 from std_msgs.msg import Empty, String
-
-from mdp_hardware_bridge.serial_bridge_node import SerialBridgeNode, _VALID_COMMANDS
+from mdp_hardware_bridge.serial_bridge_node import SerialBridgeNode
 from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves
 
@@ -22,240 +22,107 @@ class TestSerialBridgeNode(unittest.TestCase):
         rclpy.shutdown()
 
     def setUp(self):
-        # Prevent automatic connection to real serial hardware in unit tests
-        with patch("serial.Serial"):
+        with patch.object(SerialBridgeNode, "_try_connect", return_value=False):
             self.node = SerialBridgeNode()
+        self.port = MagicMock()
+        self.port.is_open = True
+        self.port.write.side_effect = len
+        self.node._serial = self.port
+        self.node._enable_pose_kalman = self.node._enable_sensor_kalman = False
+        self.node._handle_telemetry_line("TLM:20,20,90,50,40,40")
 
     def tearDown(self):
         self.node.destroy_node()
 
-    def test_valid_command_codes(self):
-        expected = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU", "GC", "G0", "TO"}
-        self.assertEqual(_VALID_COMMANDS, expected)
+    def packets(self):
+        return [c.args[0] for c in self.port.write.call_args_list]
 
-    def test_encode_valid(self):
-        self.assertEqual(self.node._encode("FC", 50), b"FC050")
-        self.assertEqual(self.node._encode("BC", 0), b"BC000")
-        self.assertEqual(self.node._encode("FL", 90), b"FL090")
-        self.assertEqual(self.node._encode("FR", 180), b"FR180")
-        self.assertEqual(self.node._encode("BL", 45), b"BL045")
-        self.assertEqual(self.node._encode("BR", 30), b"BR030")
-        self.assertEqual(self.node._encode("FU", 15), b"FU015")
-        self.assertEqual(self.node._encode("BU", 20), b"BU020")
-        self.assertEqual(self.node._encode("FC", 999), b"FC999")
+    def test_driver_exposes_no_movement_service(self):
+        self.assertEqual(self.node._service.srv_name, "/hardware/maintenance")
+        req = ExecuteMoves.Request(commands=[MoveCommand(command="FC", value=10)])
+        self.assertFalse(self.node._handle_maintenance(req, ExecuteMoves.Response()).success)
+        self.assertEqual(self.packets(), [])
 
-    def test_encode_invalid_command(self):
-        with self.assertRaises(ValueError):
-            self.node._encode("INVALID", 10)
-        with self.assertRaises(ValueError):
-            self.node._encode("STP", 0)
+    def test_wire_units_and_invalid_curvature(self):
+        self.assertEqual(self.node._velocity_packet(-0.15, -0.6),
+                         b"V" + struct.pack("<hh", -150, -600))
+        for speed, yaw in ((math.nan, 0), (0.31, 0), (0, 0.2), (0.1, 0.6)):
+            with self.assertRaises(ValueError):
+                self.node._velocity_packet(speed, yaw)
 
-    def test_encode_out_of_range_value(self):
-        with self.assertRaises(ValueError):
-            self.node._encode("FC", -1)
-        with self.assertRaises(ValueError):
-            self.node._encode("FC", 1000)
+    def test_velocity_expires_and_does_not_resume(self):
+        msg = Twist()
+        msg.linear.x = 0.1
+        self.node._on_cmd_vel(msg)
+        self.node._teleop_stamp -= 1
+        self.node._velocity_tick()
+        self.assertEqual(self.packets()[-1], b"V\0\0\0\0")
+        count = len(self.packets())
+        self.node._velocity_tick()
+        self.assertEqual(count, len(self.packets()))
 
-    def test_candidate_ports_discovery(self):
-        candidates = self.node._find_candidate_ports()
-        self.assertIn("/dev/ttyACM0", candidates)
-        self.assertIn("/dev/ttySTM32", candidates)
-
-    @patch("serial.Serial")
-    def test_handle_execute_moves_success(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        # First readline: RUN\r\n, Second readline: FIN\r\n
-        mock_serial.readline.side_effect = [b"RUN\r\n", b"FIN\r\n"]
-        self.node._serial = mock_serial
-
-        req = ExecuteMoves.Request()
-        req.commands = [
-            MoveCommand(command="FC", value=50),
-            MoveCommand(command="FL", value=90),
-        ]
-        resp = ExecuteMoves.Response()
-
-        result = self.node._handle_execute_moves(req, resp)
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.status, "FIN")
-        # Verify packets written: FC050, FL090, #\x00\x00\x00\x00
-        calls = mock_serial.write.call_args_list
-        self.assertEqual(calls[0][0][0], b"FC050")
-        self.assertEqual(calls[1][0][0], b"FL090")
-        self.assertEqual(calls[2][0][0], b"#\x00\x00\x00\x00")
-
-    @patch("serial.Serial")
-    def test_handle_execute_moves_bus_retry(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        # First attempt: BUS\r\n; Second attempt: RUN\r\n then FIN\r\n
-        mock_serial.readline.side_effect = [b"BUS\r\n", b"RUN\r\n", b"FIN\r\n"]
-        self.node._serial = mock_serial
-
-        req = ExecuteMoves.Request()
-        req.commands = [MoveCommand(command="FC", value=10)]
-        resp = ExecuteMoves.Response()
-
-        with patch("time.sleep", return_value=None):
-            result = self.node._handle_execute_moves(req, resp)
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.status, "FIN")
-
-    def test_handle_execute_moves_disconnected(self):
-        self.node._serial = None
-        with patch.object(self.node, "_try_connect", return_value=False):
-            req = ExecuteMoves.Request()
-            req.commands = [MoveCommand(command="FC", value=10)]
-            resp = ExecuteMoves.Response()
-
-            result = self.node._handle_execute_moves(req, resp)
-
-            self.assertFalse(result.success)
-            self.assertEqual(result.status, "DISCONNECTED")
-
-    @patch("serial.Serial")
-    def test_on_estop_sends_q_packet(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        self.node._serial = mock_serial
-
-        self.node._on_estop(Empty())
-
-        mock_serial.write.assert_called_with(b"Q\x00\x00\x00\x00")
-        mock_serial.flush.assert_called()
-
-    @patch("serial.Serial")
-    def test_on_android_cmd_reset_sends_r_packet(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        self.node._serial = mock_serial
-        self.node._estop_event.set()
-        self.node._busy.set()
-
-        self.node._on_android_cmd(String(data="RESET"))
-
-        mock_serial.write.assert_called_with(b"R\x00\x00\x00\x00")
-        mock_serial.flush.assert_called()
+    def test_zero_is_accepted_without_feedback(self):
+        self.node._telemetry_stamp = 0.0
+        self.node._on_cmd_vel(Twist())
+        self.assertEqual(self.packets(), [b"V\0\0\0\0"])
         self.assertFalse(self.node._estop_event.is_set())
-        self.assertFalse(self.node._busy.is_set())
-        self.assertAlmostEqual(self.node._x, 0.200, places=3)
-        self.assertAlmostEqual(self.node._y, 0.200, places=3)
-        self.assertAlmostEqual(self.node._yaw, math.radians(90.0), places=3)
 
-    @patch("serial.Serial")
-    def test_sensor_fused_fin_updates_pose(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        # STM32 replies RUN, then FIN:50.2,0.4 (50.2 cm, 0.4 degrees)
-        mock_serial.readline.side_effect = [b"RUN\r\n", b"FIN:50.2,0.4\r\n"]
-        self.node._serial = mock_serial
+    def test_stale_feedback_blocks_nonzero(self):
+        self.node._telemetry_stamp = 0.0
+        msg = Twist()
+        msg.linear.x = 0.1
+        self.node._on_cmd_vel(msg)
+        self.assertEqual(self.packets(), [b"Q\0\0\0\0"])
+        self.assertTrue(self.node._estop_event.is_set())
 
-        # Reset initial pose
-        self.node._x = 0.0
-        self.node._y = 0.0
-        self.node._yaw = 0.0
-        self.node._initial_yaw = 0.0
+    def test_estop_needs_explicit_reset(self):
+        self.node._on_estop(Empty())
+        self.node._on_android_cmd(String(data="ALG|1,2,3,N"))
+        self.assertTrue(self.node._estop_event.is_set())
+        self.node._on_android_cmd(String(data="RESET"))
+        self.assertFalse(self.node._estop_event.is_set())
+        self.assertEqual(self.packets()[-1], b"R\0\0\0\0")
+        self.assertFalse(self.node._telemetry_fresh())
 
-        req = ExecuteMoves.Request()
-        req.commands = [MoveCommand(command="FC", value=50)]
-        resp = ExecuteMoves.Response()
+    def test_reader_fragments_while_busy_without_write_lock(self):
+        self.node._busy.set()
+        self.port.in_waiting = 100
+        self.port.read.side_effect = [b"TLM:22.5,21,88", b",60,35,42\r\n"]
+        with self.node._write_lock:
+            self.node._poll_telemetry()
+            self.node._poll_telemetry()
+        self.assertAlmostEqual(self.node._raw_pose[0], 0.225)
+        self.assertAlmostEqual(self.node._raw_pose[2], math.radians(92))
 
-        result = self.node._handle_execute_moves(req, resp)
+    def test_stop_notification_propagates_estop(self):
+        self.port.in_waiting = 100
+        self.port.read.return_value = b"STOP:PROXIMITY\r\n"
+        with patch.object(self.node._estop_pub, "publish") as publish:
+            self.node._poll_telemetry()
+            publish.assert_called_once()
+        self.assertTrue(self.node._estop_event.is_set())
+        count = len(self.packets())
+        self.node._on_estop(Empty())
+        self.assertEqual(count, len(self.packets()))
 
+    def test_invalid_telemetry_cannot_refresh_watchdog(self):
+        self.node._telemetry_stamp = 1.0
+        self.node._handle_telemetry_line("TLM:nan,20,90,50,30,30")
+        self.assertEqual(self.node._telemetry_stamp, 1.0)
+
+    def test_maintenance_stationary_fin(self):
+        def receive(_):
+            self.port.in_waiting = 100
+            self.port.read.return_value = b"RUN\r\nFIN:POS,20,20,90,50,40,40\r\n"
+            self.node._poll_telemetry()
+        req = ExecuteMoves.Request(commands=[MoveCommand(command="GC", value=0)])
+        with patch("mdp_hardware_bridge.serial_bridge_node.time.sleep", side_effect=receive):
+            result = self.node._handle_maintenance(req, ExecuteMoves.Response())
         self.assertTrue(result.success)
-        self.assertEqual(result.status, "FIN:50.2,0.4")
-        self.assertAlmostEqual(self.node._x, 0.502, places=3)
-        # world_yaw = initial_yaw - measured_yaw (STM32's raw heading
-        # increases for a right/CW turn; this pipeline is CCW-positive).
-        self.assertAlmostEqual(self.node._yaw, math.radians(-0.4), places=3)
+        self.assertEqual(self.packets(),
+                         [b"V\0\0\0\0", b"GC000", b"#\0\0\0\0", b"V\0\0\0\0"])
 
-    @patch("serial.Serial")
-    def test_plain_fin_falls_back_to_nominal_pose(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        # STM32 replies RUN, then plain FIN\r\n
-        mock_serial.readline.side_effect = [b"RUN\r\n", b"FIN\r\n"]
-        self.node._serial = mock_serial
-
-        self.node._x = 0.0
-        self.node._y = 0.0
-        self.node._yaw = 0.0
-        self.node._initial_yaw = 0.0
-
-        req = ExecuteMoves.Request()
-        req.commands = [
-            MoveCommand(command="FC", value=50),
-            MoveCommand(command="FL", value=90),
-        ]
-        resp = ExecuteMoves.Response()
-
-        result = self.node._handle_execute_moves(req, resp)
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.status, "FIN")
-        self.assertAlmostEqual(self.node._x, 0.50, places=2)
-    @patch("serial.Serial")
-    def test_pos_fin_updates_pose(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        # STM32 replies RUN, then FIN:POS,65.4,120.2,89.5,25,18,45 (in cm, degrees, US, IR1, IR2)
-        mock_serial.readline.side_effect = [b"RUN\r\n", b"FIN:POS,65.4,120.2,89.5,25,18,45\r\n"]
-        self.node._serial = mock_serial
-
-        req = ExecuteMoves.Request()
-        req.commands = [MoveCommand(command="FC", value=50)]
-        resp = ExecuteMoves.Response()
-
-        result = self.node._handle_execute_moves(req, resp)
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.status, "FIN:POS,65.4,120.2,89.5,25,18,45")
-        self.assertAlmostEqual(self.node._x, 0.654, places=3)
-        self.assertAlmostEqual(self.node._y, 1.202, places=3)
-        # yaw = 180 - world_deg (see _update_and_publish_pose's FIN:POS branch)
-        self.assertAlmostEqual(self.node._yaw, math.radians(90.5), places=3)
-
-    @patch("serial.Serial")
-    def test_tlm_stream_during_moves(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        # In-flight telemetry arrives before RUN and during movement before FIN
-        mock_serial.readline.side_effect = [
-            b"TLM:20.0,20.0,90.0,50,40,30\r\n",
-            b"RUN\r\n",
-            b"TLM:25.0,20.0,90.0,45,40,30\r\n",
-            b"FIN:POS,30.0,20.0,90.0,40,40,30\r\n",
-        ]
-        self.node._serial = mock_serial
-
-        req = ExecuteMoves.Request()
-        req.commands = [MoveCommand(command="FC", value=10)]
-        resp = ExecuteMoves.Response()
-
-        result = self.node._handle_execute_moves(req, resp)
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.status, "FIN:POS,30.0,20.0,90.0,40,40,30")
-        self.assertAlmostEqual(self.node._x, 0.30, places=2)
-
-    @patch("serial.Serial")
-    def test_poll_telemetry_idle(self, mock_serial_cls):
-        mock_serial = MagicMock()
-        mock_serial.is_open = True
-        mock_serial.in_waiting = 35
-        mock_serial.readline.return_value = b"TLM:22.5,21.0,88.0,60,35,42\r\n"
-        self.node._serial = mock_serial
-
-        self.node._poll_telemetry()
-
-        self.assertAlmostEqual(self.node._x, 0.225, places=3)
-        self.assertAlmostEqual(self.node._y, 0.210, places=3)
-        # yaw = 180 - world_deg (see _handle_telemetry_line's sign correction)
-        self.assertAlmostEqual(self.node._yaw, math.radians(92.0), places=3)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_partial_write_disconnects(self):
+        self.port.write.side_effect = lambda _: 2
+        self.assertFalse(self.node._write_packet(b"V\0\0\0\0"))
+        self.assertIsNone(self.node._serial)

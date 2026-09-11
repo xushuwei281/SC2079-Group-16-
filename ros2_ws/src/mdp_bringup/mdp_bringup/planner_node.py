@@ -408,6 +408,9 @@ class PlannerNode(Node):
 
     def start_mission(self) -> None:
         """Begin automated execution of the computed plan."""
+        if self._state == MissionState.ESTOP:
+            self._status_pub.publish(String(data="E-STOP active: RESET before starting."))
+            return
         if not self._current_plan or not self._current_plan.legs:
             self.get_logger().warn("Cannot start mission: No plan available.")
             self._status_pub.publish(String(data="No Plan Available"))
@@ -443,31 +446,41 @@ class PlannerNode(Node):
 
             # Active Proximity Safety Guard (only active during forward maneuvers)
             if self._enable_avoidance and not is_backward:
-                min_dist_m = min(self._us_range_m, self._ir_left_range_m, self._ir_right_range_m)
-                if min_dist_m < (self._safety_dist_cm / 100.0):
-                    self.get_logger().warn(
-                        f"⚠️ PROXIMITY ALERT ({label})! Obstacle at {min_dist_m*100.0:.1f} cm (< {self._safety_dist_cm} cm). Halting."
-                    )
-                    self._transition_state(MissionState.AVOIDANCE_RECOVERY, f"Proximity alert during {label}")
-                    self._estop_pub.publish(Empty())
-                    interrupted_by_sensor = True
-                    break
+                candidates = []
+                if not math.isinf(self._us_range_m):
+                    candidates.append(("Ultrasonic", self._us_range_m))
+                if not math.isinf(self._ir_left_range_m):
+                    candidates.append(("IR Left", self._ir_left_range_m))
+                if not math.isinf(self._ir_right_range_m):
+                    candidates.append(("IR Right", self._ir_right_range_m))
+
+                if candidates:
+                    cause_sensor, min_dist_m = min(candidates, key=lambda s: s[1])
+                    if min_dist_m < (self._safety_dist_cm / 100.0):
+                        dist_cm = min_dist_m * 100.0
+                        self.get_logger().warn(
+                            f"⚠️ PROXIMITY ALERT ({label})! Obstacle at {dist_cm:.1f} cm detected by {cause_sensor} "
+                            f"(< {self._safety_dist_cm:.1f} cm). Halting."
+                        )
+                        self._is_executing = False
+                        self._transition_state(
+                            MissionState.ESTOP,
+                            f"Proximity alert ({cause_sensor}: {dist_cm:.1f} cm)",
+                        )
+                        self._estop_pub.publish(Empty())
+                        alert_msg = f"ESTOP: Obstacle detected by {cause_sensor} ({dist_cm:.1f} cm <= {self._safety_dist_cm:.1f} cm)"
+                        self._status_pub.publish(String(data=alert_msg))
+                        self._telemetry_pub.publish(
+                            String(data=f"ESTOP_ALERT,{cause_sensor},{dist_cm:.1f},{self._safety_dist_cm:.1f}")
+                        )
+                        interrupted_by_sensor = True
+                        break
             time.sleep(0.04)
 
         if interrupted_by_sensor:
-            self._status_pub.publish(String(data="Obstacle Alert: Executing clearance backup..."))
-            time.sleep(0.3)
-            if self._recovery_backup_cm > 0:
-                self.get_logger().info(f"Executing {self._recovery_backup_cm:.0f} cm reverse recovery move...")
-                backup_req = ExecuteMoves.Request()
-                mc = MoveCommand()
-                mc.command = "BC"
-                mc.value = int(self._recovery_backup_cm)
-                backup_req.commands.append(mc)
-                backup_future = self._move_client.call_async(backup_req)
-                while rclpy.ok() and not backup_future.done():
-                    time.sleep(0.04)
-                time.sleep(0.4)
+            self._status_pub.publish(
+                String(data="Obstacle Alert: Stopped. Clear obstruction and RESET before restarting.")
+            )
             return False
 
         if future.done() and future.result() and future.result().success:
@@ -648,7 +661,7 @@ class PlannerNode(Node):
                 sub_plan = FullMissionPlan(start_pose=self._current_pose, legs=[], total_distance_cm=length, all_commands=cmds, all_poses=sampled_poses)
                 self._publish_ros_path(sub_plan)
 
-                # Execute with active proximity monitoring and automatic backup on obstruction
+                # Execute with active monitoring; a proximity stop requires explicit reset.
                 move_ok = self._execute_commands_sync(cmds, label=f"Leg {i+1} Attempt {attempt+1}")
                 if move_ok:
                     leg_success = True

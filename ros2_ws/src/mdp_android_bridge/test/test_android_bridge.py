@@ -7,9 +7,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import rclpy
-from geometry_msgs.msg import PoseStamped, Quaternion
+from geometry_msgs.msg import PoseStamped, Quaternion, Twist
 from mdp_android_bridge.android_bridge_node import AndroidBridgeNode
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 
 
 class TestAndroidBridge(unittest.TestCase):
@@ -77,6 +77,25 @@ class TestAndroidBridge(unittest.TestCase):
         call_args = self.node._move_client.call_async.call_args[0][0]
         self.assertEqual(call_args.commands[0].command, "FC")
         self.assertEqual(call_args.commands[0].value, 20)
+
+    def test_velocity_command_publishes_twist(self) -> None:
+        """Android joystick velocity uses SI units on the teleop velocity topic."""
+        self.node._teleop_pub.publish = MagicMock()
+        self.node._dispatch("VEL:0.100,-0.400")
+
+        msg = self.node._teleop_pub.publish.call_args.args[0]
+        self.assertIsInstance(msg, Twist)
+        self.assertAlmostEqual(msg.linear.x, 0.1)
+        self.assertAlmostEqual(msg.angular.z, -0.4)
+
+    def test_invalid_velocity_publishes_zero(self) -> None:
+        """Malformed, excessive, and impossible Ackermann commands fail stopped."""
+        self.node._teleop_pub.publish = MagicMock()
+        for command in ("VEL:nan,0", "VEL:0.4,0", "VEL:0.05,1.0", "VEL:0.1"):
+            self.node._dispatch(command)
+            msg = self.node._teleop_pub.publish.call_args.args[0]
+            self.assertEqual(msg.linear.x, 0.0)
+            self.assertEqual(msg.angular.z, 0.0)
 
     def test_estop_dispatch(self):
         """Test that STP and STOP trigger e-stop publisher."""
@@ -255,6 +274,28 @@ class TestAndroidBridge(unittest.TestCase):
         self.node._dispatch("STP")
         self.assertFalse(self.node._is_moving)
         self.assertIsNone(self.node._pending_move)
+
+    def test_estop_reports_sensor_cause(self):
+        """Test that /estop and STP report which sensor caused the estop and its reading."""
+        self.node._us_cm = 8.4
+        self.mock_serial.reset_mock()
+        self.node._on_estop(Empty())
+
+        calls = [c[0][0].decode("utf-8") for c in self.mock_serial.write.call_args_list]
+        self.assertTrue(any("STATUS,ESTOP: Obstacle detected by Ultrasonic (8.4 cm)" in c for c in calls))
+        self.assertTrue(any("ESTOP_ALERT,Ultrasonic,8.4,12.0" in c for c in calls))
+
+    def test_forward_move_prevented_by_proximity(self):
+        """Test that forward move is rejected and triggers estop if front obstacle is detected."""
+        self.node._ir_l_cm = 7.5
+        self.node._estop_pub.publish = MagicMock()
+        self.mock_serial.reset_mock()
+
+        self.node._dispatch("FW:20")
+        self.node._estop_pub.publish.assert_called_once()
+        calls = [c[0][0].decode("utf-8") for c in self.mock_serial.write.call_args_list]
+        self.assertTrue(any("STATUS,ESTOP: Obstacle detected by IR Left (7.5 cm <= 12.0 cm)" in c for c in calls))
+        self.assertTrue(any("ESTOP_ALERT,IR Left,7.5,12.0" in c for c in calls))
 
 
 if __name__ == "__main__":

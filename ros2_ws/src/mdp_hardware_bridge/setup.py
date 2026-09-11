@@ -14,12 +14,13 @@ setup(
     zip_safe=True,
     maintainer="Ray Shao",
     maintainer_email="frieddeli@gmail.com",
-    description="UART bridge to the STM32 motor controller (discrete move-command protocol)",
+    description="UART bridge to the STM32 motor controller (continuous velocity protocol)",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "serial_bridge_node = mdp_hardware_bridge.serial_bridge_node:main",
+            "motion_controller_node = mdp_hardware_bridge.motion_controller_node:main",
             "teleop_keyboard = mdp_hardware_bridge.teleop_keyboard:main",
         ],
     },

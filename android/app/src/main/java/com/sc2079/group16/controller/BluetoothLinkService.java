@@ -18,8 +18,8 @@ import java.util.concurrent.Executors;
 /**
  * Owns the classic Bluetooth SPP link to the Raspberry Pi's
  * android_bridge_node (ros2_ws/src/mdp_android_bridge/).
- * Speaks the ASCII line protocol from docs/protocol.md: FW:&lt;mm&gt;,
- * BW:&lt;mm&gt;, TL:&lt;deg&gt;, TR:&lt;deg&gt;, STP out; STATUS,&lt;text&gt;,
+ * Speaks the ASCII line protocol from docs/protocol.md: continuous
+ * VEL:&lt;m/s&gt;,&lt;rad/s&gt;, legacy FW/BW/TL/TR, and STP out; STATUS,&lt;text&gt;,
  * DONE, ROBOT,&lt;x&gt;,&lt;y&gt;,&lt;dir&gt; (Checklist C.10, coarse) and
  * POSE,&lt;x_cm&gt;,&lt;y_cm&gt;,&lt;yaw_deg&gt; (supplemental, full precision) in.
  *
@@ -84,6 +84,9 @@ class BluetoothLinkService {
 
         // SENSORS,<us_cm>,<ir_left_cm>,<ir_right_cm>
         void onSensors(float usCm, float irLeftCm, float irRightCm);
+
+        // ESTOP_ALERT,<sensor>,<dist_cm>,<threshold_cm>[,<reason>]
+        void onEstopAlert(String sensor, float distanceCm, float thresholdCm, String reason);
     }
 
     private final Listener listener;
@@ -243,6 +246,8 @@ class BluetoothLinkService {
             parseT2State(text.substring("T2_STATE,".length()));
         } else if (text.startsWith("T2_ARROW,")) {
             parseT2Arrow(text.substring("T2_ARROW,".length()));
+        } else if (text.startsWith("ESTOP_ALERT,")) {
+            parseEstopAlert(text.substring("ESTOP_ALERT,".length()));
         } else if (text.startsWith("SENSORS,")) {
             parseSensors(text.substring("SENSORS,".length()));
         }
@@ -417,6 +422,22 @@ class BluetoothLinkService {
             float irLeftCm = Float.parseFloat(parts[1].trim());
             float irRightCm = Float.parseFloat(parts[2].trim());
             mainHandler.post(() -> listener.onSensors(usCm, irLeftCm, irRightCm));
+        } catch (Exception ignored) {
+        }
+    }
+
+    // ESTOP_ALERT,<sensor>,<dist_cm>,<threshold_cm>[,<reason>]
+    private void parseEstopAlert(String payload) {
+        String[] parts = payload.split(",");
+        if (parts.length < 2) {
+            return;
+        }
+        try {
+            String sensor = parts[0].trim();
+            float distCm = Float.parseFloat(parts[1].trim());
+            float threshCm = parts.length > 2 ? Float.parseFloat(parts[2].trim()) : 12.0f;
+            String reason = parts.length > 3 ? parts[3].trim() : "Proximity Violation";
+            mainHandler.post(() -> listener.onEstopAlert(sensor, distCm, threshCm, reason));
         } catch (Exception ignored) {
         }
     }

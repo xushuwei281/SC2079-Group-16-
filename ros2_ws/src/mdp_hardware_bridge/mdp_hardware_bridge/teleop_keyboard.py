@@ -157,7 +157,7 @@ def main(args: Optional[list[str]] = None) -> None:
     if node._move_client.wait_for_service(timeout_sec=5.0):
         print("Connected to hardware bridge! Ready for input.\n")
     else:
-        print("Warning: /execute_moves is not available yet (start serial_bridge_node).\n")
+        print("Warning: /execute_moves is not available yet (start motion_controller_node).\n")
 
     node.refresh_display()
 

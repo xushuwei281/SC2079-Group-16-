@@ -32,6 +32,7 @@
 #include "pidMotor.h"
 #include <math.h>
 #include <stdlib.h>    /* atoi, abs */
+#include "velocity_control.h"
 
 /* USER CODE END Includes */
 
@@ -43,9 +44,9 @@
 /* USER CODE BEGIN PD */
 //for servo
 #define PWM_PERIOD  1600
-#define SERVOCENTER 146      /* was ~71.5 when tim8 prescale is 320 */
-#define SERVOLEFT   101      /* delta = 45 from center (146 - 45) -> ~84cm radius */
-#define SERVORIGHT  206      /* calibrated mechanical offset -> ~84cm radius */
+#define SERVOCENTER VELOCITY_SERVO_CENTER
+#define SERVOLEFT   VELOCITY_SERVO_LEFT   /* calibrated endpoint: ~21-22cm radius */
+#define SERVORIGHT  VELOCITY_SERVO_RIGHT  /* calibrated endpoint: ~21-22cm radius */
 #define SERVOMIN     94
 #define SERVOMAX    231
 //testing servo center:
@@ -77,6 +78,13 @@ volatile uint8_t instrLen = 0;
 volatile uint8_t runRequested = 0;      /* their "receivedInstruction" */
 volatile uint8_t estopFlag = 0;
 volatile uint32_t rxCount = 0;
+static volatile int16_t velocitySpeed = 0, velocityYaw = 0;
+static volatile uint8_t velocityMode = 0;
+static volatile uint32_t velocityTick = 0, motionGeneration = 0;
+static volatile uint32_t legacyGeneration = 0;
+static volatile uint32_t odometryGeneration = 0;
+/* Deferred UART status: ISR and motor task must never block on UART. */
+static volatile uint8_t stopPending = 0;
 
 static float batchDist = 0.0f;          /* cm accumulated this batch - see D */
 /* USER CODE END PD */
@@ -145,30 +153,33 @@ float gyroZ = 0.0f;
 float gyroOffset = 0.0f;
 float correctedZ = 0.0f;
 //for heading PID
-float headingTarget     = 0.0f;   /* where we want to point   */
-int   headingCorrection = 0;      /* servo counts to add      */
-uint8_t heading_pid     = 0;      /* 1 = PID on, 0 = off      */
+volatile float headingTarget     = 0.0f;   /* where we want to point   */
+volatile int headingCorrection = 0;      /* servo counts to add      */
+volatile uint8_t heading_pid     = 0;      /* 1 = PID on, 0 = off      */
 float angleMaxDev = 0.0f;
-float angleNow = 0.0f;
+volatile float angleNow = 0.0f;
 uint32_t gyroLastTick = 0;
 char gyroMsg[32];
 float    gyroDrift    = 0.0f;    /* residual walk, deg/s */
 uint32_t gyroBadReads = 0;       /* diagnostic counter   */
 char     oled_display[6][24];    /* shared display buffer (16 chars visible on screen) */
 //for motor
-int     motorCorrection = 0;
-uint8_t motor_pid = 0;
+volatile int motorCorrection = 0;
+volatile uint8_t motor_pid = 0;
 
 //Motor
 int32_t  dist_target = 0;
-float    left_dist = 0, right_dist = 0;
-int8_t   left_dir = 0, right_dir = 0;   /* -3..3 : sign=direction, magnitude=speed tier; 1 low, 3 high */
+volatile float left_dist = 0, right_dist = 0;
+volatile int8_t left_dir = 0, right_dir = 0;
+static volatile float leftSpeedMm = 0.0f, rightSpeedMm = 0.0f;
+static volatile int32_t previousCountA = 0;
+static volatile uint16_t previousCountB = 0;
 uint16_t left_pwmVal_motor = MOTORMID, right_pwmVal_motor = MOTORMID;
-int8_t   move_dir = 'C';                /* C:Center  L:Left  R:Right */
+volatile int8_t move_dir = 'C';                /* C:Center  L:Left  R:Right */
 
 //Servo
-uint16_t target_pwmVal_servo = SERVOCENTER;
-uint16_t pwmVal_servo        = SERVOCENTER;
+volatile uint16_t target_pwmVal_servo = SERVOCENTER;
+volatile uint16_t pwmVal_servo        = SERVOCENTER;
 
 /* Analog IR sensors on H1: PA2/pin 9 and PA3/pin 11. */
 volatile uint16_t irSensor1Raw = 0;
@@ -179,12 +190,12 @@ volatile uint16_t ir2_cm = 0;
 /* Ultrasonic sensor HC-SR04: PC10 Trig, PC12 Echo */
 volatile uint16_t us_cm = 0;
 volatile uint32_t us_raw_us = 0;
+static volatile uint32_t usValidTick = 0, irValidTick = 0;
+static volatile uint8_t usValid = 0, irValid = 0;
 
 /* 2D Pose Estimation (Odometry + Gyro Z Fusion) */
-float robot_x_cm = 20.0f;               /* Start zone center (20cm, 20cm), East=0, North=+90deg */
-float robot_y_cm = 20.0f;
-static float prev_enc_left  = 0.0f;
-static float prev_enc_right = 0.0f;
+volatile float robot_x_cm = 20.0f;               /* Start zone center (20cm, 20cm), East=0, North=+90deg */
+volatile float robot_y_cm = 20.0f;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -237,7 +248,10 @@ static uint16_t IR_ADC_Read(uint32_t channel)
    ADC1->SQR3 = channel & 0x1FU;
    ADC1->SR = 0;
    ADC1->CR2 |= ADC_CR2_SWSTART;
-   while ((ADC1->SR & ADC_SR_EOC) == 0U) { }
+   uint32_t started = HAL_GetTick();
+   while ((ADC1->SR & ADC_SR_EOC) == 0U) {
+       if (HAL_GetTick() - started > 2U) return 0;
+   }
    return (uint16_t)ADC1->DR;
 }
 
@@ -352,22 +366,27 @@ static uint16_t HCSR04_ReadCm(uint32_t *raw_us)
 
 //Encoder
 static int32_t encoderA(void) { return (int32_t)__HAL_TIM_GET_COUNTER(&htim2); }
-static int32_t encoderB(void) { return -(int16_t)__HAL_TIM_GET_COUNTER(&htim3); }
 //motor
 #define MOTOR_PPR     	1527.0f	//1320.0f
 #define WHEEL_D_CM       6.5f
 #define CM_PER_COUNT  (WHEEL_D_CM * 3.1415f / MOTOR_PPR)
-static float distA(void) { return encoderA() * CM_PER_COUNT; }
-static float distB(void) { return encoderB() * CM_PER_COUNT; }
 static void encodersZero(void)
 {
+   uint32_t primask = __get_PRIMASK();
+   __disable_irq();
    __HAL_TIM_SET_COUNTER(&htim2, 0);
    __HAL_TIM_SET_COUNTER(&htim3, 0);
-   prev_enc_left  = 0.0f;
-   prev_enc_right = 0.0f;
+   previousCountA = 0;
+   previousCountB = 0;
+   left_dist = right_dist = 0.0f;
+   leftSpeedMm = rightSpeedMm = 0.0f;
+   __set_PRIMASK(primask);
 }
 static void setMotorA(int16_t speed)
 {
+   uint32_t primask = __get_PRIMASK();
+   __disable_irq();
+   if (estopFlag) speed = 0;
    if (speed >  (PWM_PERIOD - 1)) speed =  (PWM_PERIOD - 1);
    if (speed < -(PWM_PERIOD - 1)) speed = -(PWM_PERIOD - 1);
    if (speed > 0) {
@@ -380,9 +399,13 @@ static void setMotorA(int16_t speed)
        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 0);       /* both high     */
        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, 0);       /* = brake       */
    }
+   __set_PRIMASK(primask);
 }
 static void setMotorB(int16_t speed)
 {
+   uint32_t primask = __get_PRIMASK();
+   __disable_irq();
+   if (estopFlag) speed = 0;
    if (speed >  (PWM_PERIOD - 1)) speed =  (PWM_PERIOD - 1);
    if (speed < -(PWM_PERIOD - 1)) speed = -(PWM_PERIOD - 1);
    if (speed > 0) {
@@ -395,6 +418,7 @@ static void setMotorB(int16_t speed)
        __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_1, 0);
        __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_2, 0);
    }
+   __set_PRIMASK(primask);
 }
 /* USER CODE END 0 */
 
@@ -1104,6 +1128,8 @@ static void MotorsOff(void)
 static void EStop(void)
 {
     estopFlag = 1;
+    velocitySpeed = velocityYaw = 0;
+    motionGeneration++;
     MotorsOff();
     snprintf(oled_display[0], sizeof(oled_display[0]), "E STOP         ");
 }
@@ -1117,7 +1143,11 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
    HAL_UART_Receive_IT(&huart3, (uint8_t *)rxBuffer[rxIdx], FRAME_LEN);
 
    rxCount++;
-   if (pkt[0] == 'R') {
+   if (pkt[0] == 'R' && pkt[1] == 0 && pkt[2] == 0 && pkt[3] == 0 && pkt[4] == 0) {
+       motionGeneration++;
+       velocitySpeed = velocityYaw = 0;
+       velocityMode = 0;
+       stopPending = 0;
        estopFlag = 0;
        runRequested = 0;
        instrLen = 0;
@@ -1129,13 +1159,31 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
    }
    if (estopFlag) return;                       /* latched until reboot or 'R' reset */
 
-   if (pkt[0] == 'Q') {
+   if (pkt[0] == 'Q' && pkt[1] == 0 && pkt[2] == 0 && pkt[3] == 0 && pkt[4] == 0) {
        EStop();
+   }
+   else if (pkt[0] == 'V') {
+       int16_t speed, yaw;
+       if (!velocity_decode(pkt, &speed, &yaw)) {
+           EStop();
+           stopPending = 4; /* Malformed/out-of-bounds target must not retain motion. */
+           return;
+       }
+       velocitySpeed = speed;
+       velocityYaw = yaw;
+       velocityTick = HAL_GetTick();
+       velocityMode = 1;
+       motionGeneration++;
+       runRequested = 0;
+       instrLen = 0;
+       if (speed == 0) MotorsOff();
+       return;
    }
    else if (runRequested == 1) {
        /* Batch is actively executing; ignore incoming moves to protect current batch */
    }
-   else if (pkt[0] == '#') {
+   else if (pkt[0] == '#' && pkt[1] == 0 && pkt[2] == 0 && pkt[3] == 0 && pkt[4] == 0) {
+       if (instrLen == 0 || velocitySpeed != 0) return;
        runRequested = 1;
        if (Comm_taskHandle != NULL) {
            osThreadFlagsSet(Comm_taskHandle, 0x01);
@@ -1145,6 +1193,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
        /* Instruction buffer full; drop to prevent overflow */
    }
    else {
+       int maintenance = (pkt[0] == 'G' && (pkt[1] == 'C' || pkt[1] == '0')) ||
+                         (pkt[0] == 'T' && pkt[1] == 'O');
+       int movement = (pkt[0] == 'F' || pkt[0] == 'B') &&
+                      (pkt[1] == 'C' || pkt[1] == 'L' || pkt[1] == 'R');
+       if ((!maintenance && !movement) || (velocityMode && !maintenance) ||
+           velocitySpeed != 0 || pkt[2] < '0' || pkt[2] > '9' ||
+           pkt[3] < '0' || pkt[3] > '9' || pkt[4] < '0' || pkt[4] > '9') return;
        memcpy((void *)instrList[instrLen++], pkt, FRAME_LEN);
        /* no ACK - the RPi protocol does not expect one */
    }
@@ -1166,6 +1221,12 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
 /* ---------------- movement primitives (his structure) ---------------- */
 
+static int legacyActive(void)
+{
+    return !estopFlag && !velocityMode && runRequested &&
+           legacyGeneration == motionGeneration;
+}
+
 void FrontCenter(int dist)
 {
     int cur_dist = 0;
@@ -1183,26 +1244,30 @@ void FrontCenter(int dist)
 
     right_dir = 1;  left_dir = 1;      /* MOTORLOW - break static friction */
     osDelay(50);
+    if (!legacyActive()) return;
     right_dir = 2;  left_dir = 2;      /* MOTORMID - cruise */
 
     int creep_dist = (dist_target > 15) ? 5 : 2;
     uint32_t t0 = osKernelGetTickCount();
     uint32_t timeout_ticks = (uint32_t)(dist * 80 + 2000);
 
-    while (cur_dist < dist_target - creep_dist && (osKernelGetTickCount() - t0) < timeout_ticks) {
+    while (legacyActive() && cur_dist < dist_target - creep_dist && (osKernelGetTickCount() - t0) < timeout_ticks) {
         osDelay(20);
+        if (!legacyActive()) return;
         cur_dist = (int)((left_dist + right_dist) / 2.0f);
     }
 
     right_dir = 1;  left_dir = 1;      /* creep */
-    while (((left_dist + right_dist) / 2.0f) < dist_target - MOVEOVERSHOOT && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && ((left_dist + right_dist) / 2.0f) < dist_target - MOVEOVERSHOOT && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(10);
+    if (!legacyActive()) return;
 
     motor_pid = 0;  heading_pid = 0;
     right_dir = 0;  left_dir = 0;
     target_pwmVal_servo = SERVOCENTER;
     batchDist += 0.5f * (left_dist + right_dist);
     osDelay(20);
+    if (!legacyActive()) return;
 }
 
 void BackCenter(int dist)
@@ -1222,26 +1287,30 @@ void BackCenter(int dist)
 
     right_dir = -1;  left_dir = -1;
     osDelay(50);
+    if (!legacyActive()) return;
     right_dir = -2;  left_dir = -2;
 
     int creep_dist = (dist > 15) ? 5 : 2;
     uint32_t t0 = osKernelGetTickCount();
     uint32_t timeout_ticks = (uint32_t)(dist * 80 + 2000);
 
-    while (cur_dist > dist_target + creep_dist && (osKernelGetTickCount() - t0) < timeout_ticks) {
+    while (legacyActive() && cur_dist > dist_target + creep_dist && (osKernelGetTickCount() - t0) < timeout_ticks) {
         osDelay(20);
+        if (!legacyActive()) return;
         cur_dist = (int)((left_dist + right_dist) / 2.0f);
     }
 
     right_dir = -1;  left_dir = -1;
-    while (((left_dist + right_dist) / 2.0f) > dist_target + MOVEOVERSHOOT && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && ((left_dist + right_dist) / 2.0f) > dist_target + MOVEOVERSHOOT && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(10);
+    if (!legacyActive()) return;
 
     motor_pid = 0;  heading_pid = 0;
     right_dir = 0;  left_dir = 0;
     target_pwmVal_servo = SERVOCENTER;
     batchDist += 0.5f * (left_dist + right_dist);
     osDelay(20);
+    if (!legacyActive()) return;
 }
 
 void FrontRight(int angle)
@@ -1251,6 +1320,7 @@ void FrontRight(int angle)
 
     target_pwmVal_servo = SERVORIGHT;
     osDelay(80);                             /* let the servo physically arrive (~60-80ms throw) */
+    if (!legacyActive()) return;
 
     float startAngle = angleNow;
     right_dir = 2;  left_dir = 2;            /* cruise speed */
@@ -1259,17 +1329,20 @@ void FrontRight(int angle)
     uint32_t t0 = osKernelGetTickCount();
     uint32_t timeout_ticks = (uint32_t)(angle * 60 + 2000);
 
-    while (fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(15);
+    if (!legacyActive()) return;
 
     right_dir = 1;  left_dir = 1;            /* creep */
-    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(10);
+    if (!legacyActive()) return;
 
     right_dir = 0;  left_dir = 0;
     target_pwmVal_servo = SERVOCENTER;
     headingTarget = angleNow;
     osDelay(40);
+    if (!legacyActive()) return;
 }
 
 void FrontLeft(int angle)
@@ -1279,6 +1352,7 @@ void FrontLeft(int angle)
 
     target_pwmVal_servo = SERVOLEFT;
     osDelay(80);                             /* let the servo physically arrive (~60-80ms throw) */
+    if (!legacyActive()) return;
 
     float startAngle = angleNow;
     right_dir = 2;  left_dir = 2;
@@ -1287,17 +1361,20 @@ void FrontLeft(int angle)
     uint32_t t0 = osKernelGetTickCount();
     uint32_t timeout_ticks = (uint32_t)(angle * 60 + 2000);
 
-    while (fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(15);
+    if (!legacyActive()) return;
 
     right_dir = 1;  left_dir = 1;
-    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(10);
+    if (!legacyActive()) return;
 
     right_dir = 0;  left_dir = 0;
     target_pwmVal_servo = SERVOCENTER;
     headingTarget = angleNow;
     osDelay(40);
+    if (!legacyActive()) return;
 }
 
 void BackRight(int angle)
@@ -1307,6 +1384,7 @@ void BackRight(int angle)
 
     target_pwmVal_servo = SERVORIGHT;
     osDelay(80);
+    if (!legacyActive()) return;
 
     float startAngle = angleNow;
     right_dir = -2;  left_dir = -2;
@@ -1315,17 +1393,20 @@ void BackRight(int angle)
     uint32_t t0 = osKernelGetTickCount();
     uint32_t timeout_ticks = (uint32_t)(angle * 60 + 2000);
 
-    while (fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(15);
+    if (!legacyActive()) return;
 
     right_dir = -1;  left_dir = -1;
-    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(10);
+    if (!legacyActive()) return;
 
     right_dir = 0;  left_dir = 0;
     target_pwmVal_servo = SERVOCENTER;
     headingTarget = angleNow;
     osDelay(40);
+    if (!legacyActive()) return;
 }
 
 void BackLeft(int angle)
@@ -1335,6 +1416,7 @@ void BackLeft(int angle)
 
     target_pwmVal_servo = SERVOLEFT;
     osDelay(80);
+    if (!legacyActive()) return;
 
     float startAngle = angleNow;
     right_dir = -2;  left_dir = -2;
@@ -1343,34 +1425,45 @@ void BackLeft(int angle)
     uint32_t t0 = osKernelGetTickCount();
     uint32_t timeout_ticks = (uint32_t)(angle * 60 + 2000);
 
-    while (fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && fabsf(angleNow - startAngle) < (angle - creep_angle) && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(15);
+    if (!legacyActive()) return;
 
     right_dir = -1;  left_dir = -1;
-    while (fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
+    while (legacyActive() && fabsf(angleNow - startAngle) < (angle - TURNOVERSHOOT) && (osKernelGetTickCount() - t0) < timeout_ticks)
         osDelay(10);
+    if (!legacyActive()) return;
 
     right_dir = 0;  left_dir = 0;
     target_pwmVal_servo = SERVOCENTER;
     headingTarget = angleNow;
     osDelay(40);
+    if (!legacyActive()) return;
 }
 
 void CalGyroDrift(int timeCal)
 {
     float    old = angleNow;
     uint32_t t0  = HAL_GetTick();
-    osDelay(timeCal);
+    uint32_t generation = motionGeneration;
+    while (HAL_GetTick() - t0 < (uint32_t)timeCal) {
+        if (estopFlag || generation != motionGeneration) return;
+        osDelay(10);
+    }
     float dt = (HAL_GetTick() - t0) * 0.001f;
     gyroDrift += (angleNow - old) / dt;      /* += refines on repeat calls */
 }
 
 void ZeroGyro(void)
 {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    odometryGeneration++;
     angleNow      = 0.0f;
     headingTarget = 0.0f;
     robot_x_cm    = 20.0f;
     robot_y_cm    = 20.0f;
+    __set_PRIMASK(primask);
 }
 
 /* USER CODE END 4 */
@@ -1391,12 +1484,36 @@ void StartDefaultTask(void *argument)
     irSensor1Raw = IR_ADC_Read(2U); /* PA2 / ADC1_IN2 */
     irSensor2Raw = IR_ADC_Read(3U); /* PA3 / ADC1_IN3 */
 
-    ir1_cm = IR1_RawToCm(irSensor1Raw);
-    ir2_cm = IR_RawToCm(irSensor2Raw);
+    ir1_cm = irSensor1Raw ? IR1_RawToCm(irSensor1Raw) : 0;
+    ir2_cm = irSensor2Raw ? IR_RawToCm(irSensor2Raw) : 0;
+    if (irSensor1Raw && irSensor2Raw) {
+        irValidTick = HAL_GetTick();
+        irValid = 1;
+    }
 
     uint32_t raw_echo = 0;
     us_cm = HCSR04_ReadCm(&raw_echo);
     us_raw_us = raw_echo;
+    if (us_cm > 0) {
+        usValidTick = HAL_GetTick();
+        usValid = 1;
+    }
+
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    uint8_t reason = stopPending;
+    stopPending = 0;
+    __set_PRIMASK(primask);
+    const char *status = reason == 1 ? "STOP:PROXIMITY\r\n" :
+                         reason == 2 ? "STOP:SENSOR_STALE\r\n" :
+                         reason == 3 ? "STOP:WATCHDOG\r\n" :
+                         reason == 4 ? "STOP:INVALID_VELOCITY\r\n" : NULL;
+    if (status != NULL && UART_SafeTransmit((const uint8_t *)status, strlen(status), 20) != HAL_OK) {
+        primask = __get_PRIMASK();
+        __disable_irq();
+        if (!stopPending) stopPending = reason;
+        __set_PRIMASK(primask);
+    }
 
     sendTlm();
 
@@ -1417,7 +1534,7 @@ void StartDefaultTask(void *argument)
         OLED_ShowString(0, 50, (uint8_t *)oled_display[5]);
         OLED_Refresh_Gram();
     }
-    osDelay(100);
+    osDelay(50);
   }
   /* USER CODE END 5 */
 }
@@ -1432,16 +1549,30 @@ void StartDefaultTask(void *argument)
 void encoder_task(void *argument)
 {
 	  /* USER CODE BEGIN encoder_task */
-		  for(;;)
+		  uint32_t previousTick = HAL_GetTick();
+          for(;;)
 		  {
-		      left_dist  = distA();
-		      right_dist = distB();
-
-		      /* 2D Dead Reckoning: distance increment over last 10ms */
-		      float dL = left_dist  - prev_enc_left;
-		      float dR = right_dist - prev_enc_right;
-		      prev_enc_left  = left_dist;
-		      prev_enc_right = right_dist;
+              uint32_t now = HAL_GetTick();
+              float dt = (now - previousTick) * 0.001f;
+              previousTick = now;
+              uint32_t primask = __get_PRIMASK();
+              __disable_irq();
+              uint32_t odometry_generation = odometryGeneration;
+              int32_t countA = encoderA();
+              uint16_t countB = (uint16_t)__HAL_TIM_GET_COUNTER(&htim3);
+              int32_t deltaA = (int32_t)((uint32_t)countA - (uint32_t)previousCountA);
+              int16_t deltaB = (int16_t)(countB - previousCountB);
+              previousCountA = countA;
+              previousCountB = countB;
+              float dL = deltaA * CM_PER_COUNT;
+              float dR = -deltaB * CM_PER_COUNT;
+              left_dist += dL;
+              right_dist += dR;
+              if (dt > 0.0f) {
+                  leftSpeedMm += 0.35f * (dL * 10.0f / dt - leftSpeedMm);
+                  rightSpeedMm += 0.35f * (dR * 10.0f / dt - rightSpeedMm);
+              }
+              __set_PRIMASK(primask);
 
 		      float delta_s = 0.5f * (dL + dR);
 
@@ -1458,8 +1589,15 @@ void encoder_task(void *argument)
 		      float world_angle_deg = 90.0f - angleNow;
 		      float world_angle_rad = world_angle_deg * (3.1415926535f / 180.0f);
 
-		      robot_x_cm += delta_s * cosf(world_angle_rad);
-		      robot_y_cm += delta_s * sinf(world_angle_rad);
+              float dx = delta_s * cosf(world_angle_rad);
+              float dy = delta_s * sinf(world_angle_rad);
+              primask = __get_PRIMASK();
+              __disable_irq();
+              if (odometry_generation == odometryGeneration) {
+                  robot_x_cm += dx;
+                  robot_y_cm += dy;
+              }
+              __set_PRIMASK(primask);
 
 		      motorCorrection = motor_pid_correction(left_dist, right_dist);
 
@@ -1480,175 +1618,91 @@ void encoder_task(void *argument)
 /* USER CODE END Header_motor */
 void motor(void *argument)
 {
-  /* USER CODE BEGIN motor */
-//
-	  // Start Motor A PWM
-	  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
-	  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
-	  // Start Motor B PWM
-	  HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_1);
-	  HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_2);
-	  // Servo PWM
-	  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
-	  htim8.Instance->CCR2 = SERVOCENTER;
-	  // Encoders (TIM2: PA15+PB3 = Motor A,  TIM3: PB4+PB5 = Motor B)
-	  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
-	  HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
-	  // Stop both motors first
-	  setMotorA(0);
-	  setMotorB(0);
-	  osDelay(500);
-//
-//	  // ---- ONE straight run, then park. Press RESET for another. ----
-//
-//	  htim8.Instance->CCR2 = SERVOCENTER;
-//	  osDelay(3000);                     /* line the car up and let go */
-//
-//	  reset_heading_pid_error();
-//	  headingTarget = angleNow;
-//	  angleMaxDev   = 0.0f;
-//	  heading_pid   = 0;                 /* PID OFF - encoders are the test now */
-//	  encodersZero();
-//	  reset_motor_pid_error();
-//	  motor_pid = 0;
-//
-//
-//	  snprintf(oled_display[4], sizeof(oled_display[4]), "GO   C:%-5d", SERVOCENTER);
-//	  for (int t = 0; t < DRIVE_MS; t += 10)
-//	  {
-//	    /* ---- motors: re-apply the correction every tick ---- */
-//	    int spA = DRIVE_SPEED, spB = DRIVE_SPEED;
-//	    if (motor_pid) {
-//	        spA = DRIVE_SPEED - motorCorrection;
-//	        spB = DRIVE_SPEED + motorCorrection;
-//	        if (spA > MOTOR_MAX) spA = MOTOR_MAX;
-//	        if (spA < MOTOR_MIN) spA = MOTOR_MIN;
-//	        if (spB > MOTOR_MAX) spB = MOTOR_MAX;
-//	        if (spB < MOTOR_MIN) spB = MOTOR_MIN;
-//	    }
-//	    setMotorA(spA);
-//	    setMotorB(spB);
-//
-//	    /* ---- servo ---- */
-//	    int servoVal = SERVOCENTER + headingCorrection;
-//	    if (servoVal > SERVOMAX) servoVal = SERVOMAX;
-//	    if (servoVal < SERVOMIN) servoVal = SERVOMIN;
-//	    if (!heading_pid) servoVal = SERVOCENTER;
-//	    htim8.Instance->CCR2 = servoVal;
-//
-//	    osDelay(10);
-//	  }
-//
-//	  heading_pid = 0;
-//	  htim8.Instance->CCR2 = SERVOCENTER;
-//	  setMotorA(0);
-//	  setMotorB(0);
-//	  snprintf(oled_display[4], sizeof(oled_display[4]), "%-15s", "DONE - measure");
-//
-//	  /* park here forever, motors held stopped */
-//	  for(;;)
-//	  {
-//	    setMotorA(0);
-//	    setMotorB(0);
-//	    osDelay(100);
-//	  }
-	  /* ---- HAND-ROLL CALIBRATION - delete this block when done ---- */
-//	  HAL_TIM_PWM_Stop(&htim4, TIM_CHANNEL_3);
-//	  HAL_TIM_PWM_Stop(&htim4, TIM_CHANNEL_4);
-//	  HAL_TIM_PWM_Stop(&htim9, TIM_CHANNEL_1);
-//	  HAL_TIM_PWM_Stop(&htim9, TIM_CHANNEL_2);
-//	  for(;;) { osDelay(100); }
-//	  //
-//	  /* UART BENCH TEST - car stays still. Delete afterwards. */
-//	  for(;;) { setMotorA(0); setMotorB(0); osDelay(100); }
-//	  //end of UART test
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
+    HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
+    HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
+    HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+    MotorsOff();
+    VelocityPI leftPI = {0}, rightPI = {0};
+    uint32_t previousTick = HAL_GetTick();
 
-//	  //one time straight line test:
-//	  htim8.Instance->CCR2 = SERVOCENTER;
-//	  osDelay(3000);                     /* line it up and let go */
-//	  encodersZero();
-//	  headingTarget = angleNow;
-//	  angleMaxDev   = 0.0f;
-//	  heading_pid   = 0;                 /* BASELINE - both OFF */
-//	  motor_pid     = 0;
-//	  float travelled = 0.0f;
-//	  int   elapsed   = 0;
-//	  setMotorA(DRIVE_SPEED);
-//	  setMotorB(DRIVE_SPEED);
-//	  while (travelled < (TARGET_CM - MOVE_OVERSHOOT) && elapsed < DRIVE_TIMEOUT)
-//	  {
-//	      travelled = 0.5f * (distA() + distB());
-//	      htim8.Instance->CCR2 = SERVOCENTER;   /* pinned - no PID yet */
-//	      osDelay(10);
-//	      elapsed += 10;
-//	  }
-//	  setMotorA(0);
-//	  setMotorB(0);
-//	  float dCut = 0.5f * (distA() + distB());
-//	  osDelay(700);                       /* let it coast fully to a stop */
-//	  float dEnd = 0.5f * (distA() + distB());
-//	  int ov10 = (int)((dEnd - dCut) * 10.0f);
-//	  int en10 = (int)(dEnd * 10.0f);
-//	  int p10  = (int)(angleMaxDev * 10.0f);
-//	  snprintf(oled_display[4], sizeof(oled_display[4]), "D%d.%d O%d.%d",
-//	           en10/10, en10%10, ov10/10, ov10%10);
-//	  snprintf(oled_display[0], sizeof(oled_display[0]), "Pk%d.%d END", p10/10, p10%10);
-//	  for(;;) { setMotorA(0); setMotorB(0); osDelay(100); }
-//	  //end of straight line test
+    for (;;) {
+        uint32_t now = HAL_GetTick();
+        float dt = velocity_clamp((now - previousTick) * 0.001f, 0.001f, 0.1f);
+        previousTick = now;
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        int forward = velocityMode ? velocitySpeed > 0 :
+                      (legacyActive() && (left_dir > 0 || right_dir > 0));
+        int safety = velocity_safety(forward, now, usValidTick, irValidTick,
+                                     usValid, irValid, us_cm, ir1_cm, ir2_cm);
+        if (!estopFlag && safety) {
+            EStop();
+            stopPending = (uint8_t)safety;
+        }
+        if (velocityMode && velocity_watchdog_expired(velocitySpeed, now, velocityTick)) {
+            velocitySpeed = velocityYaw = 0;
+            motionGeneration++;
+            MotorsOff();
+            stopPending = 3;
+        }
+        int16_t speed = velocitySpeed, yaw = velocityYaw;
+        uint32_t generation = motionGeneration;
+        int velocity = velocityMode;
+        int stopped = estopFlag;
+        __set_PRIMASK(primask);
 
-	  for(;;)
-	  {
-	      /* ---- speed tier from dir magnitude ---- */
-	      if      (left_dir ==  1 || left_dir == -1) left_pwmVal_motor = MOTORLOW;
-	      else if (left_dir ==  2 || left_dir == -2) left_pwmVal_motor = MOTORMID;
-	      else if (left_dir ==  3 || left_dir == -3) left_pwmVal_motor = MOTORHIGH;
-
-	      if      (right_dir ==  1 || right_dir == -1) right_pwmVal_motor = MOTORLOW;
-	      else if (right_dir ==  2 || right_dir == -2) right_pwmVal_motor = MOTORMID;
-	      else if (right_dir ==  3 || right_dir == -3) right_pwmVal_motor = MOTORHIGH;
-
-	      /* ---- motor PID splits the duty ---- */
-	      if (motor_pid == 1)
-	      {
-	          int l = (int)left_pwmVal_motor  - motorCorrection;
-	          int r = (int)right_pwmVal_motor + motorCorrection;
-	          if (l > MOTORMAX) l = MOTORMAX;  else if (l < MOTORMIN) l = MOTORMIN;
-	          if (r > MOTORMAX) r = MOTORMAX;  else if (r < MOTORMIN) r = MOTORMIN;
-	          left_pwmVal_motor  = (uint16_t)l;
-	          right_pwmVal_motor = (uint16_t)r;
-	      }
-
-	      /* ---- inner wheel slowed during a turn ---- */
-	      if (move_dir == 'R') right_pwmVal_motor = (uint16_t)(right_pwmVal_motor * TURNRATIO);
-	      if (move_dir == 'L') left_pwmVal_motor  = (uint16_t)(left_pwmVal_motor  * TURNRATIO);
-
-	      /* ---- LEFT motor = A  (his GPIO dir + PWM -> your signed call) ---- */
-	      if      (left_dir > 0) setMotorA( (int16_t)left_pwmVal_motor);
-	      else if (left_dir < 0) setMotorA(-(int16_t)left_pwmVal_motor);
-	      else                   setMotorA(0);
-
-	      /* ---- RIGHT motor = B ---- */
-	      if      (right_dir > 0) setMotorB( (int16_t)right_pwmVal_motor);
-	      else if (right_dir < 0) setMotorB(-(int16_t)right_pwmVal_motor);
-	      else                    setMotorB(0);
-
-	      /* ---- SERVO ---- */
-	      if (heading_pid == 1)
-	      {
-	          int temp_pwmVal_servo = (int)target_pwmVal_servo + headingCorrection;
-	          if      (temp_pwmVal_servo > SERVOMAX) temp_pwmVal_servo = SERVOMAX;
-	          else if (temp_pwmVal_servo < SERVOMIN) temp_pwmVal_servo = SERVOMIN;
-	          pwmVal_servo = (uint16_t)temp_pwmVal_servo;
-	      }
-	      else
-	      {
-	          pwmVal_servo = target_pwmVal_servo;
-	      }
-	      htim8.Instance->CCR2 = pwmVal_servo;
-
-	      osDelay(40);
-	  }
-  /* USER CODE END motor */
+        if (stopped) {
+            MotorsOff();
+            leftPI = (VelocityPI){0};
+            rightPI = (VelocityPI){0};
+        } else if (velocity) {
+            float leftTarget, rightTarget;
+            uint16_t servo;
+            velocity_targets(speed, yaw, &leftTarget, &rightTarget, &servo);
+            int16_t leftPWM = velocity_pi(&leftPI, leftTarget, leftSpeedMm, dt);
+            int16_t rightPWM = velocity_pi(&rightPI, rightTarget, rightSpeedMm, dt);
+            /* Q/R/new V can arrive during floating-point calculations. Commit only
+             * the still-current command; never overwrite an interrupt's stop. */
+            primask = __get_PRIMASK();
+            __disable_irq();
+            if (!estopFlag && velocityMode && generation == motionGeneration) {
+                setMotorA(leftPWM);
+                setMotorB(rightPWM);
+                htim8.Instance->CCR2 = servo;
+            }
+            __set_PRIMASK(primask);
+        } else {
+            leftPI = (VelocityPI){0};
+            rightPI = (VelocityPI){0};
+            primask = __get_PRIMASK();
+            __disable_irq();
+            if (legacyActive()) {
+                int leftPWM = abs(left_dir) == 3 ? MOTORHIGH :
+                              (abs(left_dir) == 2 ? MOTORMID : MOTORLOW);
+                int rightPWM = abs(right_dir) == 3 ? MOTORHIGH :
+                               (abs(right_dir) == 2 ? MOTORMID : MOTORLOW);
+                if (motor_pid) {
+                    leftPWM = (int)velocity_clamp(leftPWM - motorCorrection, MOTORMIN, MOTORMAX);
+                    rightPWM = (int)velocity_clamp(rightPWM + motorCorrection, MOTORMIN, MOTORMAX);
+                }
+                if (move_dir == 'L') leftPWM = (int)(leftPWM * TURNRATIO);
+                if (move_dir == 'R') rightPWM = (int)(rightPWM * TURNRATIO);
+                setMotorA(left_dir == 0 ? 0 : (left_dir > 0 ? leftPWM : -leftPWM));
+                setMotorB(right_dir == 0 ? 0 : (right_dir > 0 ? rightPWM : -rightPWM));
+                htim8.Instance->CCR2 = (uint16_t)velocity_clamp(
+                    target_pwmVal_servo + (heading_pid ? headingCorrection : 0),
+                    SERVOMIN, SERVOMAX);
+            } else {
+                MotorsOff();
+            }
+            __set_PRIMASK(primask);
+        }
+        osDelay(10);
+    }
 }
 
 /* USER CODE BEGIN Header_gyro_task */
@@ -1678,7 +1732,10 @@ void gyro_task(void *argument)
 	        gyroBadReads++;
 	        correctedZ = 0.0f;
 	    }
-	    angleNow += (correctedZ - gyroDrift) * dt;
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        angleNow += (correctedZ - gyroDrift) * dt;
+        __set_PRIMASK(primask);
 	    headingCorrection = heading_pid_correction(headingTarget, angleNow);
 	    float dev = angleNow - headingTarget;
 	    if (dev < 0) dev = -dev;
@@ -1733,12 +1790,14 @@ void comm_task(void *argument)
 
 	      if (runRequested == 1)
 	      {
+	          legacyGeneration = motionGeneration;
+	          uint32_t generation = legacyGeneration;
 	          UART_SafeTransmit((const uint8_t *)"RUN\r\n", 5, 50);
 	          batchDist = 0.0f;
 
 	          for (uint8_t i = 0; i < instrLen; i++)
 	          {
-	              if (estopFlag) break;
+	              if (estopFlag || generation != motionGeneration) break;
 
 	              memcpy(cur_inst, (const void *)instrList[i], FRAME_LEN);
 	              cur_inst[FRAME_LEN] = '\0';          /* atoi needs a terminator */
@@ -1752,18 +1811,28 @@ void comm_task(void *argument)
 	                  case 'FR': FrontRight(instr_value);  break;
 	                  case 'BL': BackLeft(instr_value);    break;
 	                  case 'BR': BackRight(instr_value);   break;
-	                  case 'GC': CalGyroDrift(4000); ZeroGyro(); break;
+	                  case 'GC':
+	                      CalGyroDrift(4000);
+	                      if (!estopFlag && generation == motionGeneration) ZeroGyro();
+	                      break;
 	                  case 'G0': ZeroGyro();               break;
-	                  case 'TO': osDelay(10000);           break;   /* fixed 10 s */
+	                  case 'TO': {
+	                      uint32_t started = HAL_GetTick();
+	                      while (!estopFlag && generation == motionGeneration &&
+	                             HAL_GetTick() - started < 10000U) osDelay(10);
+	                      break;
+	                  }
 	                  default:   break;                             /* FU/BU unsupported */
 	              }
 	              osDelay(10);
 	          }
 
 	          osDelay(20);                 /* mechanical settling */
-	          sendFin();
-	          instrLen = 0;
-	          runRequested = 0;
+	          if (!estopFlag && generation == motionGeneration) {
+	              sendFin();
+	              instrLen = 0;
+	              runRequested = 0;
+	          }
 	      }
 	  }
   /* USER CODE END comm_task */

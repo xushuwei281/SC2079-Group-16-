@@ -5,7 +5,9 @@ Features:
 - Resilient Auto-Connect: Gracefully waits for /dev/rfcomm0 and auto-reconnects on drop.
 - Bidirectional Comms:
     * Inbound (Tablet -> ROS):
-        - Movement: FW/BW/TL/TR/BL/BR or FC/BC/FL/FR -> calls /execute_moves
+        - Joystick: VEL:<m/s>,<rad/s> -> publishes /cmd_vel/teleop
+        - Compatibility movement: FW/BW/TL/TR/BL/BR or FC/BC/FL/FR
+          -> calls /execute_moves
         - Emergency: STP/STOP/Q -> publishes to /estop
         - Arena/Planner: ALG|..., START, RESET -> publishes to /android/cmd
     * Outbound (ROS -> Tablet):
@@ -31,7 +33,7 @@ import time
 from typing import Optional, Tuple
 
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -73,6 +75,9 @@ class AndroidBridgeNode(Node):
         self.declare_parameter("rfcomm_device", "/dev/rfcomm0")
         self.declare_parameter("baud_rate", 115200)
         self.declare_parameter("service_wait_sec", 5.0)
+        self.declare_parameter("teleop_max_speed_mps", 0.30)
+        self.declare_parameter("teleop_max_yaw_rps", 1.20)
+        self.declare_parameter("teleop_min_turn_radius_m", 0.21)
         self.declare_parameter("distance_in_mm", False)  # True if tablet sends mm, False if cm
         self.declare_parameter("use_angle_brackets_for_pose", True)  # Format: ROBOT,<x>,<y>,<dir>
         self.declare_parameter("robot_coords_in_cm", False)  # False: 0-19 grid cells, True: cm
@@ -85,6 +90,15 @@ class AndroidBridgeNode(Node):
         self._device = self.get_parameter("rfcomm_device").value
         self._baud = self.get_parameter("baud_rate").value
         self._service_wait_sec = self.get_parameter("service_wait_sec").value
+        self._teleop_max_speed = float(self.get_parameter("teleop_max_speed_mps").value)
+        self._teleop_max_yaw = float(self.get_parameter("teleop_max_yaw_rps").value)
+        self._teleop_radius = float(
+            self.get_parameter("teleop_min_turn_radius_m").value
+        )
+        if not (0 < self._teleop_max_speed <= 0.30
+                and 0 < self._teleop_max_yaw <= 1.20
+                and self._teleop_radius >= 0.21):
+            raise ValueError("Unsafe Android teleop velocity configuration")
         self._distance_in_mm = self.get_parameter("distance_in_mm").value
         self._use_brackets = self.get_parameter("use_angle_brackets_for_pose").value
         self._coords_in_cm = self.get_parameter("robot_coords_in_cm").value
@@ -109,6 +123,7 @@ class AndroidBridgeNode(Node):
         self._ir_l_cm: float = -1.0
         self._ir_r_cm: float = -1.0
         self._last_sensor_time: float = 0.0
+        self._last_estop_alert_time: float = 0.0
 
         callback_group = ReentrantCallbackGroup()
 
@@ -129,6 +144,9 @@ class AndroidBridgeNode(Node):
         self._telemetry_sub = self.create_subscription(
             String, "/android/telemetry", self._on_telemetry, 10, callback_group=callback_group
         )
+        self._estop_sub = self.create_subscription(
+            Empty, "/estop", self._on_estop, 10, callback_group=callback_group
+        )
         self._us_sub = self.create_subscription(
             Range, "/sensors/ultrasonic", self._on_us_range, 10, callback_group=callback_group
         )
@@ -143,6 +161,7 @@ class AndroidBridgeNode(Node):
         self._move_client = self.create_client(
             ExecuteMoves, "/execute_moves", callback_group=callback_group
         )
+        self._teleop_pub = self.create_publisher(Twist, "/cmd_vel/teleop", 1)
 
         # Background worker thread for connection and read loop
         self._comm_thread = threading.Thread(target=self._connection_worker, daemon=True)
@@ -211,6 +230,39 @@ class AndroidBridgeNode(Node):
                     pass
                 self._serial = None
 
+    def _get_proximity_cause(self, threshold_cm: float = 15.0) -> Optional[Tuple[str, float]]:
+        """Return (sensor_name, dist_cm) if any front sensor reads <= threshold_cm, else None."""
+        candidates = []
+        if 0.0 <= self._us_cm <= threshold_cm:
+            candidates.append(("Ultrasonic", self._us_cm))
+        if 0.0 <= self._ir_l_cm <= threshold_cm:
+            candidates.append(("IR Left", self._ir_l_cm))
+        if 0.0 <= self._ir_r_cm <= threshold_cm:
+            candidates.append(("IR Right", self._ir_r_cm))
+        if candidates:
+            return min(candidates, key=lambda s: s[1])
+        return None
+
+    def _on_estop(self, _msg: Empty) -> None:
+        """Handle incoming /estop: cancel active moves and inform tablet with sensor cause."""
+        with self._move_lock:
+            self._pending_move = None
+            self._is_moving = False
+
+        now = time.monotonic()
+        if now - self._last_estop_alert_time < 0.5:
+            return
+        self._last_estop_alert_time = now
+
+        cause = self._get_proximity_cause(threshold_cm=15.0)
+        if cause is not None:
+            sensor_name, val_cm = cause
+            self.send_to_tablet(f"STATUS,ESTOP: Obstacle detected by {sensor_name} ({val_cm:.1f} cm)")
+            self.send_to_tablet(f"ESTOP_ALERT,{sensor_name},{val_cm:.1f},12.0")
+        else:
+            self.send_to_tablet("STATUS,E-STOP TRIGGERED")
+            self.send_to_tablet("ESTOP_ALERT,Manual,0.0,0.0")
+
     # -------------------------------------------------------------------------
     # Inbound Message Dispatching (Tablet -> ROS)
     # -------------------------------------------------------------------------
@@ -223,20 +275,35 @@ class AndroidBridgeNode(Node):
             with self._move_lock:
                 self._pending_move = None
                 self._is_moving = False
+            self._publish_teleop_velocity(0.0, 0.0)
             self._estop_pub.publish(Empty())
-            self.send_to_tablet("STATUS,E-STOP TRIGGERED")
+            cause = self._get_proximity_cause(threshold_cm=15.0)
+            self._last_estop_alert_time = time.monotonic()
+            if cause is not None:
+                sensor_name, val_cm = cause
+                self.send_to_tablet(f"STATUS,ESTOP: Obstacle detected by {sensor_name} ({val_cm:.1f} cm)")
+                self.send_to_tablet(f"ESTOP_ALERT,{sensor_name},{val_cm:.1f},12.0")
+            else:
+                self.send_to_tablet("STATUS,E-STOP TRIGGERED")
+                self.send_to_tablet("ESTOP_ALERT,Manual,0.0,0.0")
             return
 
-        # 2. Mission & Arena Commands (ALG|..., START, RESET, ADD, SUB, FACE, STM:sp, SP, TASK2)
+        # 2. Continuous joystick velocity in ROS SI units.
+        if line.upper().startswith("VEL:"):
+            self._handle_velocity(line[4:], line)
+            return
+
+        # 3. Mission & Arena Commands (ALG|..., START, RESET, ADD, SUB, FACE, STM:sp, SP, TASK2)
         if line.upper().startswith(_MISSION_COMMAND_PREFIXES):
             self.get_logger().info(f"Forwarding mission command: {line}")
             with self._move_lock:
                 self._pending_move = None
+            self._publish_teleop_velocity(0.0, 0.0)
             self._cmd_pub.publish(String(data=line))
             self.send_to_tablet(f"STATUS,Received {line.split('|')[0]}")
             return
 
-        # 3. Movement Commands (e.g. FW:20, TL:90, FC:20, FR:90)
+        # 4. Movement Commands (e.g. FW:20, TL:90, FC:20, FR:90)
         verb, sep, arg = line.partition(":")
         verb_upper = verb.strip().upper()
 
@@ -245,6 +312,34 @@ class AndroidBridgeNode(Node):
         else:
             self.get_logger().warn(f"Unrecognized tablet command: {line}")
             self.send_to_tablet(f"STATUS,Unknown command: {verb}")
+
+    def _publish_teleop_velocity(self, linear_mps: float, yaw_rps: float) -> None:
+        msg = Twist()
+        msg.linear.x = linear_mps
+        msg.angular.z = yaw_rps
+        self._teleop_pub.publish(msg)
+
+    def _handle_velocity(self, payload: str, raw_line: str) -> None:
+        """Validate `VEL:<linear_mps>,<yaw_rps>` and publish teleop velocity."""
+        try:
+            fields = payload.split(",")
+            if len(fields) != 2:
+                raise ValueError("expected two fields")
+            linear_mps = float(fields[0])
+            yaw_rps = float(fields[1])
+            if not (math.isfinite(linear_mps) and math.isfinite(yaw_rps)):
+                raise ValueError("velocity must be finite")
+            if (abs(linear_mps) > self._teleop_max_speed
+                    or abs(yaw_rps) > self._teleop_max_yaw):
+                raise ValueError("velocity exceeds configured limits")
+            if abs(yaw_rps) > abs(linear_mps) / self._teleop_radius + 1e-9:
+                raise ValueError("Ackermann curvature limit exceeded")
+        except (ValueError, ZeroDivisionError) as exc:
+            self.get_logger().warn(f"Invalid velocity command {raw_line!r}: {exc}")
+            self._publish_teleop_velocity(0.0, 0.0)
+            self.send_to_tablet("STATUS,Invalid velocity command")
+            return
+        self._publish_teleop_velocity(linear_mps, yaw_rps)
 
     def _handle_movement(self, verb: str, arg: str, raw_line: str) -> None:
         """Convert tablet movement command and trigger /execute_moves asynchronously."""
@@ -269,6 +364,20 @@ class AndroidBridgeNode(Node):
             self.get_logger().warn(f"Value out of range (0-999): {value}")
             self.send_to_tablet(f"STATUS,Value out of range: {value}")
             return
+
+        # Forward Proximity Safety Guard for teleop
+        if code in ("FC", "FL", "FR"):
+            cause = self._get_proximity_cause(threshold_cm=12.0)
+            if cause is not None:
+                sensor_name, val_cm = cause
+                self.get_logger().warn(
+                    f"Forward move rejected: obstacle detected by {sensor_name} at {val_cm:.1f} cm (< 12.0 cm)"
+                )
+                self._estop_pub.publish(Empty())
+                self._last_estop_alert_time = time.monotonic()
+                self.send_to_tablet(f"STATUS,ESTOP: Obstacle detected by {sensor_name} ({val_cm:.1f} cm <= 12.0 cm)")
+                self.send_to_tablet(f"ESTOP_ALERT,{sensor_name},{val_cm:.1f},12.0")
+                return
 
         with self._move_lock:
             if self._is_moving:

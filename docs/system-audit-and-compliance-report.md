@@ -87,7 +87,8 @@ stateDiagram-v2
 ### Audit Findings for Task 1
 
 1. **Kinodynamic Motion Planning (Reeds-Shepp Ackermann Steering):**
-   * Robot turning radius is modeled at $R = 25.0\text{ cm}$ matching physical Ackermann steering geometry.
+   * Robot turning radius is modeled at $R = 21.0\text{ cm}$, matching the measured
+     21–22 cm physical Ackermann turning radius.
    * Discretizes trajectories into verified STM32 motion primitives (`FC`, `BC`, `FL`, `FR`, `BL`, `BR`).
    * Bounded angle scaling ensures no micro-angles cause encoder rounding failure.
 2. **Global Tour Optimization (Exact TSP Solver):**

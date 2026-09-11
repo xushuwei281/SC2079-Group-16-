@@ -1,9 +1,7 @@
-# One discrete move primitive for the STM32's 5-byte packet protocol
-# (2-char command code + 3-digit ASCII value). The bridge node does the
-# actual byte encoding -- callers just fill this in.
+# One compatibility movement primitive. motion_controller_node supervises it
+# with live telemetry and publishes cmd_vel; callers do not encode UART packets.
 #
-# Valid command codes (confirmed from the ported STM_Ref firmware's
-# comm_task dispatch, raspberry-pi/../stm32/src/main.c):
+# Supported movement codes (centimetres for distances, degrees for turns):
 #   FC <dist_cm>   forward straight
 #   BC <dist_cm>   backward straight
 #   FL <angle_deg> forward-left turn
@@ -11,6 +9,6 @@
 #   BL <angle_deg> backward-left turn
 #   BR <angle_deg> backward-right turn
 #   FU <dist_cm>   forward until ultrasound reads dist_cm
-#   BU <dist_cm>   backward until ultrasound reads dist_cm
+#   BU <dist_cm>   backward until ultrasound reaches or exceeds dist_cm
 string command
 int16 value

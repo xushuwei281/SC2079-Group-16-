@@ -2,12 +2,41 @@
 
 Persistent notes about work done in this repo so later agents don't re-derive it.
 
+## Continuous velocity control refactor (2026-09-11)
+
+- Android held controls use `VEL:<linear_mps>,<yaw_rps>` and send zero on release.
+  The Android bridge publishes `/cmd_vel/teleop`. `motion_controller_node`
+  arbitrates teleoperation and `ExecuteMoves`, supervises primitives from live
+  telemetry, and publishes the sole base `/cmd_vel` stream. The serial bridge
+  consumes that stream and owns UART transport/telemetry/safety, not movement
+  completion. The planner's primitive schema remains compatible.
+- Normal UART motion is `V` + signed int16 little-endian mm/s + signed int16
+  little-endian mrad/s, exactly five bytes. New targets replace old targets;
+  movement completion never waits for `FIN`. The MCU's periodic wheel-speed and
+  steering loop runs independently of range sampling and telemetry.
+- The MCU watchdog stops nonzero targets after 300 ms without refresh. Local
+  raw front protection uses US <=12 cm or IR <=10 cm; stale required sensors
+  stop forward motion. There is no rear sensor protection. `STOP:*` aborts Pi
+  motion and requires explicit RESET. `Q` latches, zero velocity does not reset,
+  and `R` discards old motion state rather than resuming a canceled request.
+- Task 1/2 START does not clear E-STOP. Task 1 no longer automatically resets
+  and backs up after a proximity stop; the old recovery distance parameter is
+  retained for configuration compatibility. Perception-driven orbit recovery
+  remains a separate collision-checked behavior.
+- The measured full-lock radius is 21–22 cm; planner/controller use 21 cm and
+  retain existing calibrated steering endpoints. The absolute-speed PI loop is
+  new and requires physical speed/tracking and stopping checks. Firmware build
+  and unit tests do not establish braking performance or mean it was flashed.
+- See [architecture](ros2_ws/ARCHITECTURE.md), [UART protocol](docs/stm32-uart-protocol-spec.md),
+  and [migration/bench guide](docs/cmd-vel-migration.md). Older discrete-batch
+  notes below are historical where they conflict with this section.
+
 ## Algorithm package (`algorithm/`)
 
 Pure-Python pathfinding + arena simulator (runs on a laptop/PC, no ROS2 dep).
 Coordinates are **centimetres**; orientation theta in radians, East = 0,
 counter-clockwise positive, in (-pi, pi].  Imports `arena.py` for `Config`,
-obstacles, and `TURNING_RADIUS_CM = 25`.
+obstacles, and `TURNING_RADIUS_CM = 21`.
 
 ### `algorithm/reed_shepp.py` — Reeds-Shepp shortest path (DONE, verified)
 
@@ -61,6 +90,9 @@ drift apart.
 
 ## STM32 Firmware (`stm32/`)
 
+- **Measured Turning Radius**: Physical full-lock radius is 21–22 cm. The planner
+  and continuous velocity controller use 21 cm; calibrated servo endpoints remain
+  `SERVOLEFT=101`, `SERVOCENTER=146`, and `SERVORIGHT=206`.
 - **FreeRTOS Stack Sizing**: `defaultTask` stack was increased from 512B (`128 * 4`) to 2048B (`512 * 4`) and `MotorTask` to 1024B (`256 * 4`). The 512B stack previously overflowed during `snprintf` + floating-point operations and FPU context saving, causing hard MCU lockups.
 - **HC-SR04 Ultrasonic Driver**: Uses hardware timer `TIM6` (1 tick = 1 µs at 16 MHz HSI) instead of software loops. Wrapped with `vTaskSuspendAll()` / `xTaskResumeAll()` during echo pulse measurement to prevent ~1 ms FreeRTOS preemption jitter (which created an artificial 19 cm measurement floor). Includes pre-trigger check to avoid hanging when ECHO is stuck HIGH from blind-zone (< 2 cm) reflections.
 - **Flashing Flags & DTR Pin Latch**: In `platformio.ini`, `upload_flags` exit sequence MUST be `-rts,-dtr`. A previous trailing `dtr` (`...:-rts,-dtr,dtr`) left DTR asserted, holding the C30D reset/bootloader circuit and preventing execution of user firmware.

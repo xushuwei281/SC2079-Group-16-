@@ -135,25 +135,14 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             "FSM:\\s*\\w+\\s*->\\s*(\\w+)",
             Pattern.CASE_INSENSITIVE);
 
-    // ---- Joystick -> discrete move translation ----------------------------
-    // The STM32 firmware has no continuous-velocity primitive -- every move
-    // is one discrete, blocking maneuver (see mdp_hardware_bridge). The
-    // joystick fakes continuous control by repeatedly issuing small moves
-    // while held, pacing itself off each move's actual completion (DONE / a
-    // terminal STATUS) rather than a fixed timer, so it never outruns
-    // /execute_moves's one-call-at-a-time arbitration on the Pi.
+    // ---- Joystick -> continuous velocity ----------------------------------
     private static final float JOYSTICK_DEADZONE = 0.15f;
-    private static final double STRAIGHT_ANGLE_DEG = 20.0; // within this of dead-ahead/dead-astern -> FC/BC
-    private static final int MIN_STEP_DIST_CM = 2;
-    private static final int MAX_STEP_DIST_CM = 8; // stays < 100 so android_bridge_node's mm-heuristic never fires
-    private static final int MIN_STEP_TURN_DEG = 2; // the "2-degree interval" ask -- FL/FR/BL/BR already support this
-    private static final int MAX_STEP_TURN_DEG = 20;
-    private static final long JOYSTICK_POLL_MS = 70;
-    private static final long MOVE_STUCK_TIMEOUT_MS = 4000; // recover if a response never arrives
+    private static final double JOYSTICK_MAX_SPEED_MPS = 0.20;
+    private static final double JOYSTICK_TURN_RADIUS_M = 0.21;
+    private static final long JOYSTICK_POLL_MS = 50;
 
     private final Handler joystickHandler = new Handler(Looper.getMainLooper());
-    private boolean moveInFlight = false;
-    private long lastMoveSentAt = 0L;
+    private boolean joystickVelocityActive = false;
 
     // ---- Link liveness indicator -------------------------------------
     // Ground truth for "is the app actually talking to the robot right
@@ -386,6 +375,8 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     }
 
     private void disconnect() {
+        sendJoystickVelocity(0.0, 0.0);
+        joystickVelocityActive = false;
         linkService.disconnect();
         showDevicePicker();
     }
@@ -397,50 +388,37 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         joystickHandler.postDelayed(this::joystickTick, JOYSTICK_POLL_MS);
 
         if (controlPanel.getVisibility() != View.VISIBLE || currentMode != Mode.MANUAL) {
+            stopJoystickVelocityIfActive();
             return;
-        }
-
-        if (moveInFlight) {
-            if (System.currentTimeMillis() - lastMoveSentAt > MOVE_STUCK_TIMEOUT_MS) {
-                moveInFlight = false; // no DONE/STATUS ever arrived -- don't wedge the joystick
-            } else {
-                return; // previous step still executing; let it finish
-            }
         }
 
         float right = joystickView.getStickRight();
         float forward = joystickView.getStickForward();
-        float magnitude = (float) Math.hypot(right, forward);
-        if (magnitude < JOYSTICK_DEADZONE) {
+        if (Math.abs(forward) < JOYSTICK_DEADZONE) {
+            stopJoystickVelocityIfActive();
             return;
         }
-        magnitude = Math.min(magnitude, 1f);
 
-        double angleFromForwardDeg = Math.toDegrees(Math.atan2(right, forward));
-        String command;
-        int value;
-        if (Math.abs(angleFromForwardDeg) <= 90.0) {
-            if (Math.abs(angleFromForwardDeg) <= STRAIGHT_ANGLE_DEG) {
-                command = "FC";
-                value = scaleStep(magnitude, MIN_STEP_DIST_CM, MAX_STEP_DIST_CM);
-            } else {
-                command = angleFromForwardDeg > 0 ? "FR" : "FL";
-                value = scaleStep(magnitude, MIN_STEP_TURN_DEG, MAX_STEP_TURN_DEG);
-            }
-        } else {
-            double deviationFromBack = 180.0 - Math.abs(angleFromForwardDeg);
-            if (deviationFromBack <= STRAIGHT_ANGLE_DEG) {
-                command = "BC";
-                value = scaleStep(magnitude, MIN_STEP_DIST_CM, MAX_STEP_DIST_CM);
-            } else {
-                command = right > 0 ? "BR" : "BL";
-                value = scaleStep(magnitude, MIN_STEP_TURN_DEG, MAX_STEP_TURN_DEG);
-            }
+        double scaledForward = Math.copySign(
+                (Math.abs(forward) - JOYSTICK_DEADZONE) / (1.0 - JOYSTICK_DEADZONE),
+                forward);
+        double linearMps = scaledForward * JOYSTICK_MAX_SPEED_MPS;
+        // Joystick-right means clockwise, while ROS angular.z is CCW-positive.
+        double yawRps = -right * Math.abs(linearMps) / JOYSTICK_TURN_RADIUS_M;
+        sendJoystickVelocity(linearMps, yawRps);
+        joystickVelocityActive = true;
+    }
+
+    private void stopJoystickVelocityIfActive() {
+        if (joystickVelocityActive) {
+            sendJoystickVelocity(0.0, 0.0);
+            joystickVelocityActive = false;
         }
+    }
 
-        moveInFlight = true;
-        lastMoveSentAt = System.currentTimeMillis();
-        linkService.sendLine(command + ":" + value);
+    private void sendJoystickVelocity(double linearMps, double yawRps) {
+        linkService.sendLine(String.format(
+                Locale.US, "VEL:%.3f,%.3f", linearMps, yawRps));
     }
 
     /** Runs every {@link #LINK_STATUS_TICK_MS} for the life of the Activity,
@@ -472,13 +450,6 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
 
     private void setDotColor(int colorRes) {
         statusDot.setBackgroundTintList(ColorStateList.valueOf(getColor(colorRes)));
-    }
-
-    /** Maps a deflection in [DEADZONE, 1] onto [min, max]. */
-    private int scaleStep(float magnitude, int min, int max) {
-        float t = (magnitude - JOYSTICK_DEADZONE) / (1f - JOYSTICK_DEADZONE);
-        t = Math.max(0f, Math.min(1f, t));
-        return Math.round(min + t * (max - min));
     }
 
     private void showDriveMode() {
@@ -873,12 +844,6 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     @Override
     public void onStatusLine(String text) {
         appendStatus("STATUS: " + text);
-        // "Moving ..." is an ack sent the instant a move is dispatched, before
-        // it actually completes -- every other STATUS line here is terminal
-        // (a failure/rejection), so it's the joystick loop's cue to proceed.
-        if (!text.startsWith("Moving")) {
-            moveInFlight = false;
-        }
 
         // Fallback resilience for mixed text logs or CLI echoes
         Matcher mArrow = OBS_ARROW_PATTERN.matcher(text);
@@ -911,12 +876,52 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         if (mFsm.find()) {
             updateT1StateBadge(mFsm.group(1));
         }
+
+        // Detect ESTOP proximity alerts in STATUS stream
+        if (text.contains("ESTOP") && text.contains("Obstacle detected by")) {
+            Matcher mEstop = Pattern.compile("Obstacle detected by\\s+([A-Za-z0-9_ ]+)\\s*\\(([\\d.]+)\\s*cm", Pattern.CASE_INSENSITIVE).matcher(text);
+            if (mEstop.find()) {
+                try {
+                    String sensor = mEstop.group(1).trim();
+                    float dist = Float.parseFloat(mEstop.group(2).trim());
+                    onEstopAlert(sensor, dist, 12.0f, "Obstacle proximity violation");
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    private long lastEstopAlertTimestamp = 0;
+
+    @Override
+    public void onEstopAlert(String sensor, float distanceCm, float thresholdCm, String reason) {
+        stopT1Timer();
+        stopT2Timer();
+        updateT1StateBadge("ESTOP");
+        updateT2StateBadge("ESTOP");
+
+        String displayCause;
+        if (sensor != null && !sensor.isEmpty() && !sensor.equalsIgnoreCase("None") && !sensor.equalsIgnoreCase("Manual")) {
+            displayCause = String.format(Locale.US, "🚨 ESTOP: %s at %.1f cm (<= %.1f cm)",
+                    sensor, distanceCm, thresholdCm);
+        } else {
+            displayCause = "🚨 ESTOP TRIGGERED";
+        }
+
+        // Update dashboard status indicators
+        t1LegText.setText(displayCause);
+        t2ManeuverText.setText(displayCause);
+
+        long now = System.currentTimeMillis();
+        if (now - lastEstopAlertTimestamp > 1000) {
+            lastEstopAlertTimestamp = now;
+            appendStatus(displayCause);
+            Toast.makeText(this, displayCause, Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override
     public void onDone() {
         appendStatus("DONE");
-        moveInFlight = false;
     }
 
     // Default off: ROBOT/POSE/SENSORS stream ~20Hz and flood the status log
@@ -1058,7 +1063,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         // shown, so appendStatus() alone would be silently invisible.
         Toast.makeText(this, "Disconnected: " + reason, Toast.LENGTH_LONG).show();
         appendStatus("Disconnected (" + reason + ")");
-        moveInFlight = false; // don't carry stale in-flight state into the next connection
+        joystickVelocityActive = false;
         linkConnected = false;
         stopT1Timer();
         stopT2Timer();
@@ -1068,6 +1073,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
 
     @Override
     protected void onDestroy() {
+        stopJoystickVelocityIfActive();
         super.onDestroy();
         if (activeObstacleLayer != null && activeObstacleLayer.isShowing()) {
             activeObstacleLayer.dismiss();

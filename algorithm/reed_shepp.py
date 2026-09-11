@@ -548,7 +548,7 @@ def _turning_radius() -> float:
         from arena import TURNING_RADIUS_CM
         return float(TURNING_RADIUS_CM)
     except Exception:
-        return 25.0
+        return 21.0
 
 
 # ----------------------------------------------------------------------------
