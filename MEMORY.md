@@ -14,7 +14,9 @@ Persistent notes about work done in this repo so later agents don't re-derive it
   little-endian mrad/s, exactly five bytes. New targets replace old targets;
   movement completion never waits for `FIN`. The MCU's periodic wheel-speed and
   steering loop runs independently of range sampling and telemetry.
-- The MCU watchdog stops nonzero targets after 300 ms without refresh. Local
+- The Pi sends zero after 200 ms without input. The MCU fallback watchdog stops
+  nonzero targets after 750 ms without refresh; 300 ms caused observed false
+  `STOP:WATCHDOG` trips despite a nominal 50 ms tablet stream. Local
   raw front protection uses US <=12 cm or IR <=10 cm; stale required sensors
   stop forward motion. There is no rear sensor protection. `STOP:*` aborts Pi
   motion and requires explicit RESET. `Q` latches, zero velocity does not reset,
@@ -132,11 +134,14 @@ drift apart.
 
 ## Android Remote Control & Real-Time Dashboards (`android/`)
 
-- **Manual Turn Speed**: The Android joystick full-deflection speed is 0.30 m/s.
+- **Manual Turn Speed**: The Android joystick full-deflection speed is 0.35 m/s.
   Yaw rate remains curvature-derived from the measured 21 cm radius and capped at
-  1.5 rad/s. At full lock, the required outer-wheel target is about 0.407 m/s;
-  firmware therefore uses a separate 0.410 m/s wheel target cap while retaining
-  the 0.30 m/s chassis-command cap.
+  1.75 rad/s. At full lock, the required outer-wheel target is about 0.475 m/s;
+  firmware therefore uses a separate 0.480 m/s wheel target cap while retaining
+  the 0.35 m/s chassis-command cap.
+- **E-STOP Topic Propagation**: Nodes consume an incoming `/estop` without
+  republishing it. The origin publishes once; this prevents the planner from
+  reporting the same STM32 watchdog or proximity stop twice.
 - **Task 1 Real-Time Mission Dashboard**:
   - **Live 2D Arena Map**: Single `ArenaView` instance dynamically reparented into `task1ArenaContainer` on tab switch, showing live dead-reckoned robot pose, obstacle positions, and target icons.
   - **FSM State Badge**: Color-coded mission state pill (`IDLE`, `PLANNING`, `NAVIGATING`, `SAMPLING_TARGET`, `ORBIT_RECOVERY`, `MISSION_COMPLETE`, `ESTOP`).

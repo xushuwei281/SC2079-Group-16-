@@ -32,8 +32,8 @@ For an ordinary stop, transmit `56 00 00 00 00`.
 
 The ROS input is `/cmd_vel` (`geometry_msgs/msg/Twist`), with `linear.x` in m/s
 and `angular.z` in rad/s. The bridge validates finite values and supported axes
-and rejects unsupported targets before scaling to wire units. Defaults are 0.30 m/s maximum
-speed, 1.50 rad/s maximum yaw rate, and a calibrated minimum 0.21 m turning radius.
+and rejects unsupported targets before scaling to wire units. Defaults are 0.35 m/s maximum
+speed, 1.75 rad/s maximum yaw rate, and a calibrated minimum 0.21 m turning radius.
 
 Each `V` replaces the previous velocity target; it never joins an instruction
 queue and needs no `#` trigger. There is no per-packet `RUN`/`FIN` handshake.
@@ -55,7 +55,8 @@ deployment rather than assuming the previous distance-loop tuning transfers.
 | `52 00 00 00 00` (`R` + four zeros) | Explicit reset while stopped; clear latched state and old targets. Fresh commands are required to move again. |
 | `56 00 00 00 00` (`V` + four zeros) | Ordinary zero target; does not clear a stop latch. |
 
-The firmware stops nonzero velocity output after 300 ms without a fresh setpoint.
+The firmware stops nonzero velocity output after 750 ms without a fresh setpoint.
+The Pi normally sends zero after its shorter 200 ms input timeout.
 An expired zero target does not trigger `STOP:WATCHDOG`.
 Its watchdog stop permits a later fresh `V` at firmware level, but the Pi treats
 the asynchronous stop report as a latched fault requiring explicit RESET.
@@ -83,7 +84,7 @@ distance and sensor coverage; filtered ROS readings are not the local stop input
 
 `TLM` continues while moving and while stopped. Its nominal sampling task delay
 is 50 ms; sensor acquisition and UART transmission add time. Neither this delay
-nor the 300 ms watchdog is a measured bound on total stopping latency.
+nor the 750 ms fallback watchdog is a measured bound on total stopping latency.
 The Pi reads these lines independently of its movement service handler.
 
 The existing telemetry heading is `90 + clockwise_gyro_degrees`, not a ROS yaw.

@@ -77,8 +77,8 @@ class AndroidBridgeNode(Node):
         self.declare_parameter("rfcomm_device", "/dev/rfcomm0")
         self.declare_parameter("baud_rate", 115200)
         self.declare_parameter("service_wait_sec", 5.0)
-        self.declare_parameter("teleop_max_speed_mps", 0.30)
-        self.declare_parameter("teleop_max_yaw_rps", 1.50)
+        self.declare_parameter("teleop_max_speed_mps", 0.35)
+        self.declare_parameter("teleop_max_yaw_rps", 1.75)
         self.declare_parameter("teleop_min_turn_radius_m", 0.21)
         self.declare_parameter("distance_in_mm", False)  # True if tablet sends mm, False if cm
         self.declare_parameter("use_angle_brackets_for_pose", True)  # Format: ROBOT,<x>,<y>,<dir>
@@ -97,8 +97,8 @@ class AndroidBridgeNode(Node):
         self._teleop_radius = float(
             self.get_parameter("teleop_min_turn_radius_m").value
         )
-        if not (0 < self._teleop_max_speed <= 0.30
-                and 0 < self._teleop_max_yaw <= 1.50
+        if not (0 < self._teleop_max_speed <= 0.35
+                and 0 < self._teleop_max_yaw <= 1.75
                 and self._teleop_radius >= 0.21):
             raise ValueError("Unsafe Android teleop velocity configuration")
         self._distance_in_mm = self.get_parameter("distance_in_mm").value

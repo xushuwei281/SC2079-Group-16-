@@ -137,7 +137,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
 
     // ---- Joystick -> continuous velocity ----------------------------------
     private static final float JOYSTICK_DEADZONE = 0.15f;
-    private static final double JOYSTICK_MAX_SPEED_MPS = 0.30;
+    private static final double JOYSTICK_MAX_SPEED_MPS = 0.35;
     private static final double JOYSTICK_TURN_RADIUS_M = 0.21;
     private static final long JOYSTICK_POLL_MS = 50;
 

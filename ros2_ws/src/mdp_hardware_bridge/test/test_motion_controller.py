@@ -102,6 +102,12 @@ class TestMotionController(unittest.TestCase):
         self.assertFalse(self.execute().success)
         self.assertTrue(self.node._estop_event.is_set())
 
+    def test_external_estop_is_not_republished(self):
+        self.node._on_estop(Empty())
+        self.assertTrue(self.node._estop_event.is_set())
+        self.node._estop_pub.publish.assert_not_called()
+        self.assertEqual(self.velocities()[-1], (0, 0))
+
     def test_reset_cancels_active_generation(self):
         with patch("mdp_hardware_bridge.motion_controller_node.time.sleep",
                    side_effect=lambda _: self.node._on_android_cmd(String(data="RESET"))):
@@ -156,7 +162,7 @@ class TestMotionController(unittest.TestCase):
         self.assertIsNone(self.node._teleop_target)
 
     def test_invalid_teleop_stops(self):
-        for speed, yaw in ((math.nan, 0), (0, 1), (0.31, 0), (0.1, 1)):
+        for speed, yaw in ((math.nan, 0), (0, 1), (0.36, 0), (0.1, 1)):
             msg = Twist()
             msg.linear.x, msg.angular.z = float(speed), float(yaw)
             self.node._on_teleop(msg)

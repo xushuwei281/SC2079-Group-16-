@@ -27,13 +27,16 @@ _CURVATURE_EPSILON_RPS = 0.001
 class MotionControllerNode(Node):
     def __init__(self) -> None:
         super().__init__("motion_controller_node")
-        for name, default in (("velocity_speed_mps", 0.15), ("velocity_turn_radius_m", 0.21),
-                              ("velocity_max_yaw_rps", 1.5), ("batch_timeout_sec", 30.0),
+        for name, default in (("velocity_speed_mps", 0.15),
+                              ("velocity_max_speed_mps", 0.35),
+                              ("velocity_turn_radius_m", 0.21),
+                              ("velocity_max_yaw_rps", 1.75), ("batch_timeout_sec", 30.0),
                               ("telemetry_timeout_sec", 0.4), ("cmd_vel_timeout_sec", 0.2),
                               ("front_stop_distance_m", 0.12),
                               ("ir_stop_distance_m", 0.10)):
             self.declare_parameter(name, default)
         self._speed = float(self.get_parameter("velocity_speed_mps").value)
+        self._max_speed = float(self.get_parameter("velocity_max_speed_mps").value)
         self._radius = float(self.get_parameter("velocity_turn_radius_m").value)
         self._max_yaw = float(self.get_parameter("velocity_max_yaw_rps").value)
         self._batch_timeout_sec = float(self.get_parameter("batch_timeout_sec").value)
@@ -41,8 +44,8 @@ class MotionControllerNode(Node):
         self._cmd_timeout = float(self.get_parameter("cmd_vel_timeout_sec").value)
         self._front_stop = float(self.get_parameter("front_stop_distance_m").value)
         self._ir_stop = float(self.get_parameter("ir_stop_distance_m").value)
-        if not (0 < self._speed <= 0.3 and self._radius >= 0.21
-                and 0 < self._max_yaw <= 1.5 and 0 < self._telemetry_timeout <= 0.4
+        if not (0 < self._speed <= self._max_speed <= 0.35 and self._radius >= 0.21
+                and 0 < self._max_yaw <= 1.75 and 0 < self._telemetry_timeout <= 0.4
                 and 0 < self._cmd_timeout <= 0.2 and self._batch_timeout_sec > 0
                 and self._front_stop >= 0.12 and self._ir_stop >= 0.10):
             raise ValueError("Unsafe motion controller configuration")
@@ -145,7 +148,7 @@ class MotionControllerNode(Node):
         msg.linear.x, msg.angular.z = float(speed), float(yaw)
         self._velocity_pub.publish(msg)
 
-    def _latch_stop(self, reason: str) -> None:
+    def _latch_stop(self, reason: str, publish_estop: bool = True) -> None:
         with self._control_lock:
             already_stopped = self._estop_event.is_set()
             self._estop_event.set()
@@ -154,12 +157,13 @@ class MotionControllerNode(Node):
             self._teleop_target = None
             self._publish_velocity(0.0, 0.0)
             if not already_stopped:
-                self._estop_pub.publish(Empty())
+                if publish_estop:
+                    self._estop_pub.publish(Empty())
                 self.get_logger().warn(f"Motion stopped: {reason}")
 
     def _on_estop(self, _msg: Empty) -> None:
         if not self._estop_event.is_set():
-            self._latch_stop("ESTOPPED")
+            self._latch_stop("ESTOPPED", publish_estop=False)
 
     def _on_android_cmd(self, msg: String) -> None:
         if msg.data.strip().upper() not in {"RESET", "ALG:RESET"}:
@@ -179,7 +183,7 @@ class MotionControllerNode(Node):
                 return
             speed, yaw = msg.linear.x, msg.angular.z
             if (not math.isfinite(speed) or not math.isfinite(yaw)
-                    or abs(speed) > 0.3 or abs(yaw) > self._max_yaw
+                    or abs(speed) > self._max_speed or abs(yaw) > self._max_yaw
                     or abs(yaw) > abs(speed) / self._radius + _CURVATURE_EPSILON_RPS
                     or any(v != 0 for v in (msg.linear.y, msg.linear.z,
                                            msg.angular.x, msg.angular.y))):

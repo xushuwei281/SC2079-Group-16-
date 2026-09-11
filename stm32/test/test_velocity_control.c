@@ -9,9 +9,9 @@ static void test_packets(void)
     const uint8_t reverse[] = {'V', 0x6a, 0xff, 0xe8, 0x03};
     assert(velocity_decode(reverse, &v, &w));
     assert(v == -150 && w == 1000);
-    const uint8_t overspeed[] = {'V', 0x2d, 0x01, 0, 0};
+    const uint8_t overspeed[] = {'V', 0x5f, 0x01, 0, 0};
     assert(!velocity_decode(overspeed, &v, &w));
-    const uint8_t invalid_yaw[] = {'V', 100, 0, 0xdd, 0x05};
+    const uint8_t invalid_yaw[] = {'V', 100, 0, 0xd7, 0x06};
     assert(!velocity_decode(invalid_yaw, &v, &w));
     const uint8_t rotate[] = {'V', 0, 0, 0xe8, 0x03};
     assert(velocity_decode(rotate, &v, &w) && v == 0 && w == 0);
@@ -29,7 +29,7 @@ static void test_kinematics(void)
     assert(fabsf(curvature - 1.0f / 210.0f) < 1e-6f);
     velocity_targets(-150, 1200, &left, &right, &servo);
     assert(servo == VELOCITY_SERVO_RIGHT && left < right && right < 0);
-    velocity_targets(300, -1500, &left, &right, &servo);
+    velocity_targets(350, -1750, &left, &right, &servo);
     assert(fabsf(left) <= VELOCITY_MAX_WHEEL_MM_S + 0.001f);
     assert(fabsf(right) <= VELOCITY_MAX_WHEEL_MM_S + 0.001f);
     assert(fmaxf(fabsf(left), fabsf(right)) > VELOCITY_MAX_MM_S);
@@ -56,9 +56,9 @@ static void test_feedback_and_stop(void)
 
 static void test_safety(void)
 {
-    assert(!velocity_watchdog_expired(150, 300, 0));
-    assert(velocity_watchdog_expired(150, 301, 0));
-    assert(velocity_watchdog_expired(-150, 301, 0));
+    assert(!velocity_watchdog_expired(150, 750, 0));
+    assert(velocity_watchdog_expired(150, 751, 0));
+    assert(velocity_watchdog_expired(-150, 751, 0));
     assert(!velocity_watchdog_expired(0, 100000, 0));
     assert(!velocity_watchdog_expired(150, 20, UINT32_MAX - 10));
     assert(velocity_safety(1, 100, 100, 100, 1, 1, 13, 11, 11) == 0);

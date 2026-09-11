@@ -88,15 +88,15 @@ class TestAndroidBridge(unittest.TestCase):
         self.assertAlmostEqual(msg.linear.x, 0.1)
         self.assertAlmostEqual(msg.angular.z, -0.4)
 
-        self.node._dispatch("VEL:0.300,1.429")
+        self.node._dispatch("VEL:0.350,1.667")
         msg = self.node._teleop_pub.publish.call_args.args[0]
-        self.assertAlmostEqual(msg.linear.x, 0.3)
-        self.assertAlmostEqual(msg.angular.z, 1.429)
+        self.assertAlmostEqual(msg.linear.x, 0.35)
+        self.assertAlmostEqual(msg.angular.z, 1.667)
 
     def test_invalid_velocity_publishes_zero(self) -> None:
         """Malformed, excessive, and impossible Ackermann commands fail stopped."""
         self.node._teleop_pub.publish = MagicMock()
-        for command in ("VEL:nan,0", "VEL:0.4,0", "VEL:0.05,1.0", "VEL:0.1"):
+        for command in ("VEL:nan,0", "VEL:0.36,0", "VEL:0.05,1.0", "VEL:0.1"):
             self.node._dispatch(command)
             msg = self.node._teleop_pub.publish.call_args.args[0]
             self.assertEqual(msg.linear.x, 0.0)

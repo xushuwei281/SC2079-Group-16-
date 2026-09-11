@@ -82,8 +82,8 @@ class SerialBridgeNode(Node):
         self.declare_parameter("pose_kalman_r_yaw", 5e-3)
 
         self.declare_parameter("velocity_speed_mps", 0.15)
-        self.declare_parameter("velocity_max_speed_mps", 0.30)
-        self.declare_parameter("velocity_max_yaw_rps", 1.50)
+        self.declare_parameter("velocity_max_speed_mps", 0.35)
+        self.declare_parameter("velocity_max_yaw_rps", 1.75)
         self.declare_parameter("velocity_turn_radius_m", 0.21)
         self.declare_parameter("cmd_vel_timeout_sec", 0.20)
         self.declare_parameter("telemetry_timeout_sec", 0.40)
@@ -93,8 +93,8 @@ class SerialBridgeNode(Node):
         self._radius = float(self.get_parameter("velocity_turn_radius_m").value)
         self._cmd_timeout = float(self.get_parameter("cmd_vel_timeout_sec").value)
         self._telemetry_timeout = float(self.get_parameter("telemetry_timeout_sec").value)
-        if not (0 < self._speed <= self._max_speed <= 0.30 and self._radius >= 0.21
-                and 0 < self._max_yaw <= 1.50 and 0 < self._cmd_timeout <= 0.20
+        if not (0 < self._speed <= self._max_speed <= 0.35 and self._radius >= 0.21
+                and 0 < self._max_yaw <= 1.75 and 0 < self._cmd_timeout <= 0.20
                 and 0 < self._telemetry_timeout <= 0.40):
             raise ValueError("Unsafe continuous velocity configuration")
 
@@ -327,7 +327,7 @@ class SerialBridgeNode(Node):
             raise ValueError("Ackermann curvature limit exceeded")
         return b"V" + struct.pack("<hh", round(speed * 1000), round(yaw * 1000))
 
-    def _latch_stop(self, reason: str) -> None:
+    def _latch_stop(self, reason: str, publish_estop: bool = True) -> None:
         with self._control_lock:
             was_stopped = self._estop_event.is_set()
             self._stop_reason = reason
@@ -337,11 +337,12 @@ class SerialBridgeNode(Node):
             self._write_packet(b"Q\x00\x00\x00\x00")
             if not was_stopped:
                 self.get_logger().warn(f"Motion stopped: {reason}")
-                self._estop_pub.publish(Empty())
+                if publish_estop:
+                    self._estop_pub.publish(Empty())
 
     def _on_estop(self, _msg: Empty) -> None:
         if not self._estop_event.is_set():
-            self._latch_stop("ESTOPPED")
+            self._latch_stop("ESTOPPED", publish_estop=False)
 
     def _on_android_cmd(self, msg: String) -> None:
         if msg.data.strip().upper() not in ("RESET", "ALG:RESET"):

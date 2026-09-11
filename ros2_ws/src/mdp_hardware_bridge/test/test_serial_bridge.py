@@ -46,9 +46,9 @@ class TestSerialBridgeNode(unittest.TestCase):
     def test_wire_units_and_invalid_curvature(self):
         self.assertEqual(self.node._velocity_packet(-0.15, -0.6),
                          b"V" + struct.pack("<hh", -150, -600))
-        self.assertEqual(self.node._velocity_packet(0.3, 1.429),
-                         b"V" + struct.pack("<hh", 300, 1429))
-        for speed, yaw in ((math.nan, 0), (0.31, 0), (0, 0.2), (0.1, 0.6)):
+        self.assertEqual(self.node._velocity_packet(0.35, 1.667),
+                         b"V" + struct.pack("<hh", 350, 1667))
+        for speed, yaw in ((math.nan, 0), (0.36, 0), (0, 0.2), (0.1, 0.6)):
             with self.assertRaises(ValueError):
                 self.node._velocity_packet(speed, yaw)
 
@@ -78,7 +78,9 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.assertTrue(self.node._estop_event.is_set())
 
     def test_estop_needs_explicit_reset(self):
-        self.node._on_estop(Empty())
+        with patch.object(self.node._estop_pub, "publish") as publish:
+            self.node._on_estop(Empty())
+            publish.assert_not_called()
         self.node._on_android_cmd(String(data="ALG|1,2,3,N"))
         self.assertTrue(self.node._estop_event.is_set())
         self.node._on_android_cmd(String(data="RESET"))
