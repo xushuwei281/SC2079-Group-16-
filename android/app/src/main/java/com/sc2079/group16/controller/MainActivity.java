@@ -275,6 +275,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         findViewById(R.id.resetButton).setOnClickListener(v -> {
             resetT1Views();
             resetT2Views();
+            arenaView.setRobotPose(20f, 20f, 90f);
             linkService.sendLine("RESET");
         });
 
@@ -714,6 +715,9 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         t1SensorText.setText("US: -- cm | IR: -- cm");
         t1RecognizedTargets.clear();
         t1TargetsText.setText("🎯 Targets: Standing by for mission start");
+        if (arenaView != null) {
+            arenaView.setRobotPose(20f, 20f, 90f);
+        }
     }
 
     // ---- Task 2 Stopwatch & Stepper Helpers ------------------------------
@@ -826,6 +830,9 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         updateT2PipelineStep(0);
         t2SensorText.setText("Ultrasonic: -- cm");
         t2ManeuverText.setText("Maneuver: Ready");
+        if (arenaView != null) {
+            arenaView.setRobotPose(20f, 20f, 90f);
+        }
     }
 
     private String formatSensorDist(float cm) {

@@ -75,6 +75,16 @@ class TestFastestCarNode(unittest.TestCase):
         self.node._on_cmd(String(data="RESET"))
         self.node.reset_sprint.assert_called_once()
 
+    def test_reset_sprint_resets_pose(self):
+        """Test that reset_sprint resets pose to (20, 20, pi/2)."""
+        self.node._current_x = 90.0
+        self.node._current_y = 110.0
+        self.node._current_yaw = 0.0
+        self.node.reset_sprint()
+        self.assertAlmostEqual(self.node._current_x, 20.0)
+        self.assertAlmostEqual(self.node._current_y, 20.0)
+        self.assertAlmostEqual(self.node._current_yaw, math.pi / 2.0)
+
     def test_estop_handling(self):
         """Test that E-STOP transitions to ESTOP state and stops execution."""
         self.node._is_running = True

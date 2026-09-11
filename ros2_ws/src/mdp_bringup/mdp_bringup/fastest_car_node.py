@@ -233,7 +233,14 @@ class FastestCarNode(Node):
         """Reset sprint state."""
         self._is_running = False
         self._sprint_start_time = 0.0
+        self._current_x = 20.0
+        self._current_y = 20.0
+        self._current_yaw = math.pi / 2.0
         self._transition(Task2State.IDLE, "User reset")
+        self.get_logger().info(
+            f"Sprint reset. Pose reset to: x={self._current_x:.1f}cm, "
+            f"y={self._current_y:.1f}cm, yaw={math.degrees(self._current_yaw):.1f}°"
+        )
         self._status_pub.publish(String(data="Task 2 Reset"))
 
     def _execute_move_list_sync(

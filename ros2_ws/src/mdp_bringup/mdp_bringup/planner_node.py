@@ -731,8 +731,13 @@ class PlannerNode(Node):
         self._current_target_id = 0
         self._current_target_face = "-"
         self._current_rem_dist = 0.0
+        self._current_pose = Config(20.0, 20.0, math.pi / 2.0)
+        self._recognized_targets.clear()
         self._transition_state(MissionState.IDLE, "Mission reset")
-        self.get_logger().info("Mission reset.")
+        self.get_logger().info(
+            f"Mission reset. Pose reset to: x={self._current_pose.x:.1f}cm, "
+            f"y={self._current_pose.y:.1f}cm, yaw={math.degrees(self._current_pose.theta):.1f}°"
+        )
         self._status_pub.publish(String(data="Mission Reset"))
 
 

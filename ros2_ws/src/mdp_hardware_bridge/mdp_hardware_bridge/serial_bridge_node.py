@@ -290,7 +290,7 @@ class SerialBridgeNode(Node):
 
     def _on_android_cmd(self, msg: String) -> None:
         raw = msg.data.strip().upper()
-        if raw == "RESET" or raw.startswith("ALG|"):
+        if raw in ("RESET", "ALG:RESET") or raw.startswith("ALG|"):
             self._estop_event.clear()
             self._busy.clear()
             with self._write_lock:

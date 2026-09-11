@@ -94,6 +94,17 @@ class TestPlannerNode(unittest.TestCase):
         self.node._on_cmd(String(data="RESET"))
         self.node.reset_mission.assert_called_once()
 
+    def test_reset_mission_resets_pose_and_targets(self):
+        """Test that reset_mission resets _current_pose to (20, 20, pi/2) and clears recognized targets."""
+        from arena import Config
+        self.node._current_pose = Config(85.0, 120.0, 0.0)
+        self.node._recognized_targets = {1: 15, 2: 22}
+        self.node.reset_mission()
+        self.assertAlmostEqual(self.node._current_pose.x, 20.0)
+        self.assertAlmostEqual(self.node._current_pose.y, 20.0)
+        self.assertAlmostEqual(self.node._current_pose.theta, math.pi / 2.0)
+        self.assertEqual(len(self.node._recognized_targets), 0)
+
     def test_estop_transitions_state(self):
         """Test that E-STOP transitions to ESTOP state and cancels execution."""
         self.node._is_executing = True

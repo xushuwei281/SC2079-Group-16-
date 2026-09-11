@@ -205,6 +205,7 @@ void gyro_task(void *argument);
 void comm_task(void *argument);
 
 /* USER CODE BEGIN PFP */
+void ZeroGyro(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -1121,6 +1122,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
        runRequested = 0;
        instrLen = 0;
        MotorsOff();
+       ZeroGyro();
+       encodersZero();
        snprintf(oled_display[0], sizeof(oled_display[0]), "RESET OK       ");
        return;
    }

@@ -299,8 +299,7 @@ class ArenaSimulator:
                 elif event.key == pygame.K_r:
                     self.animating = False
                     self.anim_idx = 0
-                    if self.plan and self.plan.all_poses:
-                        self.current_pose = self.plan.all_poses[0]
+                    self.current_pose = (self.start_pose.x, self.start_pose.y, self.start_pose.theta)
                 elif event.key in (pygame.K_c, pygame.K_RETURN, pygame.K_KP_ENTER):
                     self.recompute_plan()
                 elif event.key in (pygame.K_p, pygame.K_s):
