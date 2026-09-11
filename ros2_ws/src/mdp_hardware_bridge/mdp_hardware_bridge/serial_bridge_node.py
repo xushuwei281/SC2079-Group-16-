@@ -42,6 +42,7 @@ import tf2_ros
 
 from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves
+from mdp_hardware_bridge.kalman_filter import KalmanFilter1D, PoseKalmanFilter
 
 # Confirmed valid 2-char command codes from the firmware's comm_task
 # switch statement (stm32/Core/Src/main.c).
@@ -86,6 +87,15 @@ class SerialBridgeNode(Node):
         self.declare_parameter("initial_x", 0.20)
         self.declare_parameter("initial_y", 0.20)
         self.declare_parameter("initial_yaw", math.pi / 2.0)
+        self.declare_parameter("enable_kalman_filter", True)
+        self.declare_parameter("enable_sensor_kalman", True)
+        self.declare_parameter("enable_pose_kalman", True)
+        self.declare_parameter("sensor_kalman_q", 1e-3)
+        self.declare_parameter("sensor_kalman_r", 1e-2)
+        self.declare_parameter("pose_kalman_q_pos", 5e-4)
+        self.declare_parameter("pose_kalman_r_pos", 2e-3)
+        self.declare_parameter("pose_kalman_q_yaw", 5e-4)
+        self.declare_parameter("pose_kalman_r_yaw", 5e-3)
 
         self._configured_port = self.get_parameter("serial_port").value
         self._baud = self.get_parameter("baud_rate").value
@@ -98,6 +108,39 @@ class SerialBridgeNode(Node):
         self._initial_x = float(self.get_parameter("initial_x").value)
         self._initial_y = float(self.get_parameter("initial_y").value)
         self._initial_yaw = float(self.get_parameter("initial_yaw").value)
+
+        # Kalman filtering for telemetry
+        self._enable_kalman = bool(self.get_parameter("enable_kalman_filter").value)
+        self._enable_sensor_kalman = (
+            bool(self.get_parameter("enable_sensor_kalman").value) and self._enable_kalman
+        )
+        self._enable_pose_kalman = (
+            bool(self.get_parameter("enable_pose_kalman").value) and self._enable_kalman
+        )
+
+        sq = float(self.get_parameter("sensor_kalman_q").value)
+        sr = float(self.get_parameter("sensor_kalman_r").value)
+        self._us_filter = KalmanFilter1D(
+            q=sq, r=sr, outlier_threshold=0.30, min_val=0.02, max_val=3.00
+        )
+        self._ir_left_filter = KalmanFilter1D(
+            q=sq, r=sr, outlier_threshold=0.25, min_val=0.10, max_val=0.80
+        )
+        self._ir_right_filter = KalmanFilter1D(
+            q=sq, r=sr, outlier_threshold=0.25, min_val=0.10, max_val=0.80
+        )
+
+        pq_pos = float(self.get_parameter("pose_kalman_q_pos").value)
+        pr_pos = float(self.get_parameter("pose_kalman_r_pos").value)
+        pq_yaw = float(self.get_parameter("pose_kalman_q_yaw").value)
+        pr_yaw = float(self.get_parameter("pose_kalman_r_yaw").value)
+        self._pose_filter = PoseKalmanFilter(
+            q_pos=pq_pos,
+            r_pos=pr_pos,
+            q_yaw=pq_yaw,
+            r_yaw=pr_yaw,
+            outlier_dist_threshold=0.60,
+        )
 
         # Robot dead-reckoning state (in meters and radians, start zone center by default)
         self._x: float = self._initial_x
@@ -260,6 +303,12 @@ class SerialBridgeNode(Node):
             self._x = self._initial_x
             self._y = self._initial_y
             self._yaw = self._initial_yaw
+            if self._enable_pose_kalman:
+                self._pose_filter.reset(self._x, self._y, self._yaw)
+            if self._enable_sensor_kalman:
+                self._us_filter.reset()
+                self._ir_left_filter.reset()
+                self._ir_right_filter.reset()
             self.get_logger().info(
                 f"Pose reset to start zone: x={self._x:.3f}m, y={self._y:.3f}m, yaw={math.degrees(self._yaw):.1f}°"
             )
@@ -375,6 +424,12 @@ class SerialBridgeNode(Node):
             self._x = self._initial_x
             self._y = self._initial_y
             self._yaw = self._initial_yaw
+            if self._enable_pose_kalman:
+                self._pose_filter.reset(self._x, self._y, self._yaw)
+            if self._enable_sensor_kalman:
+                self._us_filter.reset()
+                self._ir_left_filter.reset()
+                self._ir_right_filter.reset()
             self._publish_current_pose()
             return
 
@@ -396,11 +451,22 @@ class SerialBridgeNode(Node):
                     us_m = float(parts[3]) / 100.0
                     ir1_m = float(parts[4]) / 100.0
                     ir2_m = float(parts[5]) / 100.0
-                    self._publish_sensor_ranges(us_m, ir1_m, ir2_m)
+                    if self._enable_sensor_kalman:
+                        us_f = self._us_filter.update(us_m)
+                        ir1_f = self._ir_left_filter.update(ir1_m)
+                        ir2_f = self._ir_right_filter.update(ir2_m)
+                        self._publish_sensor_ranges(us_f, ir1_f, ir2_f)
+                    else:
+                        self._publish_sensor_ranges(us_m, ir1_m, ir2_m)
                 elif len(parts) >= 5:
                     ir1_m = float(parts[3]) / 100.0
                     ir2_m = float(parts[4]) / 100.0
-                    self._publish_sensor_ranges(0.0, ir1_m, ir2_m)
+                    if self._enable_sensor_kalman:
+                        ir1_f = self._ir_left_filter.update(ir1_m)
+                        ir2_f = self._ir_right_filter.update(ir2_m)
+                        self._publish_sensor_ranges(0.0, ir1_f, ir2_f)
+                    else:
+                        self._publish_sensor_ranges(0.0, ir1_m, ir2_m)
             except Exception as exc:
                 self.get_logger().warn(f"Failed to parse POS feedback from {status!r}: {exc}")
                 self._accumulate_nominal(commands)
@@ -433,6 +499,8 @@ class SerialBridgeNode(Node):
 
         # Normalize yaw to (-pi, pi]
         self._yaw = (self._yaw + math.pi) % (2.0 * math.pi) - math.pi
+        if self._enable_pose_kalman:
+            self._pose_filter.set_state(self._x, self._y, self._yaw)
         self._publish_current_pose()
         self.get_logger().info(
             f"Batch completed pose: x={self._x:.3f}m, y={self._y:.3f}m, yaw={math.degrees(self._yaw):.1f}°"
@@ -537,18 +605,34 @@ class SerialBridgeNode(Node):
             payload = line[4:].strip()
             parts = payload.split(",")
             if len(parts) >= 3:
-                self._x = float(parts[0]) / 100.0
-                self._y = float(parts[1]) / 100.0
+                raw_x = float(parts[0]) / 100.0
+                raw_y = float(parts[1]) / 100.0
                 # Same STM32-to-pipeline sign correction as the FIN:POS branch
                 # in _update_and_publish_pose -- see the comment there.
-                self._yaw = math.radians(180.0 - float(parts[2]))
-                self._yaw = (self._yaw + math.pi) % (2.0 * math.pi) - math.pi
+                raw_yaw = math.radians(180.0 - float(parts[2]))
+                raw_yaw = (raw_yaw + math.pi) % (2.0 * math.pi) - math.pi
+
+                if self._enable_pose_kalman:
+                    self._x, self._y, self._yaw = self._pose_filter.update(raw_x, raw_y, raw_yaw)
+                else:
+                    self._x = raw_x
+                    self._y = raw_y
+                    self._yaw = raw_yaw
+
                 self._publish_current_pose()
+
             if len(parts) >= 6:
                 us_m = float(parts[3]) / 100.0
                 ir1_m = float(parts[4]) / 100.0
                 ir2_m = float(parts[5]) / 100.0
-                self._publish_sensor_ranges(us_m, ir1_m, ir2_m)
+
+                if self._enable_sensor_kalman:
+                    us_f = self._us_filter.update(us_m)
+                    ir1_f = self._ir_left_filter.update(ir1_m)
+                    ir2_f = self._ir_right_filter.update(ir2_m)
+                    self._publish_sensor_ranges(us_f, ir1_f, ir2_f)
+                else:
+                    self._publish_sensor_ranges(us_m, ir1_m, ir2_m)
         except Exception as exc:
             self.get_logger().debug(f"Failed to parse telemetry {line!r}: {exc}")
 
