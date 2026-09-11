@@ -229,7 +229,7 @@ alias mdp-estop="ros2 topic pub -1 /estop std_msgs/msg/Empty {}"
 All commands below are executed from `/home/mdp/dev/SC2079-Group-16/ros2_ws` unless specified otherwise.
 
 ### 5.1 Running the Automated Test Suites
-Group 16 maintains a **100% pass rate (91/91 tests)**. Run all unit tests before and after any code modification:
+Group 16 maintains a **100% pass rate (92/92 tests)**. Run all unit tests before and after any code modification:
 ```bash
 # Run ALL test suites across algorithm, bridges, and planner:
 pixi run -e pi test-all
@@ -237,7 +237,7 @@ pixi run -e pi test-all
 # Or run individual test suites:
 pixi run -e pi test-algo     # 13 tests: Reeds-Shepp, geometry, TSP, config space
 pixi run -e pi test-bridge   # 59 tests: hardware/motion (43) and Android bridge (16)
-pixi run -e pi test-planner  # 19 tests: Task 1 FSM, Task 2 sprint, Bull's Eye orbit recovery
+pixi run -e pi test-planner  # 20 tests: Task 1 FSM, Task 2 sprint, Bull's Eye orbit recovery
 ```
 
 ### 5.2 Building ROS 2 Packages
@@ -384,6 +384,9 @@ and `TO` remain available through `/hardware/maintenance`.
 2. **Layer 1 Collision Avoidance:** Reeds-Shepp trajectories are verified against inflated obstacles using Oriented Bounding Box (OBB) separating axis theorem at $2\text{ cm}$ resolution.
 3. **Layer 2 Dynamic Safety:** If a front range crosses its threshold (ultrasonic $\le 12\text{ cm}$ or IR $\le 10\text{ cm}$), the robot halts and latches E-STOP until explicit RESET. It does not automatically reverse into unobserved space.
 4. **Bull's Eye Orbit Recovery:** If `/perception/sample_target` detects Bull's Eye (Symbol 40) or low confidence, `planner_node` generates candidate adjacent faces (W, E, S), validates clearance, drives a localized orbit curve, confirms the actual target, and resumes the TSP tour.
+5. **Recognition Failure:** If sampling and every valid adjacent-face recovery fail,
+   the planner enters `MISSION_FAILED` and reports the unconfirmed obstacle. It
+   never publishes a fabricated target ID.
 
 ### 8.2 Task 2: Fastest Car Reactive Sprint
 1. **Approach:** Sprints forward until ultrasonic reads $\le 30.0\text{ cm}$ from Obstacle 1.
@@ -412,7 +415,7 @@ The current checklist audit is maintained in [`docs/checklist-compliance-audit.m
 >
 > **4. Port & Hardware Contention**: Only one process may open `/dev/ttyAMA0` (STM32 UART), `/dev/rfcomm0` (Bluetooth), or the camera device. If nodes fail to start, always execute `mdp-kill` first.
 >
-> **5. Test Suite Gatekeeper**: Every agent working on this codebase MUST run `pixi run -e pi test-all` before completing a task. Never submit code that breaks any of the 91 unit tests.
+> **5. Test Suite Gatekeeper**: Every agent working on this codebase MUST run `pixi run -e pi test-all` before completing a task. Never submit code that breaks any of the 92 unit tests.
 >
 > **6. Persistent Memory**: Document any new hardware quirks, mechanical calibrations, or architectural shifts in [`MEMORY.md`](file:///home/mdp/dev/SC2079-Group-16/MEMORY.md).
 >
