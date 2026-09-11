@@ -17,6 +17,7 @@ import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Range
 import serial
 import serial.tools.list_ports
@@ -39,6 +40,12 @@ _MAX_BATCH = 40
 # executing or in mechanical settling when our trigger landed).
 _BUS_RETRIES = 10
 _CURVATURE_EPSILON_RPS = 0.001
+_LATEST_VALUE_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 # Standard candidate device nodes for STM32 USB-CDC / UART
 _DEFAULT_CANDIDATE_PORTS = [
@@ -177,10 +184,14 @@ class SerialBridgeNode(Node):
         callback_group = ReentrantCallbackGroup()
 
         self._pose_pub = self.create_publisher(PoseStamped, "/robot_pose", 10)
-        self._raw_pose_pub = self.create_publisher(PoseStamped, "/robot_pose/raw", 1)
-        self._raw_us_pub = self.create_publisher(Range, "/sensors/ultrasonic/raw", 1)
-        self._raw_ir_left_pub = self.create_publisher(Range, "/sensors/ir_left/raw", 1)
-        self._raw_ir_right_pub = self.create_publisher(Range, "/sensors/ir_right/raw", 1)
+        self._raw_pose_pub = self.create_publisher(
+            PoseStamped, "/robot_pose/raw", _LATEST_VALUE_QOS)
+        self._raw_us_pub = self.create_publisher(
+            Range, "/sensors/ultrasonic/raw", _LATEST_VALUE_QOS)
+        self._raw_ir_left_pub = self.create_publisher(
+            Range, "/sensors/ir_left/raw", _LATEST_VALUE_QOS)
+        self._raw_ir_right_pub = self.create_publisher(
+            Range, "/sensors/ir_right/raw", _LATEST_VALUE_QOS)
         self._us_pub = self.create_publisher(Range, "/sensors/ultrasonic", 10)
         self._ir_left_pub = self.create_publisher(Range, "/sensors/ir_left", 10)
         self._ir_right_pub = self.create_publisher(Range, "/sensors/ir_right", 10)
@@ -188,7 +199,8 @@ class SerialBridgeNode(Node):
 
         self._estop_pub = self.create_publisher(Empty, "/estop", 10)
         self._velocity_sub = self.create_subscription(
-            Twist, "/cmd_vel", self._on_cmd_vel, 1, callback_group=callback_group
+            Twist, "/cmd_vel", self._on_cmd_vel, _LATEST_VALUE_QOS,
+            callback_group=callback_group
         )
         self._velocity_timer = self.create_timer(
             0.05, self._velocity_tick, callback_group=callback_group
@@ -379,7 +391,6 @@ class SerialBridgeNode(Node):
                 return
             self._teleop_target = target
             self._teleop_stamp = time.monotonic()
-            self._velocity_tick()
 
     def _velocity_tick(self) -> None:
         with self._control_lock:
@@ -402,7 +413,14 @@ class SerialBridgeNode(Node):
                 self._latch_stop("STALE_TELEMETRY")
                 return
             if not self._write_packet(self._teleop_target):
-                self._latch_stop("DISCONNECTED")
+                # The closed transport and MCU watchdog already stop physical
+                # motion. Discard this target and reconnect without converting
+                # a transient USB write stall into a global latched E-stop.
+                self._teleop_target = None
+                self._stop_reason = "DISCONNECTED"
+                self.get_logger().warn(
+                    "Velocity transport interrupted; target discarded while reconnecting"
+                )
 
     def _telemetry_fresh(self) -> bool:
         return (self._raw_pose is not None and self._telemetry_stamp > 0

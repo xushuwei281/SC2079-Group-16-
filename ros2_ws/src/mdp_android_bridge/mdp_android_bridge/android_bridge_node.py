@@ -36,14 +36,21 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from mdp_interfaces.msg import MoveCommand
 from mdp_interfaces.srv import ExecuteMoves
-
-_CURVATURE_EPSILON_RPS = 0.001
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 import serial
 from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
+
+_CURVATURE_EPSILON_RPS = 0.001
+_LATEST_VALUE_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 # Inbound Movement Mapping
 # Maps tablet command prefixes to STM32 command codes
@@ -163,7 +170,8 @@ class AndroidBridgeNode(Node):
         self._move_client = self.create_client(
             ExecuteMoves, "/execute_moves", callback_group=callback_group
         )
-        self._teleop_pub = self.create_publisher(Twist, "/cmd_vel/teleop", 1)
+        self._teleop_pub = self.create_publisher(
+            Twist, "/cmd_vel/teleop", _LATEST_VALUE_QOS)
 
         # Background worker thread for connection and read loop
         self._comm_thread = threading.Thread(target=self._connection_worker, daemon=True)
@@ -194,7 +202,11 @@ class AndroidBridgeNode(Node):
 
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if line:
-                    self.get_logger().info(f"[Tablet -> Pi]: {line}")
+                    if line.upper().startswith("VEL:"):
+                        self.get_logger().info(
+                            f"[Tablet -> Pi]: {line}", throttle_duration_sec=1.0)
+                    else:
+                        self.get_logger().info(f"[Tablet -> Pi]: {line}")
                     self._dispatch(line)
 
             except (serial.SerialException, OSError, termios.error, TypeError, AttributeError) as exc:

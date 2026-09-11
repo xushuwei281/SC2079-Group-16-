@@ -92,6 +92,11 @@ Task 1 proximity interruption enters the stopped state. It does not automaticall
 reset the latch and reverse into unobserved space. Bull's Eye orbit recovery is
 a separate perception-driven maneuver and retains normal collision validation.
 
+Continuous velocity and raw-feedback topics use best-effort keep-last depth 1
+QoS. Both Pi layers coalesce bursts to 20 Hz. A transient UART write timeout
+discards the target and reconnects without latching `/estop`; sustained loss is
+covered by the MCU watchdog and stale-feedback latch.
+
 The configured control rate and timeout values are design settings, not measured
 braking latency. The measured full-lock radius is 21–22 cm, and the planner and
 controller use 21 cm with the existing calibrated servo endpoints. The new

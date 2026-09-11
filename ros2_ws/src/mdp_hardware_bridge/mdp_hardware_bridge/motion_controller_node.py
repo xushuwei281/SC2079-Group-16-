@@ -15,6 +15,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.exceptions import InvalidHandle
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
 
@@ -24,6 +25,12 @@ from mdp_interfaces.srv import ExecuteMoves
 _VALID_COMMANDS = {"FC", "BC", "FL", "FR", "BL", "BR", "FU", "BU", "GC", "G0", "TO"}
 _MAX_BATCH = 40
 _CURVATURE_EPSILON_RPS = 0.001
+_LATEST_VALUE_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 
 class MotionControllerNode(Node):
@@ -66,22 +73,27 @@ class MotionControllerNode(Node):
         self._teleop_target = None
         self._teleop_stamp = 0.0
         group = ReentrantCallbackGroup()
-        self._velocity_pub = self.create_publisher(Twist, "/cmd_vel", 1)
+        self._velocity_pub = self.create_publisher(Twist, "/cmd_vel", _LATEST_VALUE_QOS)
         self._estop_pub = self.create_publisher(Empty, "/estop", 10)
         self._pose_sub = self.create_subscription(
-            PoseStamped, "/robot_pose/raw", self._on_pose, 1, callback_group=group)
+            PoseStamped, "/robot_pose/raw", self._on_pose, _LATEST_VALUE_QOS,
+            callback_group=group)
         self._range_sub = self.create_subscription(
-            Range, "/sensors/ultrasonic/raw", self._on_range, 1, callback_group=group)
+            Range, "/sensors/ultrasonic/raw", self._on_range, _LATEST_VALUE_QOS,
+            callback_group=group)
         self._ir_left_sub = self.create_subscription(
-            Range, "/sensors/ir_left/raw", self._on_ir_left, 1, callback_group=group)
+            Range, "/sensors/ir_left/raw", self._on_ir_left, _LATEST_VALUE_QOS,
+            callback_group=group)
         self._ir_right_sub = self.create_subscription(
-            Range, "/sensors/ir_right/raw", self._on_ir_right, 1, callback_group=group)
+            Range, "/sensors/ir_right/raw", self._on_ir_right, _LATEST_VALUE_QOS,
+            callback_group=group)
         self._estop_sub = self.create_subscription(
             Empty, "/estop", self._on_estop, 10, callback_group=group)
         self._reset_sub = self.create_subscription(
             String, "/android/cmd", self._on_android_cmd, 10, callback_group=group)
         self._teleop_sub = self.create_subscription(
-            Twist, "/cmd_vel/teleop", self._on_teleop, 1, callback_group=group)
+            Twist, "/cmd_vel/teleop", self._on_teleop, _LATEST_VALUE_QOS,
+            callback_group=group)
         self._service = self.create_service(
             ExecuteMoves, "/execute_moves", self._handle_execute_moves, callback_group=group)
         self._maintenance_client = self.create_client(
@@ -208,7 +220,6 @@ class MotionControllerNode(Node):
                 return
             self._teleop_target = (speed, yaw)
             self._teleop_stamp = time.monotonic()
-            self._teleop_tick()
 
     def _teleop_tick(self) -> None:
         with self._control_lock:

@@ -60,6 +60,11 @@ faults and E-STOP latch motion until `RESET` (or `ALG:RESET`) on `/android/cmd`.
 After RESET, velocity remains zero until the first fresh telemetry frame arrives;
 a joystick update racing that frame does not create another E-stop.
 
+Continuous velocity and raw-feedback topics use best-effort keep-last depth 1
+QoS. Input bursts are coalesced to the 20 Hz control timers. A transient UART
+write timeout discards the target and reconnects without publishing `/estop`;
+sustained loss remains covered by the MCU watchdog and Pi feedback timeout.
+
 From `/home/mdp/dev/SC2079-Group-16/ros2_ws`, run offline checks and builds:
 
 ```bash

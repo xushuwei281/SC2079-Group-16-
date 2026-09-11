@@ -25,6 +25,7 @@ class TestMotionController(unittest.TestCase):
 
     def setUp(self):
         self.node = MotionControllerNode()
+        self.node._timer.cancel()
         self.node._velocity_pub = MagicMock()
         self.node._estop_pub = MagicMock()
         self.feedback()
@@ -133,6 +134,7 @@ class TestMotionController(unittest.TestCase):
         msg = Twist()
         msg.linear.x = 0.1
         self.node._on_teleop(msg)
+        self.node._teleop_tick()
         self.assertEqual(self.velocities(), [(0, 0)])
         self.assertFalse(self.node._estop_event.is_set())
 
@@ -144,6 +146,7 @@ class TestMotionController(unittest.TestCase):
         msg = Twist()
         msg.linear.x = 0.1
         self.node._on_teleop(msg)
+        self.node._teleop_tick()
         self.assertGreater(self.velocities()[-1][0], 0)
         self.feedback(us=0.12)
         self.node._teleop_tick()

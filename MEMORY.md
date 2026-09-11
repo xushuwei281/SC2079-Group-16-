@@ -24,6 +24,11 @@ Persistent notes about work done in this repo so later agents don't re-derive it
   not reset, and `R` discards old motion state rather than resuming a canceled
   request. After `R`, both Pi layers hold zero until the first fresh TLM frame,
   preventing joystick/reset ordering from creating a false stale-telemetry stop.
+- Live logs showed the remaining random latches were mainly `DISCONNECTED` after
+  `/dev/ttyACM1` write timeouts, not zero range or a QoS mismatch. Latest-value
+  QoS is now best-effort depth 1, bursts are coalesced to 20 Hz UART output, and
+  transient write failures reconnect without publishing `/estop`. Sustained
+  loss is still stopped by the MCU watchdog and Pi feedback timeout.
 - Task 1/2 START does not clear E-STOP. Task 1 no longer automatically resets
   and backs up after a proximity stop; the old recovery distance parameter is
   retained for configuration compatibility. Perception-driven orbit recovery

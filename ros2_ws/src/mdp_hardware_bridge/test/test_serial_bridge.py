@@ -24,6 +24,10 @@ class TestSerialBridgeNode(unittest.TestCase):
     def setUp(self):
         with patch.object(SerialBridgeNode, "_try_connect", return_value=False):
             self.node = SerialBridgeNode()
+        self.node._velocity_timer.cancel()
+        if self.node._timer is not None:
+            self.node._timer.cancel()
+        self.node._telemetry_timer.cancel()
         self.port = MagicMock()
         self.port.is_open = True
         self.port.write.side_effect = len
@@ -63,6 +67,15 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.node._velocity_tick()
         self.assertEqual(count, len(self.packets()))
 
+    def test_nonzero_burst_is_coalesced_to_timer_rate(self):
+        msg = Twist()
+        msg.linear.x = 0.1
+        for _ in range(20):
+            self.node._on_cmd_vel(msg)
+        self.assertEqual(self.packets(), [])
+        self.node._velocity_tick()
+        self.assertEqual(self.packets(), [b"V" + struct.pack("<hh", 100, 0)])
+
     def test_zero_is_accepted_without_feedback(self):
         self.node._telemetry_stamp = 0.0
         self.node._on_cmd_vel(Twist())
@@ -74,6 +87,7 @@ class TestSerialBridgeNode(unittest.TestCase):
         msg = Twist()
         msg.linear.x = 0.1
         self.node._on_cmd_vel(msg)
+        self.node._velocity_tick()
         self.assertEqual(self.packets(), [b"Q\0\0\0\0"])
         self.assertTrue(self.node._estop_event.is_set())
 
@@ -83,6 +97,7 @@ class TestSerialBridgeNode(unittest.TestCase):
         msg = Twist()
         msg.linear.x = 0.1
         self.node._on_cmd_vel(msg)
+        self.node._velocity_tick()
         self.assertEqual(self.packets(), [b"V\0\0\0\0"])
         self.assertFalse(self.node._estop_event.is_set())
 
@@ -153,3 +168,14 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.port.write.side_effect = lambda _: 2
         self.assertFalse(self.node._write_packet(b"V\0\0\0\0"))
         self.assertIsNone(self.node._serial)
+
+    def test_velocity_transport_failure_does_not_latch_estop(self):
+        self.node._handle_telemetry_line("TLM:20,20,90,50,40,40")
+        msg = Twist()
+        msg.linear.x = 0.1
+        self.node._on_cmd_vel(msg)
+        with patch.object(self.node, "_write_packet", return_value=False):
+            self.node._velocity_tick()
+        self.assertFalse(self.node._estop_event.is_set())
+        self.assertIsNone(self.node._teleop_target)
+        self.assertEqual(self.node._stop_reason, "DISCONNECTED")

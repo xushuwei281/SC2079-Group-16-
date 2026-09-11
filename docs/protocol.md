@@ -91,6 +91,11 @@ echo. Front sensors do not protect reverse travel. Telemetry reception and stop
 callbacks do not wait for `FIN`. The old `#`/`RUN`/`FIN` sequence is restricted to
 legacy maintenance; normal motion completion belongs to the Pi motion controller.
 
+Continuous velocity and raw-feedback topics use best-effort keep-last depth 1
+QoS. UART velocity output is capped at 20 Hz. A transient UART write timeout
+discards the target and reconnects; persistent loss remains covered by the MCU
+watchdog and Pi feedback timeout.
+
 
 ## Raspberry Pi ↔ Algorithm (PC) (TCP, JSON lines)
 
