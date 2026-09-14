@@ -368,7 +368,10 @@ static uint16_t HCSR04_ReadCm(uint32_t *raw_us)
 static int32_t encoderA(void) { return (int32_t)__HAL_TIM_GET_COUNTER(&htim2); }
 //motor
 #define MOTOR_PPR     	1527.0f	//1320.0f
-#define WHEEL_D_CM       6.5f
+/* Effective rolling diameter, not the nominal wheel spec -- calibrated
+ * against a measured drive: commanded FC 50cm actually covered 43cm
+ * (odometry over-reporting distance by ~16%), so WHEEL_D_CM = 6.5 * 43/50. */
+#define WHEEL_D_CM       5.59f
 #define CM_PER_COUNT  (WHEEL_D_CM * 3.1415f / MOTOR_PPR)
 static void encodersZero(void)
 {
