@@ -369,9 +369,14 @@ static int32_t encoderA(void) { return (int32_t)__HAL_TIM_GET_COUNTER(&htim2); }
 //motor
 #define MOTOR_PPR     	1527.0f	//1320.0f
 /* Effective rolling diameter, not the nominal wheel spec -- calibrated
- * against a measured drive: commanded FC 50cm actually covered 43cm
- * (odometry over-reporting distance by ~16%), so WHEEL_D_CM = 6.5 * 43/50. */
-#define WHEEL_D_CM       5.59f
+ * against a measured drive. An earlier trial found commanded FC 50cm only
+ * covering 43cm (odometry over-reporting distance), giving 6.5 * 43/50 =
+ * 5.59. A later trial with 5.59 flashed found commanded FC 50cm actually
+ * covering 60cm (odometry now under-reporting distance), so corrected
+ * again: WHEEL_D_CM = 5.59 * 60/50 = 6.71. Both trials were single manual
+ * measurements and may not agree with a third; re-derive from an average
+ * of several trials if this still drifts. */
+#define WHEEL_D_CM       6.71f
 #define CM_PER_COUNT  (WHEEL_D_CM * 3.1415f / MOTOR_PPR)
 static void encodersZero(void)
 {
