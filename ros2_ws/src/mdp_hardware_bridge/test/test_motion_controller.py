@@ -224,3 +224,28 @@ class TestMotionController(unittest.TestCase):
         req = ExecuteMoves.Request(commands=[MoveCommand(command="GC", value=0),
                                              MoveCommand(command="FC", value=10)])
         self.assertFalse(self.node._handle_execute_moves(req, ExecuteMoves.Response()).success)
+
+    def test_turn_180_runout(self):
+        self.feedback(x=0.2, y=0.2, yaw=math.pi / 2)
+        self.node._velocity_pub.reset_mock()
+        step = 0
+
+        def step_feedback(_):
+            nonlocal step
+            step += 1
+            if step == 1:
+                self.feedback(x=0.2, y=0.2, yaw=math.pi)
+            elif step == 2:
+                self.feedback(x=0.2, y=0.2, yaw=-math.pi / 2)
+            elif step == 3:
+                self.feedback(x=0.2, y=0.14, yaw=-math.pi / 2)
+
+        with patch("mdp_hardware_bridge.motion_controller_node.time.sleep", side_effect=step_feedback):
+            res = self.execute("FL", 180)
+            self.assertTrue(res.success)
+        vels = self.velocities()
+        self.assertGreater(abs(vels[0][1]), 0)
+        has_straight_runout = any(v[0] > 0 and v[1] == 0.0 for v in vels)
+        self.assertTrue(has_straight_runout)
+        self.assertEqual(vels[-1], (0, 0))
+

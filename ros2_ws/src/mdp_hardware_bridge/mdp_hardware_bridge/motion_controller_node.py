@@ -40,13 +40,14 @@ _LATEST_VALUE_QOS = QoSProfile(
 class MotionControllerNode(Node):
     def __init__(self) -> None:
         super().__init__("motion_controller_node")
-        for name, default in (("velocity_speed_mps", 0.15),
+        for name, default in (("velocity_speed_mps", 0.25),
                               ("velocity_max_speed_mps", 0.35),
                               ("velocity_turn_radius_m", 0.21),
                               ("velocity_max_yaw_rps", 1.75), ("batch_timeout_sec", 30.0),
                               ("telemetry_timeout_sec", 0.4), ("cmd_vel_timeout_sec", 0.2),
                               ("front_stop_distance_m", 0.12),
-                              ("ir_stop_distance_m", 0.10)):
+                              ("ir_stop_distance_m", 0.10),
+                              ("turn_180_runout_m", 0.05)):
             self.declare_parameter(name, default)
         self._speed = float(self.get_parameter("velocity_speed_mps").value)
         self._max_speed = float(self.get_parameter("velocity_max_speed_mps").value)
@@ -57,10 +58,12 @@ class MotionControllerNode(Node):
         self._cmd_timeout = float(self.get_parameter("cmd_vel_timeout_sec").value)
         self._front_stop = float(self.get_parameter("front_stop_distance_m").value)
         self._ir_stop = float(self.get_parameter("ir_stop_distance_m").value)
+        self._turn_180_runout = float(self.get_parameter("turn_180_runout_m").value)
         if not (0 < self._speed <= self._max_speed <= 0.35 and self._radius >= 0.21
                 and 0 < self._max_yaw <= 1.75 and 0 < self._telemetry_timeout <= 0.4
                 and 0 < self._cmd_timeout <= 0.2 and self._batch_timeout_sec > 0
-                and self._front_stop >= 0.12 and self._ir_stop >= 0.10):
+                and self._front_stop >= 0.12 and self._ir_stop >= 0.10
+                and 0.0 <= self._turn_180_runout <= 0.20):
             raise ValueError("Unsafe motion controller configuration")
         self._control_lock = threading.RLock()
         self._busy = threading.Event()
@@ -321,6 +324,9 @@ class MotionControllerNode(Node):
         turning = mc.command[1] in {"L", "R"}
         turn_sign = direction * (1.0 if mc.command[1] == "L" else -1.0)
         goal = math.radians(mc.value) if turning else mc.value / 100.0
+        runout_needed = turning and mc.value >= 170 and self._turn_180_runout > 0.0
+        runout_active = False
+        runout_start = None
         while True:
             with self._control_lock:
                 error = self._motion_error(generation, deadline)
@@ -331,8 +337,18 @@ class MotionControllerNode(Node):
                                               math.cos(yaw - previous_yaw))
                 previous_yaw = yaw
                 if turning:
-                    remaining = goal - turn_sign * accumulated_yaw
-                    complete = remaining <= min(math.radians(1.0), goal * 0.1)
+                    if not runout_active:
+                        remaining = goal - turn_sign * accumulated_yaw
+                        complete = remaining <= min(math.radians(1.0), goal * 0.1)
+                        if complete and runout_needed:
+                            runout_active = True
+                            runout_start = (x, y, yaw)
+                            complete = False
+                    if runout_active:
+                        progress = direction * ((x - runout_start[0]) * math.cos(runout_start[2])
+                                                + (y - runout_start[1]) * math.sin(runout_start[2]))
+                        remaining = self._turn_180_runout - progress
+                        complete = remaining <= min(0.005, self._turn_180_runout * 0.1)
                 elif mc.command in {"FU", "BU"}:
                     if (time.monotonic() - self._range_stamp >= self._telemetry_timeout
                             or not math.isfinite(self._us_range_m) or self._us_range_m <= 0):
@@ -353,9 +369,15 @@ class MotionControllerNode(Node):
                     self._latch_stop(error)
                     return error
                 # Slow near the measured goal without claiming time-based progress.
-                distance_left = remaining * self._radius if turning else remaining
-                speed = direction * min(self._speed, max(0.04, distance_left * 1.5))
-                yaw_rate = turn_sign * abs(speed) / self._radius if turning else 0.0
+                is_turn_curve = turning and not runout_active
+                if is_turn_curve:
+                    # Maintain turning cruise speed until within ~15 deg, flooring at 0.18 m/s
+                    # to keep the inner wheel powered above stall torque against tire scrub.
+                    speed = direction * min(self._speed, max(0.18, remaining * self._radius * 3.5))
+                else:
+                    distance_left = remaining
+                    speed = direction * min(self._speed, max(0.08, distance_left * 2.0))
+                yaw_rate = turn_sign * abs(speed) / self._radius if is_turn_curve else 0.0
                 yaw_rate = max(-self._max_yaw, min(self._max_yaw, yaw_rate))
                 self._publish_velocity(speed, yaw_rate)
             time.sleep(0.05)

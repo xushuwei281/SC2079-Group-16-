@@ -39,6 +39,14 @@ Persistent notes about work done in this repo so later agents don't re-derive it
   retain existing calibrated steering endpoints. The absolute-speed PI loop is
   new and requires physical speed/tracking and stopping checks. Firmware build
   and unit tests do not establish braking performance or mean it was flashed.
+- **Hardware Calibration & Runout Compensation (2026-09-14)**:
+  - Straight distance: `WHEEL_D_CM = 6.33f` in `stm32/src/main.c` (calibrated on `FC 50`).
+  - Steering center: `VELOCITY_SERVO_CENTER = 144` in `stm32/include/velocity_control.h` (corrected 3° left tilt).
+  - Steering left lock: `VELOCITY_SERVO_LEFT = 94` (`SERVOMIN`) in `stm32/include/velocity_control.h` (corrected ~10° turning radius deficit).
+  - 180° Turn Runout: Due to Ackermann entry latency (servo transitioning from center 144 to full lock 94 over the first 2–3 cm of motion), a 180° turn halts ~5 cm short along the final heading line. Handled cleanly in `motion_controller_node.py` via `turn_180_runout_m = 0.05`: when a turn with `mc.value >= 170` completes its rotational yaw goal, it engages a straight forward runout (`angular.z = 0.0`) for 5 cm along the final heading before returning `FIN`.
+  - Velocity & Motor Drive Tuning (2026-09-14): Increased `velocity_speed_mps` from 0.15 m/s to 0.25 m/s in `motion_controller_node.py` and `serial_bridge_node.py` (+67% speedup). Deceleration creep floor increased from 0.04 m/s to 0.08 m/s with steeper deceleration slope (`distance_left * 2.0`). Tuned STM32 motor PI loop: `VELOCITY_PWM_FEEDFORWARD = 2.5f` (producing 625 PWM cruise) and `VELOCITY_PWM_KP = 2.0f`.
+  - Turning Speed & Inner Wheel Stall Fix (2026-09-14): Turns previously crawled because `distance_left = remaining * radius` caused linear deceleration to start 35° before completion and bottomed out at 0.08 m/s, where differential kinematics dropped the inner wheel to 51 mm/s (<120 PWM), causing inner tire scrub to stall. Fixed in `motion_controller_node.py` by maintaining turn cruise speed (0.25 m/s / ~68 deg/s) until the final 15°, flooring turn speed at 0.18 m/s (~49 deg/s) so the inner wheel always receives >290 PWM (> MOTORLOW 280), keeping both wheels actively powered throughout the turn.
+  - Proximity Noise Rejection & Debouncing (2026-09-14): Eliminated false E-STOP triggers in open space. Filtered HC-SR04 transducer ringing glitches (`echo_us < 150` rejected in `HCSR04_ReadCm`). Fixed Sharp IR clamping bug in `IR_RawToCm` and `IR1_RawToCm` (calibrated smoothly down to 6 cm rather than flatlining at the 10 cm trip boundary). Added 8-tick (~80 ms) proximity confirmation debounce in STM32 `motor()` and 2-sample debounce in `planner_node.py` and `fastest_car_node.py`, ensuring single-frame acoustic or motor electrical switching spikes do not cause false hardware E-STOPs.
 - See [architecture](ros2_ws/ARCHITECTURE.md), [UART protocol](docs/stm32-uart-protocol-spec.md),
   and [migration/bench guide](docs/cmd-vel-migration.md). Older discrete-batch
   notes below are historical where they conflict with this section.
@@ -112,9 +120,12 @@ drift apart.
   retains an independent fallback. STM32 range value zero is no-return/
   out-of-range; freshness tracks the sensor task heartbeat so an open arena
   does not produce `STOP:SENSOR_STALE`.
-- **Measured Turning Radius**: Physical full-lock radius is 21–22 cm. The planner
-  and continuous velocity controller use 21 cm; calibrated servo endpoints remain
-  `SERVOLEFT=101`, `SERVOCENTER=146`, and `SERVORIGHT=206`.
+- **Measured Turning Radius & Steering**: Physical full-lock radius is 21–22 cm. The planner
+  and continuous velocity controller use 21 cm; calibrated servo endpoints are
+  `SERVOLEFT=94` (tightened from 101 to full lock `SERVOMIN=94`, eliminating ~10 deg position undershoot and understeer on left turns),
+  `SERVOCENTER=144` (converged from 146 [+5 deg R], 141 [-3 deg L], and 143 [-3 deg L]), and `SERVORIGHT=206`.
+- **Effective Wheel Diameter**: Calibrated to `WHEEL_D_CM = 6.33f` (from 6.09 * 52/50) after
+  FC 50cm was measured covering 52cm on ground.
 - **FreeRTOS Stack Sizing**: `defaultTask` stack was increased from 512B (`128 * 4`) to 2048B (`512 * 4`) and `MotorTask` to 1024B (`256 * 4`). The 512B stack previously overflowed during `snprintf` + floating-point operations and FPU context saving, causing hard MCU lockups.
 - **HC-SR04 Ultrasonic Driver**: Uses hardware timer `TIM6` (1 tick = 1 µs at 16 MHz HSI) instead of software loops. Wrapped with `vTaskSuspendAll()` / `xTaskResumeAll()` during echo pulse measurement to prevent ~1 ms FreeRTOS preemption jitter (which created an artificial 19 cm measurement floor). Includes pre-trigger check to avoid hanging when ECHO is stuck HIGH from blind-zone (< 2 cm) reflections.
 - **Flashing Flags & DTR Pin Latch**: In `platformio.ini`, `upload_flags` exit sequence MUST be `-rts,-dtr`. A previous trailing `dtr` (`...:-rts,-dtr,dtr`) left DTR asserted, holding the C30D reset/bootloader circuit and preventing execution of user firmware.

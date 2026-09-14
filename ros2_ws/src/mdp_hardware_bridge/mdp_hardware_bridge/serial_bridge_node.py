@@ -88,7 +88,7 @@ class SerialBridgeNode(Node):
         self.declare_parameter("pose_kalman_q_yaw", 5e-4)
         self.declare_parameter("pose_kalman_r_yaw", 5e-3)
 
-        self.declare_parameter("velocity_speed_mps", 0.15)
+        self.declare_parameter("velocity_speed_mps", 0.25)
         self.declare_parameter("velocity_max_speed_mps", 0.35)
         self.declare_parameter("velocity_max_yaw_rps", 1.75)
         self.declare_parameter("velocity_turn_radius_m", 0.21)

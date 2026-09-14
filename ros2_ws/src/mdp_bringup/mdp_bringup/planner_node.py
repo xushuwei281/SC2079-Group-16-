@@ -440,6 +440,7 @@ class PlannerNode(Node):
         future = self._move_client.call_async(req)
         interrupted_by_sensor = False
         is_backward = all(code in {"BC", "BL", "BR", "BU"} for code, _ in cmds)
+        prox_hits = 0
 
         while rclpy.ok() and not future.done():
             if not self._is_executing:
@@ -458,24 +459,30 @@ class PlannerNode(Node):
                 if candidates:
                     cause_sensor, min_dist_m = min(candidates, key=lambda s: s[1])
                     if min_dist_m < (self._safety_dist_cm / 100.0):
-                        dist_cm = min_dist_m * 100.0
-                        self.get_logger().warn(
-                            f"⚠️ PROXIMITY ALERT ({label})! Obstacle at {dist_cm:.1f} cm detected by {cause_sensor} "
-                            f"(< {self._safety_dist_cm:.1f} cm). Halting."
-                        )
-                        self._is_executing = False
-                        self._transition_state(
-                            MissionState.ESTOP,
-                            f"Proximity alert ({cause_sensor}: {dist_cm:.1f} cm)",
-                        )
-                        self._estop_pub.publish(Empty())
-                        alert_msg = f"ESTOP: Obstacle detected by {cause_sensor} ({dist_cm:.1f} cm <= {self._safety_dist_cm:.1f} cm)"
-                        self._status_pub.publish(String(data=alert_msg))
-                        self._telemetry_pub.publish(
-                            String(data=f"ESTOP_ALERT,{cause_sensor},{dist_cm:.1f},{self._safety_dist_cm:.1f}")
-                        )
-                        interrupted_by_sensor = True
-                        break
+                        prox_hits += 1
+                        if prox_hits >= 2:
+                            dist_cm = min_dist_m * 100.0
+                            self.get_logger().warn(
+                                f"⚠️ PROXIMITY ALERT ({label})! Obstacle at {dist_cm:.1f} cm detected by {cause_sensor} "
+                                f"(< {self._safety_dist_cm:.1f} cm). Halting."
+                            )
+                            self._is_executing = False
+                            self._transition_state(
+                                MissionState.ESTOP,
+                                f"Proximity alert ({cause_sensor}: {dist_cm:.1f} cm)",
+                            )
+                            self._estop_pub.publish(Empty())
+                            alert_msg = f"ESTOP: Obstacle detected by {cause_sensor} ({dist_cm:.1f} cm <= {self._safety_dist_cm:.1f} cm)"
+                            self._status_pub.publish(String(data=alert_msg))
+                            self._telemetry_pub.publish(
+                                String(data=f"ESTOP_ALERT,{cause_sensor},{dist_cm:.1f},{self._safety_dist_cm:.1f}")
+                            )
+                            interrupted_by_sensor = True
+                            break
+                    else:
+                        prox_hits = 0
+                else:
+                    prox_hits = 0
             time.sleep(0.04)
 
         if interrupted_by_sensor:

@@ -262,7 +262,7 @@ static uint16_t IR_RawToCm(uint16_t raw)
    if (v < 0.1f) v = 0.1f;
    float d = 27.09039f * powf(v, -1.00210f);
    if (d > 80.0f) d = 80.0f;
-   if (d < 10.0f) d = 10.0f;
+   if (d < 6.0f) d = 6.0f;
    return (uint16_t)(d + 0.5f);
 }
 
@@ -274,7 +274,8 @@ static uint16_t IR1_RawToCm(uint16_t raw)
 
    if (raw >= 3100U)
    {
-      calibrated_cm = 10.0f;
+      calibrated_cm = 10.0f - (float)(raw - 3100U) * (4.0f / 995.0f);
+      if (calibrated_cm < 6.0f) calibrated_cm = 6.0f;
    }
    else if (raw >= 2250U)
    {
@@ -355,6 +356,12 @@ static uint16_t HCSR04_ReadCm(uint32_t *raw_us)
        return 0;
    }
 
+   /* Reject short ringing / near-field electrical noise pulses (< 150 µs / ~2.5 cm) */
+   if (echo_us < 150) {
+       if (raw_us) *raw_us = 0;
+       return 0;
+   }
+
    if (raw_us) *raw_us = (uint32_t)echo_us;
 
    /* 4. Convert duration to distance: speed of sound = 0.0343 cm/µs.
@@ -369,14 +376,9 @@ static int32_t encoderA(void) { return (int32_t)__HAL_TIM_GET_COUNTER(&htim2); }
 //motor
 #define MOTOR_PPR     	1527.0f	//1320.0f
 /* Effective rolling diameter, not the nominal wheel spec -- calibrated
- * against a measured drive. An earlier trial found commanded FC 50cm only
- * covering 43cm (odometry over-reporting distance), giving 6.5 * 43/50 =
- * 5.59. A later trial with 5.59 flashed found commanded FC 50cm actually
- * covering 60cm (odometry now under-reporting distance), so corrected
- * again: WHEEL_D_CM = 5.59 * 60/50 = 6.71. Both trials were single manual
- * measurements and may not agree with a third; re-derive from an average
- * of several trials if this still drifts. */
-#define WHEEL_D_CM       6.71f
+ * against measured drives: with 6.09 flashed, commanded FC 50cm covered
+ * 52cm, so corrected to WHEEL_D_CM = 6.09 * 52/50 = 6.33f. */
+#define WHEEL_D_CM       6.33f
 #define CM_PER_COUNT  (WHEEL_D_CM * 3.1415f / MOTOR_PPR)
 static void encodersZero(void)
 {
@@ -1641,13 +1643,23 @@ void motor(void *argument)
         previousTick = now;
         uint32_t primask = __get_PRIMASK();
         __disable_irq();
+        static uint8_t prox_cycles = 0;
         int forward = velocityMode ? velocitySpeed > 0 :
                       (legacyActive() && (left_dir > 0 || right_dir > 0));
         int safety = velocity_safety(forward, now, usValidTick, irValidTick,
                                      usValid, irValid, us_cm, ir1_cm, ir2_cm);
-        if (!estopFlag && safety) {
+        if (safety == 1) {
+            if (prox_cycles < 255) prox_cycles++;
+        } else {
+            prox_cycles = 0;
+        }
+        /* Require 8 consecutive 10ms cycles (~80ms) of sustained proximity to confirm
+         * an obstacle, rejecting single-sample acoustic/ADC motor-switching noise.
+         * SENSOR_STALE (safety == 2) triggers immediately without debounce. */
+        int triggered_safety = (safety == 1 && prox_cycles >= 8) ? 1 : (safety == 2 ? 2 : 0);
+        if (!estopFlag && triggered_safety) {
             EStop();
-            stopPending = (uint8_t)safety;
+            stopPending = (uint8_t)triggered_safety;
         }
         if (velocityMode && velocity_watchdog_expired(velocitySpeed, now, velocityTick)) {
             velocitySpeed = velocityYaw = 0;
@@ -1665,6 +1677,7 @@ void motor(void *argument)
             MotorsOff();
             leftPI = (VelocityPI){0};
             rightPI = (VelocityPI){0};
+            prox_cycles = 0;
         } else if (velocity) {
             float leftTarget, rightTarget;
             uint16_t servo;

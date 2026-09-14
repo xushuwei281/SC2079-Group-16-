@@ -229,14 +229,14 @@ alias mdp-estop="ros2 topic pub -1 /estop std_msgs/msg/Empty {}"
 All commands below are executed from `/home/mdp/dev/SC2079-Group-16/ros2_ws` unless specified otherwise.
 
 ### 5.1 Running the Automated Test Suites
-Group 16 maintains a **100% pass rate (92/92 tests)**. Run all unit tests before and after any code modification:
+Group 16 maintains a **100% pass rate (96/96 tests)**. Run all unit tests before and after any code modification:
 ```bash
 # Run ALL test suites across algorithm, bridges, and planner:
 pixi run -e pi test-all
 
 # Or run individual test suites:
 pixi run -e pi test-algo     # 13 tests: Reeds-Shepp, geometry, TSP, config space
-pixi run -e pi test-bridge   # 59 tests: hardware/motion (43) and Android bridge (16)
+pixi run -e pi test-bridge   # 63 tests: hardware/motion (47) and Android bridge (16)
 pixi run -e pi test-planner  # 20 tests: Task 1 FSM, Task 2 sprint, Bull's Eye orbit recovery
 ```
 
@@ -341,10 +341,10 @@ and `TO` remain available through `/hardware/maintenance`.
 * `/cmd_vel` (`geometry_msgs/msg/Twist`): Sole base velocity output consumed by the serial bridge.
 * `/robot_pose` (`geometry_msgs/msg/PoseStamped`): Kalman-filtered dead-reckoned robot pose in arena metric frame (`PoseKalmanFilter`).
 * `/robot_pose/raw` (`geometry_msgs/msg/PoseStamped`): Raw unfiltered dead-reckoned pose directly from STM32 odometry/gyro.
-* `/sensors/ultrasonic` (`sensor_msgs/msg/Range`): Kalman-filtered forward distance measurement with outlier gating (`KalmanFilter1D`).
-* `/sensors/ultrasonic/raw` (`sensor_msgs/msg/Range`): Raw unfiltered HC-SR04 distance measurement.
-* `/sensors/ir_left`, `/sensors/ir_right` (`sensor_msgs/msg/Range`): Kalman-filtered angled proximity measurements.
-* `/sensors/ir_left/raw`, `/sensors/ir_right/raw` (`sensor_msgs/msg/Range`): Raw IR safety inputs.
+* `/sensors/ultrasonic` (`sensor_msgs/msg/Range`): Kalman-filtered forward distance measurement with outlier gating (`KalmanFilter1D`). This is the reading `motion_controller_node`'s central forward safety check (`_forward_safety_error`) and `android_bridge_node`'s E-STOP cause attribution both latch off — there is no separate raw safety path.
+* `/sensors/ultrasonic/raw` (`sensor_msgs/msg/Range`): Raw unfiltered HC-SR04 distance measurement, published for diagnostics only; no node uses it for a stopping decision.
+* `/sensors/ir_left`, `/sensors/ir_right` (`sensor_msgs/msg/Range`): Kalman-filtered angled proximity measurements, used the same way as ultrasonic above.
+* `/sensors/ir_left/raw`, `/sensors/ir_right/raw` (`sensor_msgs/msg/Range`): Raw unfiltered IR distance, diagnostics only.
 * `/perception/sample_target` (`mdp_interfaces/srv/SampleTarget`): Queries camera + YOLO for target symbol consensus.
 * `/estop` (`std_msgs/msg/Empty`): System-wide emergency stop topic.
 
@@ -415,7 +415,7 @@ The current checklist audit is maintained in [`docs/checklist-compliance-audit.m
 >
 > **4. Port & Hardware Contention**: Only one process may open `/dev/ttyAMA0` (STM32 UART), `/dev/rfcomm0` (Bluetooth), or the camera device. If nodes fail to start, always execute `mdp-kill` first.
 >
-> **5. Test Suite Gatekeeper**: Every agent working on this codebase MUST run `pixi run -e pi test-all` before completing a task. Never submit code that breaks any of the 92 unit tests.
+> **5. Test Suite Gatekeeper**: Every agent working on this codebase MUST run `pixi run -e pi test-all` before completing a task. Never submit code that breaks any of the 96 unit tests.
 >
 > **6. Persistent Memory**: Document any new hardware quirks, mechanical calibrations, or architectural shifts in [`MEMORY.md`](file:///home/mdp/dev/SC2079-Group-16/MEMORY.md).
 >
