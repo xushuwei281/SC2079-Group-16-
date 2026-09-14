@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -11,7 +12,7 @@ import rclpy
 from cv_bridge import CvBridge
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
@@ -70,6 +71,8 @@ class LivePerceptionNode(Node):
         self.camera_sub = self.create_subscription(
             Image, c['camera_topic'], self.on_image, qos_profile_sensor_data,
             callback_group=MutuallyExclusiveCallbackGroup())
+        self.inference_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix='yolo')
+        self.inference_future = None
         self.timer = self.create_timer(1.0 / c['inference_fps'], self.detect_latest,
                                        callback_group=MutuallyExclusiveCallbackGroup())
         self.add_on_set_parameters_callback(self.on_parameters)
@@ -117,6 +120,21 @@ class LivePerceptionNode(Node):
             self.get_logger().info(text)
 
     def detect_latest(self):
+        # Keep ROS callbacks short. Exactly one worker processes the latest
+        # frame; timer ticks during inference do not queue additional work.
+        if self.inference_future is not None:
+            if not self.inference_future.done():
+                return
+            error = self.inference_future.exception()
+            if error is not None:
+                self.get_logger().error(f'LIVE worker failed: {error}')
+        self.inference_future = self.inference_worker.submit(self._detect_latest_frame)
+
+    def close_inference(self):
+        self.timer.cancel()
+        self.inference_worker.shutdown(wait=True, cancel_futures=True)
+
+    def _detect_latest_frame(self):
         now = time.monotonic()
         if now - self.last_start < 1.0 / self.config['inference_fps']:
             return
@@ -197,7 +215,7 @@ class LivePerceptionNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LivePerceptionNode()
-    executor = MultiThreadedExecutor(num_threads=2)
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
@@ -205,6 +223,7 @@ def main(args=None):
         pass
     finally:
         executor.shutdown(timeout_sec=5.0)
+        node.close_inference()
         node.destroy_node()
         if rclpy.ok(): rclpy.shutdown()
 

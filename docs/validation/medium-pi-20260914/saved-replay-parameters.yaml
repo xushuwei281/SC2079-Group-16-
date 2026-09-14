@@ -1,0 +1,19 @@
+/perception_medium_candidate:
+  ros__parameters:
+    absence_reset_seconds: 2.0
+    annotated_topic: /test/medium/perception/image_annotated
+    camera_topic: /test/medium/fixtures/image_raw
+    conf_threshold: 0.5
+    confirmation_frames: 3
+    inference_fps: 1.0
+    invert_colors: true
+    max_confirmation_gap_seconds: 8.0
+    max_frame_age_seconds: 1.0
+    max_result_age_seconds: 8.0
+    model_path: /home/mdp/mdp-cv/candidates/baseline-yolov8m-v61-full-20260911T013018Z/best.onnx
+    obstacle_id: 2
+    onnx_threads: 4
+    output_dir: /home/mdp/mdp-cv/reports/medium-post-training-20260914/replay-final
+    start_type_description_service: true
+    target_topic: /test/medium/fixtures/target
+    use_sim_time: false

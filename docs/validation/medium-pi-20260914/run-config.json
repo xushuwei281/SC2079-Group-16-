@@ -1,0 +1,19 @@
+{
+  "model_path": "/home/mdp/mdp-cv/candidates/baseline-yolov8m-v61-full-20260911T013018Z/best.onnx",
+  "output_dir": "/home/mdp/mdp-cv/reports/medium-post-training-20260914/replay-final",
+  "camera_topic": "/test/medium/fixtures/image_raw",
+  "target_topic": "/test/medium/fixtures/target",
+  "annotated_topic": "/test/medium/perception/image_annotated",
+  "conf_threshold": 0.5,
+  "inference_fps": 1.0,
+  "confirmation_frames": 3,
+  "absence_reset_seconds": 2.0,
+  "max_confirmation_gap_seconds": 8.0,
+  "max_frame_age_seconds": 1.0,
+  "max_result_age_seconds": 8.0,
+  "invert_colors": true,
+  "onnx_threads": 4,
+  "initial_obstacle_id": 1,
+  "model_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+  "note": "Stationary test candidate; no mission-ready claim. Frame age uses receipt and ROS publication timestamps."
+}

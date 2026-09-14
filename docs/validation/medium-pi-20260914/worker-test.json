@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "checks": [
+    "100 timer ticks during blocked inference create no backlog",
+    "obstacle change discards an in-flight result",
+    "fresh frame after obstacle change publishes for the new obstacle"
+  ],
+  "environment": "Actual Pi ROS/Pixi environment; fake detector and intercepted publications"
+}

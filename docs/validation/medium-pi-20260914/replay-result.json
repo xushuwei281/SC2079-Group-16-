@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "events": [
+    {
+      "message": "1,25",
+      "phase": "confirm_F",
+      "elapsed_seconds": 16.654588805000003
+    },
+    {
+      "message": "1,25",
+      "phase": "F_reappears",
+      "elapsed_seconds": 66.78699239100024
+    },
+    {
+      "message": "1,11",
+      "phase": "switch_to_digit1",
+      "elapsed_seconds": 83.05702176400018
+    },
+    {
+      "message": "2,11",
+      "phase": "change_obstacle",
+      "elapsed_seconds": 97.6977982010003
+    }
+  ],
+  "checks": [
+    "automatic publishing without sample service",
+    "three processed frame confirmation",
+    "held-symbol duplicate suppression",
+    "background rejection",
+    "rearm after absence",
+    "switch symbol",
+    "obstacle change resets confirmation"
+  ],
+  "input": "Previously captured Pi camera images replayed at 10 FPS; real YOLOv8m ONNX inference on Pi; no new physical observations"
+}

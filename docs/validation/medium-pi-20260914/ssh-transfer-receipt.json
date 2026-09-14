@@ -1,0 +1,13 @@
+{
+  "host": "mdp",
+  "destination": "/home/mdp/mdp-cv/candidates/baseline-yolov8m-v61-full-20260911T013018Z/best.onnx",
+  "model_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+  "method": "SCP via SSH over Tailscale",
+  "pi_sha256sum_check_passed": true,
+  "files": [
+    "best.onnx",
+    "model_manifest.json",
+    "REPLACEMENT_COMPLETE.json",
+    "PI_SHA256SUMS"
+  ]
+}
