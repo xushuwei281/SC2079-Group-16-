@@ -20,6 +20,7 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.exceptions import InvalidHandle
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rcl_interfaces.msg import SetParametersResult
 from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
 
@@ -47,7 +48,8 @@ class MotionControllerNode(Node):
                               ("telemetry_timeout_sec", 0.4), ("cmd_vel_timeout_sec", 0.2),
                               ("front_stop_distance_m", 0.12),
                               ("ir_stop_distance_m", 0.10),
-                              ("turn_180_runout_m", 0.05)):
+                              ("turn_180_runout_m", 0.02),
+                              ("turn_overshoot_deg", 2.2)):
             self.declare_parameter(name, default)
         self._speed = float(self.get_parameter("velocity_speed_mps").value)
         self._max_speed = float(self.get_parameter("velocity_max_speed_mps").value)
@@ -59,12 +61,15 @@ class MotionControllerNode(Node):
         self._front_stop = float(self.get_parameter("front_stop_distance_m").value)
         self._ir_stop = float(self.get_parameter("ir_stop_distance_m").value)
         self._turn_180_runout = float(self.get_parameter("turn_180_runout_m").value)
+        self._turn_overshoot_deg = float(self.get_parameter("turn_overshoot_deg").value)
         if not (0 < self._speed <= self._max_speed <= 0.35 and self._radius >= 0.21
                 and 0 < self._max_yaw <= 1.75 and 0 < self._telemetry_timeout <= 0.4
                 and 0 < self._cmd_timeout <= 0.2 and self._batch_timeout_sec > 0
                 and self._front_stop >= 0.12 and self._ir_stop >= 0.10
-                and 0.0 <= self._turn_180_runout <= 0.20):
+                and 0.0 <= self._turn_180_runout <= 0.20
+                and 0.0 <= self._turn_overshoot_deg <= 10.0):
             raise ValueError("Unsafe motion controller configuration")
+        self.add_on_set_parameters_callback(self._on_set_parameters)
         self._control_lock = threading.RLock()
         self._busy = threading.Event()
         self._estop_event = threading.Event()
@@ -106,6 +111,23 @@ class MotionControllerNode(Node):
         self._maintenance_client = self.create_client(
             ExecuteMoves, "/hardware/maintenance", callback_group=group)
         self._timer = self.create_timer(0.05, self._teleop_tick, callback_group=group)
+
+    def _on_set_parameters(self, params: list) -> SetParametersResult:
+        with self._control_lock:
+            for p in params:
+                if p.name == "turn_overshoot_deg":
+                    val = float(p.value)
+                    if 0.0 <= val <= 10.0:
+                        self._turn_overshoot_deg = val
+                elif p.name == "turn_180_runout_m":
+                    val = float(p.value)
+                    if 0.0 <= val <= 0.20:
+                        self._turn_180_runout = val
+                elif p.name == "velocity_speed_mps":
+                    val = float(p.value)
+                    if 0.0 < val <= self._max_speed:
+                        self._speed = val
+        return SetParametersResult(successful=True)
 
     def _validate_command(self, mc: MoveCommand) -> None:
         if mc.command not in _VALID_COMMANDS or not 0 <= mc.value <= 999:
@@ -339,7 +361,9 @@ class MotionControllerNode(Node):
                 if turning:
                     if not runout_active:
                         remaining = goal - turn_sign * accumulated_yaw
-                        complete = remaining <= min(math.radians(1.0), goal * 0.1)
+                        lead = math.radians(self._turn_overshoot_deg)
+                        stop_threshold = min(lead, goal * 0.1)
+                        complete = remaining <= stop_threshold
                         if complete and runout_needed:
                             runout_active = True
                             runout_start = (x, y, yaw)
@@ -371,9 +395,9 @@ class MotionControllerNode(Node):
                 # Slow near the measured goal without claiming time-based progress.
                 is_turn_curve = turning and not runout_active
                 if is_turn_curve:
-                    # Maintain turning cruise speed until within ~15 deg, flooring at 0.18 m/s
-                    # to keep the inner wheel powered above stall torque against tire scrub.
-                    speed = direction * min(self._speed, max(0.18, remaining * self._radius * 3.5))
+                    # Maintain turning cruise speed until within ~15 deg, then decelerate
+                    # smoothly down to 0.10 m/s for a precise, cushioned stop without stalling.
+                    speed = direction * min(self._speed, max(0.10, remaining * self._radius * 3.5))
                 else:
                     distance_left = remaining
                     speed = direction * min(self._speed, max(0.08, distance_left * 2.0))

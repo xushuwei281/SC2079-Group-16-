@@ -249,3 +249,17 @@ class TestMotionController(unittest.TestCase):
         self.assertTrue(has_straight_runout)
         self.assertEqual(vels[-1], (0, 0))
 
+    def test_turn_overshoot_lead_stops_early(self):
+        self.feedback(yaw=0.0)
+        # For a 90 deg turn with default 2.2 deg lead (stop_threshold ~ 0.0384 rad):
+        # When yaw reaches 88.0 deg (remaining = 2.0 deg <= 2.2 deg), it completes.
+        with patch("mdp_hardware_bridge.motion_controller_node.time.sleep",
+                   side_effect=lambda _: self.feedback(yaw=math.radians(88.0))):
+            self.assertTrue(self.execute("FL", 90).success)
+
+    def test_dynamic_parameter_update(self):
+        from rclpy.parameter import Parameter
+        param = Parameter("turn_overshoot_deg", Parameter.Type.DOUBLE, 3.5)
+        self.node.set_parameters([param])
+        self.assertAlmostEqual(self.node._turn_overshoot_deg, 3.5)
+
