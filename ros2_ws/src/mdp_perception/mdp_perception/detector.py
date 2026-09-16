@@ -46,6 +46,8 @@ _LABEL_TO_SYMBOL_ID: Dict[str, int] = {
     # Bullseye orbit-recovery marker -- not a competition symbol, sentinel
     # value only (see module docstring above).
     "target": 0,
+    "marker": 0,
+    "bullseye": 0,
 }
 
 

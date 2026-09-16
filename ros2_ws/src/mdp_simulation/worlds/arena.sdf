@@ -1,0 +1,388 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <world name="mdp_arena">
+    <!-- Physics engine settings -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.002</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Essential Gazebo Harmonic system plugins -->
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+
+    <!-- Realistic Lab Lighting -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>1.0 1.0 10.0 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>-0.15 -0.15 -1.0</direction>
+    </light>
+
+    <scene>
+      <ambient>0.65 0.65 0.65 1.0</ambient>
+      <background>0.82 0.86 0.90 1.0</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <!-- Floor (2.0m x 2.0m arena with 10cm grid and 40cm start carpark) -->
+    <model name="arena_floor">
+      <static>true</static>
+      <link name="floor_link">
+        <collision name="floor_collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>10.0 10.0</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+
+        <!-- 2.0m x 2.0m Arena Floor Surface (white board matching NTU lab) -->
+        <visual name="arena_surface">
+          <pose>1.0 1.0 0.0005 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>2.0 2.0 0.001</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.96 0.96 0.96 1</ambient>
+            <diffuse>0.96 0.96 0.96 1</diffuse>
+            <pbr>
+              <metal>
+                <albedo_map>materials/textures/arena_grid.png</albedo_map>
+              </metal>
+            </pbr>
+          </material>
+        </visual>
+
+        <!-- 40cm x 40cm Start Zone at [0, 0] to [0.4, 0.4] -->
+        <visual name="start_zone_carpark">
+          <pose>0.20 0.20 0.0012 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.40 0.40 0.0005</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.25 0.85 0.25 0.6</ambient>
+            <diffuse>0.25 0.85 0.25 0.6</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Realistic Low Arena Border (2.0m x 2.0m, height 0.05m = 5cm, thickness 0.02m) -->
+    <model name="boundary_walls">
+      <static>true</static>
+      <link name="walls_link">
+        <!-- South Border (y = 0) -->
+        <collision name="south_wall_col">
+          <pose>1.0 -0.01 0.025 0 0 0</pose>
+          <geometry><box><size>2.04 0.02 0.05</size></box></geometry>
+        </collision>
+        <visual name="south_wall_vis">
+          <pose>1.0 -0.01 0.025 0 0 0</pose>
+          <geometry><box><size>2.04 0.02 0.05</size></box></geometry>
+          <material><ambient>0.85 0.85 0.88 1</ambient><diffuse>0.85 0.85 0.88 1</diffuse></material>
+        </visual>
+
+        <!-- North Border (y = 2.0) -->
+        <collision name="north_wall_col">
+          <pose>1.0 2.01 0.025 0 0 0</pose>
+          <geometry><box><size>2.04 0.02 0.05</size></box></geometry>
+        </collision>
+        <visual name="north_wall_vis">
+          <pose>1.0 2.01 0.025 0 0 0</pose>
+          <geometry><box><size>2.04 0.02 0.05</size></box></geometry>
+          <material><ambient>0.85 0.85 0.88 1</ambient><diffuse>0.85 0.85 0.88 1</diffuse></material>
+        </visual>
+
+        <!-- West Border (x = 0) -->
+        <collision name="west_wall_col">
+          <pose>-0.01 1.0 0.025 0 0 0</pose>
+          <geometry><box><size>0.02 2.04 0.05</size></box></geometry>
+        </collision>
+        <visual name="west_wall_vis">
+          <pose>-0.01 1.0 0.025 0 0 0</pose>
+          <geometry><box><size>0.02 2.04 0.05</size></box></geometry>
+          <material><ambient>0.85 0.85 0.88 1</ambient><diffuse>0.85 0.85 0.88 1</diffuse></material>
+        </visual>
+
+        <!-- East Border (x = 2.0) -->
+        <collision name="east_wall_col">
+          <pose>2.01 1.0 0.025 0 0 0</pose>
+          <geometry><box><size>0.02 2.04 0.05</size></box></geometry>
+        </collision>
+        <visual name="east_wall_vis">
+          <pose>2.01 1.0 0.025 0 0 0</pose>
+          <geometry><box><size>0.02 2.04 0.05</size></box></geometry>
+          <material><ambient>0.85 0.85 0.88 1</ambient><diffuse>0.85 0.85 0.88 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ================= 5 SC2079 COURSE OBSTACLES ================= -->
+    <!-- Matches algorithm/arena.py default_arena() and course briefing specifications -->
+
+    <!-- Obstacle 1: Center (0.60m, 0.60m), Size 10x10x20cm, Target Face: North (Symbol '1' / ID 11) -->
+    <model name="obstacle_1">
+      <static>true</static>
+      <pose>0.60 0.60 0.10 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+        </collision>
+        <visual name="block_body">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+          <material><ambient>0.15 0.15 0.15 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <!-- Target Face: North (+Y) with Symbol '1' -->
+        <visual name="target_face_north">
+          <pose>0 0.051 0 1.570796 0 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/target_1.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <!-- Bull's Eye Markers on the other 3 faces (South, East, West) -->
+        <visual name="bullseye_south">
+          <pose>0 -0.051 0 1.570796 0 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_east">
+          <pose>0.051 0 0 0 1.570796 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_west">
+          <pose>-0.051 0 0 0 1.570796 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacle 2: Center (1.30m, 0.60m), Size 10x10x20cm, Target Face: East (Letter 'B' / ID 22) -->
+    <model name="obstacle_2">
+      <static>true</static>
+      <pose>1.30 0.60 0.10 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+        </collision>
+        <visual name="block_body">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+          <material><ambient>0.15 0.15 0.15 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <!-- Target Face: East (+X) with Letter 'B' -->
+        <visual name="target_face_east">
+          <pose>0.051 0 0 0 1.570796 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/target_b.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <!-- Bull's Eye Markers on West, North, South -->
+        <visual name="bullseye_west">
+          <pose>-0.051 0 0 0 1.570796 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_north">
+          <pose>0 0.051 0 1.570796 0 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_south">
+          <pose>0 -0.051 0 1.570796 0 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacle 3: Center (1.30m, 1.40m), Size 10x10x20cm, Target Face: West (Letter 'W' / ID 33) -->
+    <model name="obstacle_3">
+      <static>true</static>
+      <pose>1.30 1.40 0.10 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+        </collision>
+        <visual name="block_body">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+          <material><ambient>0.15 0.15 0.15 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <!-- Target Face: West (-X) with Letter 'W' -->
+        <visual name="target_face_west">
+          <pose>-0.051 0 0 0 1.570796 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/target_w.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <!-- Bull's Eye Markers on East, North, South -->
+        <visual name="bullseye_east">
+          <pose>0.051 0 0 0 1.570796 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_north">
+          <pose>0 0.051 0 1.570796 0 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_south">
+          <pose>0 -0.051 0 1.570796 0 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacle 4: Center (0.60m, 1.40m), Size 10x10x20cm, Target Face: South (Symbol '4' / ID 14) -->
+    <model name="obstacle_4">
+      <static>true</static>
+      <pose>0.60 1.40 0.10 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+        </collision>
+        <visual name="block_body">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+          <material><ambient>0.15 0.15 0.15 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <!-- Target Face: South (-Y) with Symbol '4' -->
+        <visual name="target_face_south">
+          <pose>0 -0.051 0 1.570796 0 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/target_4.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <!-- Bull's Eye Markers on North, East, West -->
+        <visual name="bullseye_north">
+          <pose>0 0.051 0 1.570796 0 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_east">
+          <pose>0.051 0 0 0 1.570796 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_west">
+          <pose>-0.051 0 0 0 1.570796 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacle 5: Center (0.95m, 1.00m), Size 10x10x20cm, Target Face: North (Letter 'E' / ID 25) -->
+    <model name="obstacle_5">
+      <static>true</static>
+      <pose>0.95 1.00 0.10 0 0 0</pose>
+      <link name="link">
+        <collision name="col">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+        </collision>
+        <visual name="block_body">
+          <geometry><box><size>0.10 0.10 0.20</size></box></geometry>
+          <material><ambient>0.15 0.15 0.15 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <!-- Target Face: North (+Y) with Letter 'E' -->
+        <visual name="target_face_north">
+          <pose>0 0.051 0 1.570796 0 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/target_e.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <!-- Bull's Eye Markers on South, East, West -->
+        <visual name="bullseye_south">
+          <pose>0 -0.051 0 1.570796 0 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_east">
+          <pose>0.051 0 0 0 1.570796 0</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+        <visual name="bullseye_west">
+          <pose>-0.051 0 0 0 1.570796 3.14159</pose>
+          <geometry><box><size>0.08 0.08 0.002</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse>
+            <pbr><metal><albedo_map>materials/textures/bullseye.png</albedo_map></metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

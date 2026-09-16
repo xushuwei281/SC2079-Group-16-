@@ -32,6 +32,21 @@ See [`docs/protocol.md`](docs/protocol.md) for the message formats used
 between Android ↔ RPi ↔ STM32 ↔ Algorithm PC — update it whenever the
 wire format changes so all subteams stay in sync.
 
+## 3D Gazebo Simulation (`mdp_simulation`)
+
+A high-fidelity Gazebo Harmonic 3D simulation package is provided under [`ros2_ws/src/mdp_simulation`](ros2_ws/src/mdp_simulation/README.md) matching the NTU SC2079 course hardware and arena specifications:
+- **Robot Model**: Real Wheeltec Mini-Ackermann CAD model (aluminum baseplate, upper acrylic deck, STM32 board, Ackermann steering linkages, Pi Camera v2.1, front ultrasonic sensor, and dual Sharp IR sensors).
+- **Multiple Arenas**:
+  - `arena.sdf` (Default): Task 1 competition arena with 5 canonical obstacles, YOLO target textures, and Bull's Eye visual markers.
+  - `task2_arena.sdf`: Task 2 fastest car slalom sprint world with 2 obstacles and directional arrows.
+  - `arena_empty.sdf`: Clean 2.0m × 2.0m arena with start carpark and boundary walls for free-roam teleop and calibration.
+- **Quick Commands** (from `ros2_ws/`):
+  - `pixi run -e pc sim-gz` — Launch 3D Gazebo simulation
+  - `pixi run -e pc sim-teleop` — Keyboard teleoperation
+  - `pixi run -e pc sim-robot` — Full Task 1 autonomy (planner + YOLO perception + motion controller + RViz)
+  - `pixi run -e pc sim-task2` — Task 2 fastest car slalom sprint
+  - See [`ros2_ws/src/mdp_simulation/README.md`](ros2_ws/src/mdp_simulation/README.md) for full instructions.
+
 ## Team
 
 - Robot & STM32 firmware: TBD

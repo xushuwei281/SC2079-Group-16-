@@ -212,14 +212,13 @@ class PerceptionNode(Node):
             name, sid, conf, box, f = single_confident[0][1]
             return (name, sid, conf, box, f, False)
 
-        # 3. Bull's Eye marker -- the "target" class only. "circle" (Stop) is
-        # a real target handled above and must NOT be treated as a marker;
-        # they are distinct classes with distinct IDs (see detector.py's
-        # _LABEL_TO_SYMBOL_ID), so this checks the name, not a shared ID.
+        # 3. Bull's Eye marker -- 'target', 'marker', or 'bullseye' classes.
+        # "circle" (Stop) is a real target handled above and must NOT be treated
+        # as a marker; they are distinct classes with distinct IDs.
         marker_candidates = [
             (sid, count)
             for sid, count in symbol_counts.items()
-            if best_per_symbol[sid][0] == "target" and count >= min_frames
+            if str(best_per_symbol[sid][0]).lower() in ("target", "marker", "bullseye") and count >= min_frames
         ]
         if marker_candidates:
             best_sid = marker_candidates[0][0]
