@@ -1,0 +1,2 @@
+# Keep the medium training artifact in Git LFS without migrating older models.
+/models/yolov8m-baseline/best.onnx filter=lfs diff=lfs merge=lfs -text

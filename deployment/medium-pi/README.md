@@ -25,6 +25,8 @@ The cloud job checked the ONNX graph, 31 class names, input `[1,3,640,640]`, out
 
 Use `best.onnx` on the Pi. Keep `best.pt`, `last.pt`, metrics, plots and configuration on the workstation/Hugging Face for evaluation and future training. See [model-reference.json](model-reference.json) for exact paths, checksums and metrics. This is the immutable cloud manifest; later Pi evidence is recorded separately.
 
+The same verified ONNX is tracked in Git LFS at [`models/yolov8m-baseline/best.onnx`](../../models/yolov8m-baseline/best.onnx). See the [model package instructions](../../models/yolov8m-baseline/README.md) for downloading the actual binary, checking its SHA-256 and selecting it from a repository checkout. The older root `models/best.onnx` is a different artifact; it is not this medium baseline.
+
 ## Performance and timing
 
 Using the same saved Pi images and the actual deployed detector:
