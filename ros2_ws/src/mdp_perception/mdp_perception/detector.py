@@ -188,7 +188,11 @@ class TargetDetector:
             return False
 
         net = ncnn.Net()
-        net.opt.num_threads = 2  # same Cortex-A72 tuning as the onnxruntime path above
+        # All 4 Pi 4B cores: a sample_target call is a short on-demand burst
+        # (robot stopped at an obstacle), not continuous inference, so it's
+        # worth briefly contending with motion_controller_node/serial_bridge_node
+        # for CPU to cut the ~3.3-4.0s single-frame latency measured at 2 threads.
+        net.opt.num_threads = 4
         net.opt.use_fp16_storage = True
         net.opt.use_fp16_arithmetic = True  # no-ops on CPUs without ARMv8.2 FP16; ncnn falls back to fp32
 
