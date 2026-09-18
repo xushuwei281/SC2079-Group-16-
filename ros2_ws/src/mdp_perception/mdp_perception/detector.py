@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Dict, List, Optional, Tuple
 
 import cv2
@@ -65,7 +66,12 @@ class TargetDetector:
         self.iou_threshold = iou_threshold
         self._onnx_session = None
         self._input_name = None
+        self._meta_names = None
         self._pt_model = None
+        self._ncnn_net = None
+        self._ncnn_input_name = None
+        self._ncnn_output_name = None
+        self._ncnn_img_size = 480
         self._class_names = [
             "1", "2", "3", "4", "5", "6", "7", "8", "9",
             "a", "b", "c", "circle", "d", "down", "e", "f", "g", "h",
@@ -78,34 +84,53 @@ class TargetDetector:
         self._load_model()
 
     def _load_model(self) -> None:
-        """Load YOLO model weights (supports ONNX via onnxruntime and PyTorch .pt via ultralytics)."""
-        candidates = []
-        if os.path.isabs(self.model_path):
-            candidates.append(self.model_path)
+        """Load YOLO model weights.
+
+        Tries, in priority order: an Ultralytics NCNN export directory
+        (fastest on Pi CPU, no torch dependency), an ONNX file via
+        onnxruntime, then a PyTorch .pt fallback via ultralytics. The `pi`
+        pixi environment deliberately keeps torch off the Pi (see
+        ros2_ws/pixi.toml), so on-device that last fallback simply isn't
+        reachable and NCNN or ONNX must succeed instead.
+        """
+        base_name = os.path.splitext(self.model_path)[0]
+        if os.path.isabs(base_name):
+            search_dirs = [""]
         else:
-            base_name = os.path.splitext(self.model_path)[0]
-            # Try ONNX first (lightweight), then PyTorch .pt
-            for ext in [".onnx", ".pt"]:
-                p = base_name + ext
-                candidates.extend([
-                    os.path.abspath(os.path.join(os.getcwd(), p)),
-                    os.path.abspath(os.path.join(os.getcwd(), "..", p)),
-                    os.path.abspath(os.path.join("/home/mdp/dev/SC2079-Group-16", p)),
-                ])
+            search_dirs = [os.getcwd(), os.path.join(os.getcwd(), "..")]
+
+        def candidates(suffix: str) -> List[str]:
+            return [
+                os.path.abspath(os.path.join(d, base_name + suffix)) if d else base_name + suffix
+                for d in search_dirs
+            ]
 
         found_path = None
-        for c in candidates:
-            if os.path.exists(c):
-                found_path = c
+        found_kind = None
+        for kind, suffix in (("ncnn", "_ncnn_model"), ("onnx", ".onnx"), ("pt", ".pt")):
+            for c in candidates(suffix):
+                if os.path.exists(c):
+                    found_path, found_kind = c, kind
+                    break
+            if found_path:
                 break
 
         if found_path is None:
-            print(f"[TargetDetector] Warning: Model file not found in candidates: {candidates[:3]}. Running in mock mode.")
+            tried = [
+                p
+                for kind, suffix in (("ncnn", "_ncnn_model"), ("onnx", ".onnx"), ("pt", ".pt"))
+                for p in candidates(suffix)
+            ]
+            print(f"[TargetDetector] Warning: Model file not found in candidates: {tried[:6]}. Running in mock mode.")
             return
 
         self.model_path = found_path
 
-        # 1. Try ONNX Runtime (fast, lean edge inference on Pi)
+        # 1. NCNN export directory (fastest on Pi CPU)
+        if found_kind == "ncnn" and self._load_ncnn(found_path):
+            return
+
+        # 2. ONNX Runtime
         if found_path.endswith(".onnx"):
             try:
                 import onnxruntime as ort
@@ -121,7 +146,6 @@ class TargetDetector:
                 self._input_name = self._onnx_session.get_inputs()[0].name
 
                 # Parse class names dynamically from ONNX metadata if available
-                self._meta_names = None
                 meta = self._onnx_session.get_modelmeta()
                 if meta and "names" in meta.custom_metadata_map:
                     import ast
@@ -135,7 +159,8 @@ class TargetDetector:
             except Exception as exc:
                 print(f"[TargetDetector] Failed to load ONNX with onnxruntime: {exc}")
 
-        # 2. Try Ultralytics PyTorch fallback (if available, e.g. on laptop/PC)
+        # 3. Ultralytics PyTorch fallback (if available, e.g. on laptop/PC; also
+        # covers a .onnx that onnxruntime itself failed to load)
         try:
             from ultralytics import YOLO
             self._pt_model = YOLO(found_path)
@@ -143,13 +168,115 @@ class TargetDetector:
         except Exception as exc:
             print(f"[TargetDetector] Warning: Could not load model ({exc}). Running in mock mode.")
 
-    def _infer_onnx(self, frame: np.ndarray) -> List[Tuple[str, int, float, Tuple[int, int, int, int]]]:
-        """Pure-NumPy YOLOv8 ONNX inference pipeline."""
-        orig_h, orig_w = frame.shape[:2]
-        inp_shape = self._onnx_session.get_inputs()[0].shape
-        img_size = inp_shape[2] if len(inp_shape) > 2 and isinstance(inp_shape[2], int) else 640
+    def _load_ncnn(self, model_dir: str) -> bool:
+        """Load an Ultralytics NCNN export directory (model.ncnn.param/.bin).
 
-        # Letterbox resize maintaining aspect ratio
+        Uses the raw `ncnn` bindings directly instead of Ultralytics' YOLO()
+        wrapper -- going through YOLO() would pull torch onto the Pi, which
+        ros2_ws/pixi.toml deliberately keeps off it.
+        """
+        param_path = os.path.join(model_dir, "model.ncnn.param")
+        bin_path = os.path.join(model_dir, "model.ncnn.bin")
+        if not (os.path.exists(param_path) and os.path.exists(bin_path)):
+            print(f"[TargetDetector] {model_dir} is missing model.ncnn.param/.bin, skipping NCNN.")
+            return False
+
+        try:
+            import ncnn
+        except ImportError as exc:
+            print(f"[TargetDetector] ncnn package not installed ({exc}); skipping NCNN.")
+            return False
+
+        net = ncnn.Net()
+        net.opt.num_threads = 2  # same Cortex-A72 tuning as the onnxruntime path above
+        net.opt.use_fp16_storage = True
+        net.opt.use_fp16_arithmetic = True  # no-ops on CPUs without ARMv8.2 FP16; ncnn falls back to fp32
+
+        if net.load_param(param_path) != 0 or net.load_model(bin_path) != 0:
+            print(f"[TargetDetector] Failed to load NCNN graph from {model_dir}")
+            return False
+
+        input_names = net.input_names()
+        output_names = net.output_names()
+        if not input_names or not output_names:
+            print(f"[TargetDetector] NCNN model at {model_dir} exposes no input/output blobs.")
+            return False
+
+        self._ncnn_net = net
+        self._ncnn_input_name = input_names[0]
+        self._ncnn_output_name = output_names[0]
+
+        metadata_path = os.path.join(model_dir, "metadata.yaml")
+        self._ncnn_img_size = self._read_ncnn_imgsz(metadata_path)
+        # The class names actually baked into this checkpoint's export can
+        # differ from models/data.yaml's alphanumeric labels (e.g. the current
+        # best.onnx/best.pt embed direct symbol-ID strings '11'..'40'+'marker'
+        # instead) -- read them the same way the ONNX path does from its own
+        # metadata, rather than assuming the hardcoded _class_names fallback.
+        meta_names = self._read_ncnn_names(metadata_path)
+        if meta_names:
+            self._meta_names = meta_names
+
+        print(
+            f"[TargetDetector] Successfully loaded NCNN model from {model_dir} "
+            f"(in='{self._ncnn_input_name}', out='{self._ncnn_output_name}', "
+            f"imgsz={self._ncnn_img_size}, names={'from metadata.yaml' if meta_names else 'hardcoded fallback'})"
+        )
+        return True
+
+    @staticmethod
+    def _read_ncnn_imgsz(metadata_path: str, default: int = 480) -> int:
+        """Best-effort `imgsz` read from an Ultralytics NCNN export's metadata.yaml,
+        without requiring PyYAML on the Pi. Falls back to `default`, which matches
+        raspberry-pi/cv/scripts/export_edge.sh's `imgsz=480`."""
+        try:
+            with open(metadata_path, "r") as f:
+                text = f.read()
+        except OSError:
+            return default
+        match = re.search(r"imgsz:\s*\[?\s*(\d+)", text)
+        return int(match.group(1)) if match else default
+
+    @staticmethod
+    def _read_ncnn_names(metadata_path: str) -> Optional[Dict[int, str]]:
+        """Best-effort read of the `names: {idx: label, ...}` block from an
+        Ultralytics NCNN export's metadata.yaml, without requiring PyYAML on
+        the Pi. Handles both yaml.dump's inline (`names: {0: '11', ...}`) and
+        block (`names:\\n  0: '11'\\n  ...`) styles. Returns None if parsing
+        fails, so callers fall back to the hardcoded _class_names list."""
+        try:
+            with open(metadata_path, "r") as f:
+                text = f.read()
+        except OSError:
+            return None
+
+        inline = re.search(r"names:\s*(\{.*\})", text)
+        if inline:
+            try:
+                import ast
+                return {int(k): str(v) for k, v in ast.literal_eval(inline.group(1)).items()}
+            except Exception:
+                pass
+
+        block = re.search(r"names:\s*\n((?:\s+\d+:.*\n?)+)", text)
+        if block:
+            names: Dict[int, str] = {}
+            for line in block.group(1).splitlines():
+                m = re.match(r"\s*(\d+):\s*(.+?)\s*$", line)
+                if m:
+                    names[int(m.group(1))] = m.group(2).strip("'\"")
+            if names:
+                return names
+
+        return None
+
+    @staticmethod
+    def _letterbox(frame: np.ndarray, img_size: int) -> Tuple[np.ndarray, float, int, int]:
+        """Aspect-ratio-preserving resize onto an img_size x img_size canvas.
+
+        Returns (padded_bgr_image, scale, left_pad, top_pad).
+        """
+        orig_h, orig_w = frame.shape[:2]
         scale = min(img_size / orig_h, img_size / orig_w)
         nw, nh = int(round(orig_w * scale)), int(round(orig_h * scale))
         resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
@@ -159,16 +286,23 @@ class TargetDetector:
         left_pad = (img_size - nw) // 2
         right_pad = img_size - nw - left_pad
 
-        padded = cv2.copyMakeBorder(resized, top_pad, bottom_pad, left_pad, right_pad, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+        padded = cv2.copyMakeBorder(
+            resized, top_pad, bottom_pad, left_pad, right_pad, cv2.BORDER_CONSTANT, value=(114, 114, 114)
+        )
+        return padded, scale, left_pad, top_pad
 
-        # BGR -> RGB, HWC -> CHW, normalize [0, 1]
-        blob = padded[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
-        blob = np.expand_dims(blob, axis=0)
-
-        # Run ONNX session
-        outputs = self._onnx_session.run(None, {self._input_name: blob})[0]  # Shape: (1, 4+num_classes, 8400)
-        predictions = outputs[0].T  # Shape: (8400, 4+num_classes)
-
+    def _postprocess(
+        self,
+        predictions: np.ndarray,
+        scale: float,
+        left_pad: int,
+        top_pad: int,
+        orig_w: int,
+        orig_h: int,
+    ) -> List[Tuple[str, int, float, Tuple[int, int, int, int]]]:
+        """Shared box-decode + NMS + symbol-ID mapping for the ONNX and NCNN
+        backends. `predictions` is (num_anchors, 4+num_classes) in the padded
+        (letterboxed) image's pixel space."""
         boxes = []
         confidences = []
         class_ids = []
@@ -230,6 +364,62 @@ class TargetDetector:
 
         return detections
 
+    def _infer_onnx(self, frame: np.ndarray) -> List[Tuple[str, int, float, Tuple[int, int, int, int]]]:
+        """Pure-NumPy YOLOv8 ONNX inference pipeline."""
+        orig_h, orig_w = frame.shape[:2]
+        inp_shape = self._onnx_session.get_inputs()[0].shape
+        img_size = inp_shape[2] if len(inp_shape) > 2 and isinstance(inp_shape[2], int) else 640
+
+        padded, scale, left_pad, top_pad = self._letterbox(frame, img_size)
+
+        # BGR -> RGB, HWC -> CHW, normalize [0, 1]
+        blob = padded[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
+        blob = np.expand_dims(blob, axis=0)
+
+        # Run ONNX session
+        outputs = self._onnx_session.run(None, {self._input_name: blob})[0]  # Shape: (1, 4+num_classes, 8400)
+        predictions = outputs[0].T  # Shape: (8400, 4+num_classes)
+
+        return self._postprocess(predictions, scale, left_pad, top_pad, orig_w, orig_h)
+
+    def _infer_ncnn(self, frame: np.ndarray) -> List[Tuple[str, int, float, Tuple[int, int, int, int]]]:
+        """NCNN inference pipeline. Reuses the same letterbox/decode/NMS logic
+        as `_infer_onnx`, swapping onnxruntime's session for ncnn's Net/Extractor."""
+        import ncnn
+
+        orig_h, orig_w = frame.shape[:2]
+        img_size = self._ncnn_img_size
+
+        padded, scale, left_pad, top_pad = self._letterbox(frame, img_size)
+
+        mat_in = ncnn.Mat.from_pixels(padded, ncnn.Mat.PixelType.PIXEL_BGR2RGB, img_size, img_size)
+        mat_in.substract_mean_normalize([0.0, 0.0, 0.0], [1 / 255.0, 1 / 255.0, 1 / 255.0])
+
+        extractor = self._ncnn_net.create_extractor()
+        extractor.input(self._ncnn_input_name, mat_in)
+        ret, mat_out = extractor.extract(self._ncnn_output_name)
+        if ret != 0:
+            print(f"[TargetDetector] NCNN extractor returned {ret}, skipping frame.")
+            return []
+
+        out = np.array(mat_out)
+        if out.ndim == 3:
+            out = out[0]  # drop a leading singleton batch/channel dim, if present
+
+        # Ultralytics' NCNN export layout isn't guaranteed to match ONNX's
+        # (attrs, anchors) orientation exactly, so pick whichever axis lines
+        # up with 4+num_classes rather than assuming a fixed transpose.
+        num_attrs = 4 + len(self._class_names)
+        if out.shape[0] == num_attrs:
+            predictions = out.T
+        elif out.shape[1] == num_attrs:
+            predictions = out
+        else:
+            print(f"[TargetDetector] Unexpected NCNN output shape {out.shape}, skipping frame.")
+            return []
+
+        return self._postprocess(predictions, scale, left_pad, top_pad, orig_w, orig_h)
+
     def predict(
         self,
         frame: np.ndarray
@@ -239,6 +429,9 @@ class TargetDetector:
         Returns:
             List of (class_name, symbol_id, confidence, (x1, y1, x2, y2))
         """
+        if self._ncnn_net is not None:
+            return self._infer_ncnn(frame)
+
         if self._onnx_session is not None:
             return self._infer_onnx(frame)
 
