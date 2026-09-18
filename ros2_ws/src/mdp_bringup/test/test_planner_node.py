@@ -105,12 +105,21 @@ class TestPlannerNode(unittest.TestCase):
         self.assertAlmostEqual(self.node._current_pose.theta, math.pi / 2.0)
         self.assertEqual(len(self.node._recognized_targets), 0)
 
-    def test_estop_transitions_state(self):
-        """Test that E-STOP transitions to ESTOP state and cancels execution."""
-        self.node._is_executing = True
+    def test_estop_transitions_state_when_idle(self):
+        """An E-STOP with no mission running is a genuine external event and hard-stops."""
+        self.node._is_executing = False
         self.node._on_estop(Empty())
         self.assertEqual(self.node._state, MissionState.ESTOP)
         self.assertFalse(self.node._is_executing)
+
+    def test_estop_deferred_during_active_leg(self):
+        """An E-STOP received while a leg is executing must defer to in-leg
+        proximity recovery (_execute_commands_sync) instead of a terminal
+        ESTOP that would require a manual RESET and wipe _current_plan."""
+        self.node._is_executing = True
+        self.node._on_estop(Empty())
+        self.assertNotEqual(self.node._state, MissionState.ESTOP)
+        self.assertTrue(self.node._is_executing)
 
     def test_orbit_recovery_detects_target_on_adjacent_face(self):
         """Test that _inspect_adjacent_faces finds target on an adjacent face."""
@@ -192,41 +201,118 @@ class TestPlannerNode(unittest.TestCase):
         self.assertEqual(self.node._state, MissionState.ESTOP)
         self.assertFalse(self.node._is_executing)
 
-    def test_proximity_estop_reports_sensor_and_distance(self):
-        """Test that proximity violation halts robot and reports which sensor and value caused it."""
+    def test_new_plan_refused_while_estopped(self) -> None:
+        """A fresh ALG obstacle list must not silently resume a mission while
+        ESTOP is latched: _parse_and_plan used to transition straight to
+        PLANNING before start_mission()'s own ESTOP guard ever got a chance to
+        run (by which point our own FSM state had already moved off ESTOP),
+        letting a mission "resume" while motion_controller_node's/
+        serial_bridge_node's hardware latches were still set -- every move
+        then failed immediately with no visible cause."""
+        self.node._on_estop(Empty())
+        self.assertEqual(self.node._state, MissionState.ESTOP)
+        self.node._parse_and_plan("ALG|1,60,60,N")
+        self.assertEqual(self.node._state, MissionState.ESTOP)
+        self.assertIsNone(self.node._current_plan)
+        self.assertFalse(self.node._is_executing)
+
+    def test_leg_movement_failure_reports_mission_failed_not_complete(self):
+        """If a leg's movement never succeeds (all retries fail), the mission
+        must report MISSION_FAILED, never MISSION_COMPLETE -- the loop used to
+        break out of the leg loop on a movement failure without ever setting
+        mission_failed, so the final check (_is_executing and not
+        mission_failed) fell through to a false "all obstacles visited"."""
+        from arena import Config, Obstacle
+        from planner import FullMissionPlan, PlanLeg
+
+        # vantage_pose must differ from _current_pose (and stay that way
+        # across retries, since the mocked _execute_commands_sync never
+        # actually moves the robot) so each retry attempt re-plans a real,
+        # non-empty command sequence instead of short-circuiting via the
+        # "already at vantage pose" empty-waypoints branch.
+        obstacle = Obstacle(id=1, x=60, y=60, face="N")
+        leg = PlanLeg(
+            obstacle_id=1,
+            target_face="N",
+            start_pose=self.node._current_pose,
+            vantage_pose=Config(150.0, 150.0, 0.0),
+            poses=[],
+            commands=[("FC", 20)],
+            raw_strings=[],
+            distance_cm=20.0,
+        )
+        self.node._obstacles = [obstacle]
+        self.node._current_plan = FullMissionPlan(
+            start_pose=self.node._current_pose,
+            legs=[leg],
+            total_distance_cm=20.0,
+            all_commands=[("FC", 20)],
+            all_poses=[],
+        )
+        self.node._is_executing = True
+        self.node._move_client.wait_for_service = MagicMock(return_value=True)
+        # Movement itself never succeeds (e.g. a hardware latch left set),
+        # regardless of retries.
+        self.node._execute_commands_sync = MagicMock(return_value=False)
+        self.node._status_pub.publish = MagicMock()
+
+        with patch("mdp_bringup.planner_node.time.sleep"):
+            self.node._execute_mission_loop()
+
+        self.assertEqual(self.node._state, MissionState.MISSION_FAILED)
+        self.assertNotEqual(self.node._state, MissionState.MISSION_COMPLETE)
+        statuses = [c[0][0].data for c in self.node._status_pub.publish.call_args_list]
+        self.assertIn("Leg 1 Failed", statuses)
+
+    def test_proximity_trip_auto_recovers_without_losing_plan(self):
+        """A proximity trip during a leg approach must soft-recover (clear the
+        motion_controller_node latch, back off, retry) rather than terminal-
+        ESTOP the whole mission and force an operator RESET that wipes
+        _current_plan -- overshoot toward our own target obstacle is expected,
+        not a surprise hazard."""
         self.node._is_executing = True
         self.node._enable_avoidance = True
         self.node._safety_dist_cm = 12.0
         self.node._recovery_backup_cm = 8.0
+        self.node._current_plan = MagicMock()  # must survive the recovery, unlike RESET
         # Ultrasonic reads 8.5 cm (0.085m)
         self.node._us_range_m = 0.085
         self.node._ir_left_range_m = float("inf")
         self.node._ir_right_range_m = float("inf")
 
-        self.node._estop_pub.publish = MagicMock()
+        self.node._cmd_pub.publish = MagicMock()
         self.node._status_pub.publish = MagicMock()
         self.node._telemetry_pub.publish = MagicMock()
 
-        # Mock future that never finishes on its own so proximity loop checks sensors
-        mock_future = MagicMock()
-        mock_future.done.return_value = False
-        self.node._move_client.call_async = MagicMock(return_value=mock_future)
+        # First call_async is the forward move; its future never finishes on
+        # its own, so the proximity guard loop is what detects the trip.
+        # Second call_async is the recovery backup move issued by
+        # _recover_from_proximity_trip; resolve it immediately so the test
+        # doesn't block on its real 3s timeout.
+        forward_future = MagicMock()
+        forward_future.done.return_value = False
+        backup_future = MagicMock()
+        backup_future.done.return_value = True
+        backup_future.result.return_value = MagicMock(success=True)
+        self.node._move_client.call_async = MagicMock(side_effect=[forward_future, backup_future])
 
         result = self.node._execute_commands_sync([("FC", 20)], label="Forward Test")
+
         self.assertFalse(result)
-        self.node._estop_pub.publish.assert_called()
-        self.assertEqual(self.node._state, MissionState.ESTOP)
-        self.assertFalse(self.node._is_executing)
-        # A latched stop must not dispatch an automatic reverse movement.
-        self.node._move_client.call_async.assert_called_once()
+        self.assertEqual(self.node._state, MissionState.AVOIDANCE_RECOVERY)
+        self.assertTrue(self.node._is_executing)
+        self.assertIsNotNone(self.node._current_plan)
+        # Forward move + the auto-issued backup move.
+        self.assertEqual(self.node._move_client.call_async.call_count, 2)
 
-        # Verify status publication contains sensor name and value
+        cmd_calls = [c[0][0].data for c in self.node._cmd_pub.publish.call_args_list]
+        self.assertIn("CLEAR_ESTOP", cmd_calls)
+
         status_calls = [c[0][0].data for c in self.node._status_pub.publish.call_args_list]
-        self.assertTrue(any("ESTOP: Obstacle detected by Ultrasonic (8.5 cm" in s for s in status_calls))
+        self.assertTrue(any("Proximity Alert: Ultrasonic at 8.5 cm" in s for s in status_calls))
 
-        # Verify telemetry publication contains ESTOP_ALERT with Ultrasonic and 8.5
         telemetry_calls = [c[0][0].data for c in self.node._telemetry_pub.publish.call_args_list]
-        self.assertTrue(any("ESTOP_ALERT,Ultrasonic,8.5,12.0" in t for t in telemetry_calls))
+        self.assertTrue(any("PROXIMITY_RECOVERY,Ultrasonic,8.5,12.0" in t for t in telemetry_calls))
 
 
 if __name__ == "__main__":

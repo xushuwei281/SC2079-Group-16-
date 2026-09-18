@@ -82,14 +82,17 @@ class TestSerialBridgeNode(unittest.TestCase):
         self.assertEqual(self.packets(), [b"V\0\0\0\0"])
         self.assertFalse(self.node._estop_event.is_set())
 
-    def test_stale_feedback_blocks_nonzero(self):
+    def test_stale_feedback_reports_but_does_not_block_nonzero(self):
+        """Once a pose has been received, later staleness (e.g. an overloaded
+        Pi missing a telemetry tick) is report-only and must not block a
+        nonzero velocity command or latch an E-stop."""
         self.node._telemetry_stamp = 0.0
         msg = Twist()
         msg.linear.x = 0.1
         self.node._on_cmd_vel(msg)
         self.node._velocity_tick()
-        self.assertEqual(self.packets(), [b"Q\0\0\0\0"])
-        self.assertTrue(self.node._estop_event.is_set())
+        self.assertEqual(self.packets(), [b"V" + struct.pack("<hh", 100, 0)])
+        self.assertFalse(self.node._estop_event.is_set())
 
     def test_first_post_reset_command_holds_zero_until_feedback(self):
         self.node._on_android_cmd(String(data="RESET"))

@@ -59,7 +59,7 @@ except ImportError:
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from mdp_interfaces.msg import MoveCommand
-from mdp_interfaces.srv import ExecuteMoves, SampleTarget
+from mdp_interfaces.srv import BullseyeOrbit, ExecuteMoves, SampleTarget
 from nav_msgs.msg import Path
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
@@ -87,7 +87,7 @@ class PlannerNode(Node):
     def __init__(self) -> None:
         super().__init__("planner_node")
 
-        self.declare_parameter("turning_radius_cm", 21.0)
+        self.declare_parameter("turning_radius_cm", 28.0)
         self.declare_parameter("camera_view_dist_cm", 25.0)
         self.declare_parameter("auto_start", True)
         self.declare_parameter("enable_collision_avoidance", True)
@@ -95,6 +95,11 @@ class PlannerNode(Node):
         self.declare_parameter("recovery_backup_cm", 8.0)
         self.declare_parameter("recognition_timeout_s", 3.0)
         self.declare_parameter("enable_orbit_recovery", True)
+        # Sub-flag under enable_orbit_recovery: try the closed-loop visual-servo
+        # heatseek+orbit service first, falling back to the existing discrete
+        # candidate-face hop below on failure/timeout/service-unavailable.
+        self.declare_parameter("enable_closed_loop_orbit", True)
+        self.declare_parameter("closed_loop_orbit_timeout_s", 30.0)
 
         self._radius = float(self.get_parameter("turning_radius_cm").value)
         self._view_dist = float(self.get_parameter("camera_view_dist_cm").value)
@@ -104,6 +109,8 @@ class PlannerNode(Node):
         self._recovery_backup_cm = float(self.get_parameter("recovery_backup_cm").value)
         self._recognition_timeout_s = float(self.get_parameter("recognition_timeout_s").value)
         self._enable_orbit_recovery = bool(self.get_parameter("enable_orbit_recovery").value)
+        self._enable_closed_loop_orbit = bool(self.get_parameter("enable_closed_loop_orbit").value)
+        self._closed_loop_orbit_timeout_s = float(self.get_parameter("closed_loop_orbit_timeout_s").value)
 
         self._state = MissionState.IDLE
         self._obstacles: List[Obstacle] = []
@@ -133,7 +140,11 @@ class PlannerNode(Node):
         self._target_pub = self.create_publisher(String, "/android/target", 10)
         self._telemetry_pub = self.create_publisher(String, "/android/telemetry", 10)
         self._path_pub = self.create_publisher(Path, "/planner/path", 10)
-        self._estop_pub = self.create_publisher(Empty, "/estop", 10)
+        # Loopback publisher used only to send motion_controller_node's
+        # CLEAR_ESTOP latch-clear (see _recover_from_proximity_trip); it shares
+        # /android/cmd with the tablet uplink but is a no-op in our own _on_cmd
+        # below, so it never touches _current_plan the way a tablet RESET does.
+        self._cmd_pub = self.create_publisher(String, "/android/cmd", 10)
 
         # Subscribers
         self._cmd_sub = self.create_subscription(
@@ -170,6 +181,11 @@ class PlannerNode(Node):
         # Service Client to Live Perception Consensus Sampler
         self._sample_client = self.create_client(
             SampleTarget, "/perception/sample_target", callback_group=callback_group
+        )
+
+        # Service Client to closed-loop bullseye heatseek + orbit-recovery node
+        self._orbit_client = self.create_client(
+            BullseyeOrbit, "/bullseye/orbit_approach", callback_group=callback_group
         )
 
         self.get_logger().info(
@@ -249,9 +265,65 @@ class PlannerNode(Node):
         )
         self._telemetry_pub.publish(String(data=packet))
 
+    def _live_proximity_cause(self) -> Optional[Tuple[str, float]]:
+        """Best-effort cause for a just-received /estop: whichever tracked
+        sensor is currently under safety_stop_dist_cm, if any. /estop itself
+        (std_msgs/Empty) carries no payload, and neither motion_controller_node
+        nor serial_bridge_node attach one -- so this is the only place that
+        can surface "why" to the operator, using the same live range topics
+        _execute_commands_sync's guard already subscribes to."""
+        candidates = []
+        if not math.isinf(self._us_range_m):
+            candidates.append(("Ultrasonic", self._us_range_m))
+        if not math.isinf(self._ir_left_range_m):
+            candidates.append(("IR Left", self._ir_left_range_m))
+        if not math.isinf(self._ir_right_range_m):
+            candidates.append(("IR Right", self._ir_right_range_m))
+        if not candidates:
+            return None
+        cause_sensor, min_dist_m = min(candidates, key=lambda s: s[1])
+        if min_dist_m < (self._safety_dist_cm / 100.0):
+            return (cause_sensor, min_dist_m * 100.0)
+        return None
+
     def _on_estop(self, msg: Empty) -> None:
-        """Emergency stop handler."""
-        self._transition_state(MissionState.ESTOP, "Received E-STOP signal")
+        """Handle /estop receipts from any source: an external E-stop, or
+        motion_controller_node's own independent forward-safety latch
+        (its _forward_safety_error, tripped at the same front_stop_distance_m/
+        ir_stop_distance_m threshold as our own guard below) -- both broadcast
+        on this same topic with no distinguishing payload.
+
+        While a mission leg is actively executing, _execute_commands_sync is
+        already synchronously polling the same live range topics and reacts to
+        a proximity-caused stop itself (auto-recover + retry the leg, see
+        _recover_from_proximity_trip) without losing _current_plan. Only force
+        the hard, terminal ESTOP here when no leg is actively running -- that
+        is a genuine external event with nothing in progress to recover, and
+        still requires an explicit tablet RESET. This covers teleop/manual
+        driving too (e.g. motion_controller_node's own forward-safety check
+        tripping on a /cmd_vel joystick command), which has no leg to recover.
+        """
+        if self._is_executing:
+            self.get_logger().warn(
+                "E-STOP received during active leg execution; deferring to in-leg proximity recovery."
+            )
+            return
+
+        cause = self._live_proximity_cause()
+        if cause is not None:
+            cause_sensor, dist_cm = cause
+            reason = f"Proximity ({cause_sensor}: {dist_cm:.1f} cm) -- back away, then RESET"
+            self._status_pub.publish(
+                String(data=f"ESTOP: {cause_sensor} at {dist_cm:.1f} cm (<= {self._safety_dist_cm:.1f} cm). "
+                            "Reverse to clear before RESET.")
+            )
+            self._telemetry_pub.publish(
+                String(data=f"ESTOP_ALERT,{cause_sensor},{dist_cm:.1f},{self._safety_dist_cm:.1f}")
+            )
+        else:
+            reason = "Received E-STOP signal"
+            self._status_pub.publish(String(data="ESTOP TRIGGERED (no proximity cause -- external/other)"))
+        self._transition_state(MissionState.ESTOP, reason)
         self._is_executing = False
 
     def _on_cmd(self, msg: String) -> None:
@@ -264,6 +336,10 @@ class PlannerNode(Node):
             self.start_mission()
         elif raw_upper in ("RESET", "ALG:RESET"):
             self.reset_mission()
+        elif raw_upper == "CLEAR_ESTOP":
+            # Loopback from our own _recover_from_proximity_trip; only
+            # motion_controller_node needs to act on this one.
+            pass
         elif raw.startswith("ALG|") or raw.startswith("ALG:") or "OBSTACLE" in raw_upper or raw.startswith("{") or raw.startswith("["):
             self._parse_and_plan(raw)
         elif raw_upper.startswith("ADD"):
@@ -288,6 +364,18 @@ class PlannerNode(Node):
 
     def _parse_and_plan(self, raw_str: str) -> None:
         """Parse obstacle list string (supports ALG|..., ALG:{...}, JSON, ADD) and compute TSP plan."""
+        if self._state == MissionState.ESTOP:
+            # Mirrors start_mission()'s own ESTOP guard: without this, a new
+            # obstacle list transitions us straight to PLANNING (below) and,
+            # with auto_start, into start_mission() -- by which point our own
+            # state is no longer ESTOP, so that guard never fires. The
+            # underlying hardware latches (motion_controller_node/
+            # serial_bridge_node's _estop_event) are only ever cleared by an
+            # explicit RESET, so a mission silently "resumed" this way just
+            # fails every move immediately with no visible cause.
+            self.get_logger().warn("Ignoring new obstacle list while ESTOP is active: RESET first.")
+            self._status_pub.publish(String(data="E-STOP active: RESET before sending a new plan."))
+            return
         content = raw_str.strip()
         if content.startswith("ALG:") or content.startswith("ALG|"):
             content = content[4:].strip()
@@ -426,7 +514,17 @@ class PlannerNode(Node):
         self._mission_thread.start()
 
     def _execute_commands_sync(self, cmds: List[Tuple[str, int]], label: str = "") -> bool:
-        """Synchronously dispatch a sequence of MoveCommands with active proximity sensor guard."""
+        """Synchronously dispatch a sequence of MoveCommands with active proximity sensor guard.
+
+        A proximity trip during a forward maneuver is common and expected here:
+        the open-loop dead-reckoning approach into a vantage pose can overshoot,
+        and getting closer than safety_stop_dist_cm to the very obstacle we are
+        intentionally approaching is not a surprise hazard. Rather than a
+        terminal mission ESTOP requiring an operator RESET (which also wipes
+        _current_plan), this soft-recovers: clear motion_controller_node's
+        latch, back off, and return False so the existing per-leg retry loop in
+        _execute_mission_loop replans and retries from the new pose.
+        """
         if not cmds:
             return True
 
@@ -438,9 +536,9 @@ class PlannerNode(Node):
             req.commands.append(mc)
 
         future = self._move_client.call_async(req)
-        interrupted_by_sensor = False
         is_backward = all(code in {"BC", "BL", "BR", "BU"} for code, _ in cmds)
         prox_hits = 0
+        proximity_cause: Optional[Tuple[str, float]] = None
 
         while rclpy.ok() and not future.done():
             if not self._is_executing:
@@ -448,52 +546,71 @@ class PlannerNode(Node):
 
             # Active Proximity Safety Guard (only active during forward maneuvers)
             if self._enable_avoidance and not is_backward:
-                candidates = []
-                if not math.isinf(self._us_range_m):
-                    candidates.append(("Ultrasonic", self._us_range_m))
-                if not math.isinf(self._ir_left_range_m):
-                    candidates.append(("IR Left", self._ir_left_range_m))
-                if not math.isinf(self._ir_right_range_m):
-                    candidates.append(("IR Right", self._ir_right_range_m))
-
-                if candidates:
-                    cause_sensor, min_dist_m = min(candidates, key=lambda s: s[1])
-                    if min_dist_m < (self._safety_dist_cm / 100.0):
-                        prox_hits += 1
-                        if prox_hits >= 2:
-                            dist_cm = min_dist_m * 100.0
-                            self.get_logger().warn(
-                                f"⚠️ PROXIMITY ALERT ({label})! Obstacle at {dist_cm:.1f} cm detected by {cause_sensor} "
-                                f"(< {self._safety_dist_cm:.1f} cm). Halting."
-                            )
-                            self._is_executing = False
-                            self._transition_state(
-                                MissionState.ESTOP,
-                                f"Proximity alert ({cause_sensor}: {dist_cm:.1f} cm)",
-                            )
-                            self._estop_pub.publish(Empty())
-                            alert_msg = f"ESTOP: Obstacle detected by {cause_sensor} ({dist_cm:.1f} cm <= {self._safety_dist_cm:.1f} cm)"
-                            self._status_pub.publish(String(data=alert_msg))
-                            self._telemetry_pub.publish(
-                                String(data=f"ESTOP_ALERT,{cause_sensor},{dist_cm:.1f},{self._safety_dist_cm:.1f}")
-                            )
-                            interrupted_by_sensor = True
-                            break
-                    else:
-                        prox_hits = 0
+                cause = self._live_proximity_cause()
+                if cause is not None:
+                    prox_hits += 1
+                    if prox_hits >= 2:
+                        proximity_cause = cause
+                        break
                 else:
                     prox_hits = 0
             time.sleep(0.04)
 
-        if interrupted_by_sensor:
-            self._status_pub.publish(
-                String(data="Obstacle Alert: Stopped. Clear obstruction and RESET before restarting.")
+        # motion_controller_node runs its own, independent forward-safety check
+        # at the same threshold (front_stop_distance_m/ir_stop_distance_m) and
+        # may win the race, resolving the service call before our debounce
+        # above fires. Its failure status still tells us this was the same
+        # proximity condition, so route it through the same recovery.
+        if proximity_cause is None and future.done() and future.result() is not None:
+            status = getattr(future.result(), "status", "") or ""
+            if status.startswith("PROXIMITY"):
+                sensor = status.split(":", 1)[-1] if ":" in status else status
+                proximity_cause = (sensor, self._safety_dist_cm)
+
+        if proximity_cause is not None:
+            cause_sensor, dist_cm = proximity_cause
+            self.get_logger().warn(
+                f"⚠️ PROXIMITY ALERT ({label})! {cause_sensor} at {dist_cm:.1f} cm "
+                f"(< {self._safety_dist_cm:.1f} cm). Auto-recovering: back off + retry leg."
             )
+            self._transition_state(
+                MissionState.AVOIDANCE_RECOVERY,
+                f"Proximity trip ({cause_sensor}: {dist_cm:.1f} cm) -- auto backing off",
+            )
+            self._status_pub.publish(
+                String(data=f"Proximity Alert: {cause_sensor} at {dist_cm:.1f} cm. Backing off and retrying.")
+            )
+            self._telemetry_pub.publish(
+                String(data=f"PROXIMITY_RECOVERY,{cause_sensor},{dist_cm:.1f},{self._safety_dist_cm:.1f}")
+            )
+            self._recover_from_proximity_trip()
             return False
 
         if future.done() and future.result() and future.result().success:
             return True
         return False
+
+    def _recover_from_proximity_trip(self) -> None:
+        """Clear motion_controller_node's latched E-stop (CLEAR_ESTOP, handled
+        in its _on_android_cmd) and back the robot off by recovery_backup_cm,
+        without touching _current_plan/_obstacles the way a tablet RESET does.
+        The caller's existing per-leg retry loop (_execute_mission_loop)
+        replans and retries from the new, backed-off live pose."""
+        self._cmd_pub.publish(String(data="CLEAR_ESTOP"))
+        time.sleep(0.15)  # let motion_controller_node's callback clear the latch first
+
+        if self._recovery_backup_cm > 0.0:
+            req = ExecuteMoves.Request()
+            mc = MoveCommand()
+            mc.command = "BC"
+            mc.value = int(self._recovery_backup_cm)
+            req.commands.append(mc)
+            future = self._move_client.call_async(req)
+            deadline = time.time() + 3.0
+            while rclpy.ok() and self._is_executing and not future.done() and time.time() < deadline:
+                time.sleep(0.05)
+
+        self._status_pub.publish(String(data="Proximity recovery: backed off, retrying leg"))
 
     def _query_perception_sampler(self, obstacle_id: int) -> Optional[Tuple[int, str, float, bool]]:
         """Call /perception/sample_target service and return (symbol_id, symbol_name, confidence, is_marker) or None."""
@@ -514,6 +631,53 @@ class PlannerNode(Node):
             if res.success:
                 return (res.symbol_id, res.symbol_name, res.confidence, res.is_marker)
         return None
+
+    def _try_closed_loop_orbit(
+        self, leg: PlanLeg, target_ob: Obstacle, nominal_face: str
+    ) -> Optional[Tuple[int, str, float]]:
+        """Attempt the closed-loop visual-servo heatseek+orbit service
+        (bullseye_orbit_node) before falling back to the discrete candidate
+        hop in _inspect_adjacent_faces. Returns None on any failure so the
+        caller falls through to the existing proven path unchanged."""
+        if not self._enable_closed_loop_orbit:
+            return None
+        if not (self._orbit_client.service_is_ready() or self._orbit_client.wait_for_service(timeout_sec=0.5)):
+            self.get_logger().info("Closed-loop orbit service unavailable; using discrete-hop recovery.")
+            return None
+
+        req = BullseyeOrbit.Request()
+        req.obstacle_id = leg.obstacle_id
+        req.obstacle_x_cm = target_ob.x
+        req.obstacle_y_cm = target_ob.y
+        req.nominal_face = nominal_face
+        req.target_clearance_cm = self._view_dist
+
+        self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: Closed-loop heatseek + orbit"))
+        future = self._orbit_client.call_async(req)
+        deadline = time.time() + self._closed_loop_orbit_timeout_s
+        while rclpy.ok() and not future.done():
+            if not self._is_executing or time.time() > deadline:
+                self.get_logger().warn("Closed-loop orbit timed out or was interrupted; falling back.")
+                return None
+            time.sleep(0.05)
+
+        res = future.result() if future.done() else None
+        if res is None or not res.success:
+            status = res.status if res is not None else "NO_RESPONSE"
+            self.get_logger().warn(f"Closed-loop orbit unsuccessful ({status}); falling back to discrete hop.")
+            return None
+
+        sid, sname, conf = res.symbol_id, res.symbol_name, res.confidence
+        self.get_logger().info(
+            f"🎉 Closed-loop orbit success! Target confirmed on {res.found_face} face: "
+            f"Symbol {sid} ({sname}) [conf={conf:.2f}]"
+        )
+        self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: ID {sid} ({sname}) on {res.found_face}"))
+        self._target_pub.publish(String(data=f"{leg.obstacle_id},{sid}"))
+        self._telemetry_pub.publish(
+            String(data=f"T1_TARGET,{leg.obstacle_id},{sid},{sname},{conf:.2f},{res.found_face}")
+        )
+        return (sid, sname, conf)
 
     def _inspect_adjacent_faces(
         self, leg: PlanLeg, target_ob: Obstacle, arena: Dict
@@ -538,6 +702,13 @@ class PlannerNode(Node):
             MissionState.ORBIT_RECOVERY,
             f"Bull's Eye on {nominal_face} face of Obs {leg.obstacle_id}"
         )
+
+        closed_loop_result = self._try_closed_loop_orbit(leg, target_ob, nominal_face)
+        if closed_loop_result is not None:
+            return closed_loop_result
+        # Falls through to the discrete candidate-face hop below on failure,
+        # timeout, or if the service is unavailable -- this proven path is
+        # kept as the safety net, not replaced.
 
         for cand_face in candidates:
             if not self._is_executing:
@@ -680,6 +851,7 @@ class PlannerNode(Node):
                     time.sleep(0.3)
 
             if not leg_success:
+                mission_failed = True
                 self.get_logger().error(f"Leg {i+1} could not be completed.")
                 self._status_pub.publish(String(data=f"Leg {i+1} Failed"))
                 break

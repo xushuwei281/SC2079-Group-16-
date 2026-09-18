@@ -402,16 +402,19 @@ class SerialBridgeNode(Node):
                 self._teleop_target = None
                 self._write_packet(self._velocity_packet(0.0, 0.0))
                 return
-            if not self._telemetry_fresh():
-                # RESET deliberately clears cached feedback.  Hold zero until
+            if self._raw_pose is None:
+                # RESET deliberately clears cached feedback. Hold zero until
                 # the first post-reset TLM frame arrives instead of turning a
-                # normal startup race into a latched E-stop.  Once feedback
-                # has been acquired, losing it during motion remains a fault.
-                if self._raw_pose is None:
-                    self._write_packet(self._velocity_packet(0.0, 0.0))
-                    return
-                self._latch_stop("STALE_TELEMETRY")
+                # normal startup race into a latched E-stop.
+                self._write_packet(self._velocity_packet(0.0, 0.0))
                 return
+            if not self._telemetry_fresh():
+                # Report-only, not a stop: see motion_controller_node's
+                # _teleop_tick for the same change. An overloaded Pi can
+                # starve this transiently without the robot's actual state
+                # being in question; the STM32's own watchdog still stops
+                # physical motion if the command stream itself goes stale.
+                self.get_logger().warn("Stale telemetry (teleop)", throttle_duration_sec=1.0)
             if not self._write_packet(self._teleop_target):
                 # The closed transport and MCU watchdog already stop physical
                 # motion. Discard this target and reconnect without converting

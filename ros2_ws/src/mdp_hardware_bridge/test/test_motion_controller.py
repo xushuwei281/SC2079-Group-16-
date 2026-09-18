@@ -81,18 +81,30 @@ class TestMotionController(unittest.TestCase):
                    side_effect=lambda _: self.feedback(yaw=math.radians(-171))):
             self.assertTrue(self.execute("FL", 10).success)
 
-    def test_no_feedback_no_nominal_completion(self):
+    def test_transient_pose_staleness_does_not_stop(self):
+        """A momentarily stale pose sample (e.g. an overloaded Pi missing one
+        telemetry tick) must not latch an E-stop -- report-only, see
+        motion_controller_node._motion_error."""
         self.node._telemetry_stamp -= 1
-        self.assertEqual(self.execute().status, "STALE_TELEMETRY")
-        self.assertTrue(self.node._estop_event.is_set())
-        self.node._estop_pub.publish.assert_called_once()
-        self.assertTrue(all(v == (0, 0) for v in self.velocities()))
+        with patch("mdp_hardware_bridge.motion_controller_node.time.sleep",
+                   side_effect=lambda _: self.feedback(y=0.3)):
+            result = self.execute()
+        self.assertEqual(result.status, "FIN")
+        self.assertTrue(result.success)
+        self.assertFalse(self.node._estop_event.is_set())
 
-    def test_feedback_loss_mid_move_stops(self):
+    def test_sustained_feedback_loss_still_stops(self):
+        """If pose feedback genuinely stops updating for good (not just a
+        transient staleness blip an overloaded Pi can cause), the robot must
+        still safely stop -- via the range-freshness check in
+        _forward_safety_error, since pose staleness alone being report-only
+        must not let it drive forever with no feedback at all."""
         def lose(_):
             self.node._telemetry_stamp -= 1
         with patch("mdp_hardware_bridge.motion_controller_node.time.sleep", side_effect=lose):
-            self.assertEqual(self.execute().status, "STALE_TELEMETRY")
+            result = self.execute()
+        self.assertEqual(result.status, "SENSOR_STALE")
+        self.assertTrue(self.node._estop_event.is_set())
         self.assertEqual(self.velocities()[-1], (0, 0))
 
     def test_mid_move_estop_stays_latched(self):

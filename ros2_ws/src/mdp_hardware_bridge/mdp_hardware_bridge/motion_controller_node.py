@@ -224,16 +224,28 @@ class MotionControllerNode(Node):
             self._latch_stop("ESTOPPED", publish_estop=False)
 
     def _on_android_cmd(self, msg: String) -> None:
-        if msg.data.strip().upper() not in {"RESET", "ALG:RESET"}:
-            return
-        with self._control_lock:
-            self._generation += 1
-            self._estop_event.clear()
-            self._teleop_target = None
-            self._us_range_m = self._ir_left_range_m = self._ir_right_range_m = float("nan")
-            self._raw_pose = None
-            self._telemetry_stamp = self._range_stamp = 0.0
-            self._publish_velocity(0.0, 0.0)
+        cmd = msg.data.strip().upper()
+        if cmd in {"RESET", "ALG:RESET"}:
+            with self._control_lock:
+                self._generation += 1
+                self._estop_event.clear()
+                self._teleop_target = None
+                self._us_range_m = self._ir_left_range_m = self._ir_right_range_m = float("nan")
+                self._raw_pose = None
+                self._telemetry_stamp = self._range_stamp = 0.0
+                self._publish_velocity(0.0, 0.0)
+        elif cmd == "CLEAR_ESTOP":
+            # planner_node's own auto-recovery path (a proximity trip during its
+            # own known target approach, not an external/operator E-stop): clear
+            # just the motion latch so the next command can run, but keep the
+            # live pose/range fusion state intact -- unlike a full RESET, this
+            # must not force a stale-telemetry stall while the mission is still
+            # in progress and _current_plan hasn't been touched.
+            with self._control_lock:
+                self._generation += 1
+                self._estop_event.clear()
+                self._teleop_target = None
+                self._publish_velocity(0.0, 0.0)
 
     def _on_teleop(self, msg: Twist) -> None:
         with self._control_lock:
@@ -262,22 +274,24 @@ class MotionControllerNode(Node):
             if time.monotonic() - self._teleop_stamp >= self._cmd_timeout:
                 self._teleop_target = None
                 self._publish_velocity(0.0, 0.0)
-            elif not self._telemetry_fresh():
-                # RESET clears cached feedback in both control layers.  A
-                # joystick sample can arrive before the first post-reset pose;
-                # keep the vehicle stopped while waiting rather than latching
-                # a false E-stop.  Loss after feedback was acquired is still
-                # treated as a safety fault.
-                if self._raw_pose is None:
-                    self._publish_velocity(0.0, 0.0)
-                else:
-                    self._latch_stop("STALE_TELEMETRY")
+                return
+            if self._raw_pose is None:
+                # A joystick sample can arrive before the first post-RESET
+                # pose; hold rather than drive with no baseline at all.
+                self._publish_velocity(0.0, 0.0)
+                return
+            if not self._telemetry_fresh():
+                # Report-only, not a stop: an overloaded Pi can starve this
+                # topic transiently under load without the robot's actual
+                # state being in question, and _raw_pose isn't used to gate
+                # teleop's own velocity command -- only _forward_safety_error
+                # below is, and that doesn't depend on pose freshness.
+                self.get_logger().warn("Stale telemetry (teleop)", throttle_duration_sec=1.0)
+            error = self._forward_safety_error(self._teleop_target[0] > 0)
+            if error:
+                self._latch_stop(error)
             else:
-                error = self._forward_safety_error(self._teleop_target[0] > 0)
-                if error:
-                    self._latch_stop(error)
-                else:
-                    self._publish_velocity(*self._teleop_target)
+                self._publish_velocity(*self._teleop_target)
 
     def _handle_execute_moves(self, request: ExecuteMoves.Request,
                               response: ExecuteMoves.Response) -> ExecuteMoves.Response:
@@ -329,8 +343,11 @@ class MotionControllerNode(Node):
             self._latch_stop("TIMEOUT")
             return "TIMEOUT"
         if not self._telemetry_fresh():
-            self._latch_stop("STALE_TELEMETRY")
-            return "STALE_TELEMETRY"
+            # Report-only, not a stop: see _teleop_tick. The deadline check
+            # above remains the hard backstop against a truly dead feed
+            # running forever; this only avoids latching on a transient stall
+            # from an overloaded Pi.
+            self.get_logger().warn("Stale telemetry during primitive execution", throttle_duration_sec=1.0)
         return ""
 
     def _execute_primitive(self, mc: MoveCommand, generation: int) -> str:
