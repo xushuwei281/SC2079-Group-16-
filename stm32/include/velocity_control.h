@@ -17,15 +17,12 @@
 #define VELOCITY_MIN_RADIUS_MM 210.0f
 #define VELOCITY_WHEELBASE_MM 160.0f
 #define VELOCITY_TRACK_MM 150.0f
-/* Calibrated steering endpoints and center: trimmed center to 144 (+1 count right),
- * and left endpoint tightened from 101 to 94 (full lock SERVOMIN) to achieve true
- * 21 cm radius on left turns (eliminating the ~10 deg position undershoot on FL 180). */
-#define VELOCITY_SERVO_CENTER 144
-#define VELOCITY_SERVO_LEFT 94
+#define VELOCITY_SERVO_CENTER 146
+#define VELOCITY_SERVO_LEFT 101
 #define VELOCITY_SERVO_RIGHT 206
 #define VELOCITY_PWM_MAX 1330.0f
-#define VELOCITY_PWM_FEEDFORWARD 2.5f
-#define VELOCITY_PWM_KP 2.0f
+#define VELOCITY_PWM_FEEDFORWARD 2.0f
+#define VELOCITY_PWM_KP 1.5f
 #define VELOCITY_PWM_KI 2.0f
 
 typedef struct {
