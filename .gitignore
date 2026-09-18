@@ -25,6 +25,11 @@ stm32/.pio/
 *.d
 *.su
 
+# *.bin above targets STM32/PlatformIO firmware artifacts, but Ultralytics'
+# NCNN export also emits a weights file named model.ncnn.bin -- track that
+# one like models/best.onnx and models/best.pt already are.
+!models/**/*.bin
+
 # IDE & OS files
 .DS_Store
 .vscode/

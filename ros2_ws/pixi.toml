@@ -175,8 +175,22 @@ onnx = ">=1.12.0, <2"
 onnxruntime = "*"
 onnxslim = ">=0.1.82"
 
+# NCNN export (`model.export(format="ncnn")`, used to produce
+# models/best_ncnn_model/ for the Pi -- see raspberry-pi/cv/scripts/export_edge.sh).
+# Same auto-install problem as the ONNX deps above: Ultralytics' torch2ncnn
+# converter shells out to `pnnx` and then does `import ncnn` to finish the
+# conversion, and both fail to auto-install here (no pip binary). ncnn itself
+# is also needed on the Pi at inference time (see feature.pi.pypi-dependencies)
+# but that's a separate install -- this one runs the *export*, on pc/sim.
+ncnn = "*"
+pnnx = "*"
+
 [feature.pc.tasks]
-build = { cmd = "colcon build", description = "Build the full workspace" }
+# The trailing script is a macOS-only rpath fix for mdp_interfaces' Python
+# typesupport extensions (see scripts/fix_macos_mdp_interfaces_rpath.sh for
+# why) -- colcon regenerates those files from scratch on every build, so the
+# fix has to be reapplied every time too. No-op on Linux.
+build = { cmd = "colcon build && ./scripts/fix_macos_mdp_interfaces_rpath.sh", description = "Build the full workspace" }
 test = { cmd = "colcon test", description = "Test the full workspace" }
 perception = { cmd = "ros2 run mdp_perception perception_node", description = "Start the YOLO target detection and verification stitcher node" }
 # Overrides the Tailscale endpoint activate_zenoh_pc.sh sets by default —
@@ -191,6 +205,69 @@ sim-robot = { cmd = "env RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ZENOH_SESSION_CON
 sim-task2 = { cmd = "env RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ZENOH_SESSION_CONFIG_URI= ros2 launch mdp_simulation sim_task2.launch.py", description = "Launch Gazebo sim for Task 2 (Fastest Car Reactive Sprint)" }
 sim-teleop = { cmd = "env RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ZENOH_SESSION_CONFIG_URI= ros2 launch mdp_simulation sim_teleop.launch.py", description = "Launch Gazebo sim with manual teleoperation" }
 
+
+# ----------------------------------------------------------------------------
+# sim — Gazebo (gz-sim / Harmonic, via ros_gz) for testing the planner and
+# motion controller against a virtual robot instead of the physical hardware.
+# Layered on top of pc (needs xacro, robot_state_publisher, rviz2 already
+# declared there); adds only the gz-sim/ros_gz packages so plain `pc`
+# installs (perception dev on a laptop with no GPU/Gazebo need) stay light.
+# ----------------------------------------------------------------------------
+[feature.sim]
+platforms = ["osx-arm64", "linux-64"]
+
+[feature.sim.dependencies]
+ros-jazzy-ros-gz-sim = "*"
+ros-jazzy-ros-gz-bridge = "*"
+
+# `sim` still inherits pc's Zenoh/Tailscale activation script (pc is in its
+# environment list), so if Tailscale is up it CAN still reach the same
+# router the real Pi uses. These tasks force ROS_DOMAIN_ID=36 to isolate
+# from that: rmw_zenoh_cpp folds the domain ID into its key expressions, so
+# a session on domain 36 cannot discover or publish onto domain 16's topics
+# no matter what it's connected to. Found the hard way — an early smoke test
+# of `gazebo.launch.py` on the shared domain briefly mixed fake /robot_pose
+# and /sensors/*/raw messages into the real serial_bridge_node's topics
+# while it happened to be running.
+#
+# This is a per-task `env` override, not `[feature.sim.activation.env]`:
+# pixi resolves a duplicate activation-env key by keeping whichever feature
+# defines it first in this file, not the one relevant to the environment
+# being run — so a `[feature.sim.activation.env]` override of
+# ROS_DOMAIN_ID would silently lose to [feature.common.activation.env]'s
+# "16" every time. Task-level `env` is applied at run time instead and
+# reliably wins.
+#
+# RMW_IMPLEMENTATION=rmw_cyclonedds_cpp for the same reason test-bridge/
+# test-planner above already use it: pc's activation script points
+# rmw_zenoh_cpp's client config at the Pi's Tailscale IP as a *required*
+# connection — with no Pi reachable, every node's rclpy.init() throws
+# (zenohc::session: "Unable to connect", then RCLBadAlloc). The sim has no
+# cross-host graph to join, so it doesn't need Zenoh at all; cyclonedds
+# discovers peers over local UDP multicast with no router/config needed.
+#
+# DYLD_LIBRARY_PATH=install/mdp_interfaces/lib is a separate macOS-only
+# workaround, and has to be a literal prefix inside `cmd` rather than in the
+# `env` table above: pixi's own `env` field silently drops any DYLD_*-
+# prefixed variable (a deliberate safety filter, confirmed by testing —
+# ROS_DOMAIN_ID/RMW_IMPLEMENTATION in the same table work fine, only DYLD_
+# vars vanish), whereas a plain shell-level `VAR=value cmd` prefix isn't
+# filtered at all. It's needed because rmw_cyclonedds_cpp's C++ layer
+# dlopen()s libmdp_interfaces__rosidl_typesupport_introspection_c.dylib by
+# bare filename at runtime (to create any service/client using an
+# mdp_interfaces type, e.g. motion_controller_node's /execute_moves or
+# planner_node's client of it) — a lookup that only ever consults
+# DYLD_LIBRARY_PATH/DYLD_FALLBACK_LIBRARY_PATH and the *calling* process's
+# own rpath, never the target dylib's own directory. That's a fundamentally
+# different loading path from the one rpath already fixes (see mdp_gazebo's
+# rebuild step below): rpath fixes a compiled .so finding its own declared
+# dependency; this fixes a raw runtime dlopen-by-name from someone else's
+# code, which rpath can't reach at all.
+[feature.sim.tasks]
+gazebo = { cmd = "DYLD_LIBRARY_PATH=\"$PWD/install/mdp_interfaces/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}\" ros2 launch mdp_gazebo gazebo.launch.py", description = "Launch the Gazebo arena with the simulated robot (world, spawn, cmd_vel/odom bridge, pose+TF publisher)", env = { ROS_DOMAIN_ID = "36", RMW_IMPLEMENTATION = "rmw_cyclonedds_cpp" } }
+gazebo-autonomous = { cmd = "DYLD_LIBRARY_PATH=\"$PWD/install/mdp_interfaces/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}\" ros2 launch mdp_gazebo gazebo.launch.py run_autonomous:=true", description = "Launch Gazebo plus motion_controller_node and planner_node for a full autonomous run against the sim", env = { ROS_DOMAIN_ID = "36", RMW_IMPLEMENTATION = "rmw_cyclonedds_cpp" } }
+
 [environments]
 pi = ["common", "pi"]
 pc = ["common", "pc"]
+sim = ["common", "pc", "sim"]
