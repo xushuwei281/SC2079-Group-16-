@@ -24,8 +24,15 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    # Locate Zenoh local client config
+    # Locate Zenoh local client config. PIXI_PROJECT_ROOT (set by pixi for
+    # every task) is authoritative regardless of where this repo is checked
+    # out; the installed-launch-file-relative and hardcoded paths below are
+    # last-resort fallbacks for a bare `ros2 launch` outside pixi.
     config_candidates = [
+        os.path.join(root, "config/zenoh_client_local.json5")
+        for root in [os.environ.get("PIXI_PROJECT_ROOT")]
+        if root
+    ] + [
         os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), "../../../config/zenoh_client_local.json5"
@@ -48,6 +55,10 @@ def generate_launch_description():
     # listens, so the router would silently fail to bind port 7447. This override
     # forces the router process specifically onto a mode:"router" config.
     router_config_candidates = [
+        os.path.join(root, "config/zenoh_router_pi.json5")
+        for root in [os.environ.get("PIXI_PROJECT_ROOT")]
+        if root
+    ] + [
         os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), "../../../config/zenoh_router_pi.json5"

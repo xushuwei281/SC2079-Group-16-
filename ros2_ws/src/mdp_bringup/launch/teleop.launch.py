@@ -18,6 +18,10 @@ def generate_launch_description():
     # port 7447. This override forces the router process onto a mode:"router"
     # config instead.
     router_config_candidates = [
+        os.path.join(root, "config/zenoh_router_pi.json5")
+        for root in [os.environ.get("PIXI_PROJECT_ROOT")]
+        if root
+    ] + [
         os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), "../../../config/zenoh_router_pi.json5"
