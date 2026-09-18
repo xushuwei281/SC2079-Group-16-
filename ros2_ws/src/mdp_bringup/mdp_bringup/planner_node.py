@@ -647,8 +647,13 @@ class PlannerNode(Node):
 
         req = BullseyeOrbit.Request()
         req.obstacle_id = leg.obstacle_id
-        req.obstacle_x_cm = target_ob.x
-        req.obstacle_y_cm = target_ob.y
+        # obstacle_x_cm/obstacle_y_cm are float32 in the .srv; Obstacle.x/y are
+        # plain ints (arena.py), and the generated rosidl Python->C converter
+        # hard-asserts PyFloat_Check on these fields rather than coercing --
+        # an int here aborts the whole process (SIGABRT), not a catchable
+        # Python exception.
+        req.obstacle_x_cm = float(target_ob.x)
+        req.obstacle_y_cm = float(target_ob.y)
         req.nominal_face = nominal_face
         req.target_clearance_cm = self._view_dist
 

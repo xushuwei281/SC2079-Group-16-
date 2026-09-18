@@ -121,6 +121,46 @@ class TestPlannerNode(unittest.TestCase):
         self.assertNotEqual(self.node._state, MissionState.ESTOP)
         self.assertTrue(self.node._is_executing)
 
+    def test_closed_loop_orbit_request_uses_real_float_fields(self):
+        """BullseyeOrbit.Request.obstacle_x_cm/obstacle_y_cm are float32 in the
+        .srv; Obstacle.x/y (arena.py) are plain ints. The generated rosidl
+        Python->C converter hard-asserts PyFloat_Check on these fields instead
+        of coercing an int, which SIGABRTs the whole process (not a catchable
+        Python exception) rather than failing an assertion here -- so this
+        exercises the REAL BullseyeOrbit.Request class (not a mock) to make
+        sure _try_closed_loop_orbit always passes float(...), the only way
+        this class of bug can be caught by a test at all."""
+        from arena import Obstacle
+        from planner import PlanLeg
+
+        target_ob = Obstacle(id=1, x=60, y=60, face="N")
+        self.assertIsInstance(target_ob.x, int)
+        leg = PlanLeg(
+            obstacle_id=1,
+            target_face="N",
+            start_pose=self.node._current_pose,
+            vantage_pose=self.node._current_pose,
+            poses=[],
+            commands=[],
+            raw_strings=[],
+            distance_cm=0.0,
+        )
+        self.node._is_executing = True
+        self.node._orbit_client.service_is_ready = MagicMock(return_value=True)
+        done_future = MagicMock()
+        done_future.done.return_value = True
+        done_future.result.return_value = MagicMock(success=False, status="NO_RESPONSE")
+        self.node._orbit_client.call_async = MagicMock(return_value=done_future)
+
+        # Would SIGABRT the whole test process on the old code (a plain int
+        # assigned to obstacle_x_cm/obstacle_y_cm); reaching here at all means
+        # the real message construction survived.
+        self.node._try_closed_loop_orbit(leg, target_ob, "N")
+
+        sent_req = self.node._orbit_client.call_async.call_args[0][0]
+        self.assertEqual(sent_req.obstacle_x_cm, 60.0)
+        self.assertEqual(sent_req.obstacle_y_cm, 60.0)
+
     def test_orbit_recovery_detects_target_on_adjacent_face(self):
         """Test that _inspect_adjacent_faces finds target on an adjacent face."""
         from arena import Obstacle, default_arena
