@@ -111,6 +111,17 @@ drift apart.
 
 ## STM32 Firmware (`stm32/`)
 
+- **Reverted to pre-calibration firmware (2026-09-18)**: `stm32/include/velocity_control.h`
+  and `stm32/src/main.c` were rolled back to their 2026-09-11 14:14 state
+  (commit `a3d6c89`, PR/commit `09db539`) and reflashed to the C30D board over
+  Port 1 (`platformio run --target upload`, `[SUCCESS]`) — confirmed working
+  on hardware. **This supersedes the "Measured Turning Radius & Steering" and
+  "Effective Wheel Diameter" bullets below**: the board currently runs
+  `SERVOLEFT=101`, `SERVOCENTER=146`, `WHEEL_D_CM=6.5f`, PWM feedforward/KP at
+  2.0f/1.5f, and without the 2026-09-14 IR/ultrasonic clamp fix, echo-ringing
+  rejection, or the 8-tick proximity-confirmation debounce. Those bullets stay
+  below as a record of what was previously derived (and may be reapplied) —
+  check `git log -- stm32/` before assuming any of them are live.
 - **Continuous Range Safety Ownership**: `motion_controller_node` is the Pi-side
   safety owner for every forward `/cmd_vel` source (teleop, Task 1, and Task 2),
   at 12/10 cm ultrasonic/IR thresholds. It reads the Kalman-filtered
@@ -144,6 +155,29 @@ drift apart.
 
 ## ROS 2 Bridges & Teleoperation (`ros2_ws/`)
 
+- **Zenoh Client Config Path Resolution (2026-09-18, commit `5c6875b`)**:
+  `robot.launch.py`, `hardware.launch.py`, `teleop.launch.py`, `task2.launch.py`,
+  and `mdp_camera_bringup/camera.launch.py` resolved `ZENOH_SESSION_CONFIG_URI`
+  relative to the *installed* launch file location
+  (`install/<pkg>/share/<pkg>/launch/`), two directory levels short of the
+  actual `config/` dir, with a hardcoded fallback pointing at a different
+  machine's checkout path (`/home/mdp/dev/SC2079-Group-16/...`). Both misses
+  left `zenoh_cfg` pointing nowhere, killing `motion_controller_node`, the
+  static TF publishers, and `foxglove_bridge` on launch with "Invalid
+  configuration file". Fixed by trying `PIXI_PROJECT_ROOT` (set by pixi for
+  every task, correct regardless of checkout path) first; old candidates kept
+  as last-resort fallback for a bare `ros2 launch` outside pixi.
+- **pixi.toml dependency audit (2026-09-18, commit `a6aca87`)**: removed three
+  deps confirmed unused anywhere in `src/`: `ros-jazzy-v4l2-camera`
+  (`camera.launch.py` actually launches a custom Picamera2-shared-memory
+  `pi_camera_node`, not the `v4l2_camera` ROS package — cleaned up matching
+  stale `v4l2-compat.so`/LD_PRELOAD references left in `mdp_camera_bringup`'s
+  `package.xml`/`setup.py`/launch docstring from before that rewrite),
+  `ros-jazzy-tf2-geometry-msgs` (never imported; only `tf2_ros` is used
+  anywhere), and `ros-jazzy-vision-msgs` (declared in `mdp_perception`'s
+  `package.xml` but never imported). `pygame` (`[feature.common]`, only used
+  by `algorithm/simulator.py`'s desktop GUI) was deliberately left installable
+  on the Pi too, per team preference, despite the robot never running it.
 - **1-Deep Move Queue in `android_bridge_node`**: When direction buttons are held on Android (streamed every 50–60 ms), in-flight moves buffer the newest command in `self._pending_move` and suppress noisy `BUSY_LOCAL` status messages. On move completion callback, pending moves chain immediately without returning to idle.
 - **Serial Bridge Retry & Buffer Management**: `serial_bridge_node` flushes the serial input buffer once before the retry loop, and drains residual output with backoff upon receiving `BUS\r\n`, preventing buffer wipes of incoming `RUN\r\n` handshakes.
 - **E-STOP Reset Forwarding in Serial Bridge**: On receiving `/android/cmd` `RESET` or `ALG|...`, `serial_bridge_node` clears its local `_estop_event` and `_busy` flags and sends `b"R\x00\x00\x00\x00"` to un-latch the STM32 firmware's `estopFlag`, resolving the post-E-STOP `NO_RESPONSE` freeze.
@@ -246,6 +280,86 @@ drift apart.
   correctly. If it breaks again, suspect a stale prefix before assuming a
   real ogre2 bug. `headless:=true` (physics/topics/services all still work)
   plus Foxglove or RViz remains a valid fallback if needed.
+
+## Bluetooth RFCOMM Provisioning (Pi)
+
+- The one-time-per-Pi OS setup in `ros2_ws/bluetooth-setup/` (see its
+  `README.md`) had never been run on this machine as of 2026-09-18:
+  `bluetoothd` wasn't in `--compat` mode (needed for `sdptool`), the adapter
+  was soft rfkill-blocked and powered off, no SPP SDP record existed, no
+  tablet was paired, and neither `mdp-bluetooth-setup.service` nor
+  `mdp-rfcomm-listen.service` was installed under systemd.
+- Provisioned per the README: installed `bluetooth-compat-override.conf` to
+  `/etc/systemd/system/bluetooth.service.d/override.conf`, copied
+  `bring-up-and-register.sh`/`rfcomm-listen.sh` to `/opt/mdp/bluetooth-setup/`
+  (the path the systemd unit files hardcode), installed + `enable --now`'d
+  both units, restarted `bluetoothd`, and ran `bring-up-and-register.sh`
+  (clears the soft rfkill block, powers the adapter, registers the SPP SDP
+  record on RFCOMM channel 1). `rfcomm watch 0 1` is now running persistently
+  under `mdp-rfcomm-listen.service`, surviving reboots.
+- Paired the tablet: `Galaxy Tab A7 Lite` (`F4:F3:09:BA:6E:94`) — confirmed
+  `Paired: yes`, `Trusted: yes` via `bluetoothctl info`.
+- **`pair-agent.sh` has a live bug**: each `bluetoothctl <cmd>` line in the
+  script is its own one-shot subprocess, so the agent registered by
+  `agent NoInputNoOutput` is gone (its D-Bus connection closes) by the time
+  the next line's `default-agent` runs in a fresh process — fails with
+  "No agent is registered". Worked around by driving one persistent
+  `bluetoothctl` session over a named pipe (`mkfifo`, `exec 3<>fifo`,
+  `bluetoothctl <&3 &`, then `printf 'cmd\n' > fifo` from later shell
+  invocations — note a plain `>` open on the fifo works fine as a follow-up
+  writer as long as `bluetoothctl` still holds the read end open; you don't
+  need to reopen fd 3 in every subsequent shell call). The script itself is
+  still unfixed.
+
+## Perception (`mdp_perception`) — NCNN Backend (2026-09-18)
+
+- `TargetDetector._load_model` tries, in order: an Ultralytics NCNN export
+  directory (`<base_name>_ncnn_model/`, fastest on Pi CPU, no torch), a
+  `.onnx` file via onnxruntime, then a `.pt` fallback via `ultralytics` —
+  that last path is only reachable off-Pi, since the `pi` pixi environment
+  deliberately keeps `ultralytics`/`torch` off the robot (see `pixi.toml`).
+  Loading a bare `.pt` on the Pi with no matching NCNN/ONNX export fails
+  *silently* into mock mode (always "no detection", ~9ms instead of real
+  inference) rather than raising a visible error — confirmed by pointing
+  `perception_node` at the raw COCO-pretrained `yolov8n.pt` (downloaded from
+  the `ultralytics/assets` GitHub release `v8.3.0`, since deleted — verified
+  it was stock COCO by grepping its `data.pkl` for the literal class-name
+  ordering `names`/`person`/`bicycle`/`car`, not the project's `11`-`40`
+  symbol set): `ModuleNotFoundError: No module named 'ultralytics'`, silently
+  swallowed into the mock-mode warning print.
+  Do not point `model_path` at a `.pt` with no NCNN/ONNX sibling on the Pi.
+- **NCNN thread count 2→4** (`detector.py` `_load_ncnn`, commit `6e9ed41`):
+  was capped at 2 threads to leave headroom for `motion_controller_node`/
+  `serial_bridge_node`'s real-time loop. Measured `/perception/sample_target`
+  latency on hardware: ~3.3-4.0s/call at 2 threads (deployed `best_ncnn_model`,
+  214 layers/39.4MB `.bin`, imgsz 480) vs ~1.55-1.65s at 4 threads. Judged
+  worth the CPU contention since a sample call is a short on-demand burst
+  (robot stopped at an obstacle), not continuous inference.
+- **`models/best-yolov8n-baseline_ncnn_model/`** (committed by the CV
+  teammate's agent, `125ff3b`): a from-scratch yolov8n architecture trained
+  on the same `data.yaml` classes (`11`-`40`, `marker`), exported at imgsz
+  640, 12.1MB `.bin` — a genuine baseline-comparison model, distinct from the
+  stock COCO `yolov8n.pt` above. Swapping `perception_node` onto it
+  (`--ros-args -p model_path:=models/best-yolov8n-baseline.pt`) measured
+  ~1.06-1.26s/call at 4 threads with real, confident detections (e.g. marker
+  conf 0.96) — faster than the deployed model despite the larger 640 imgsz,
+  because it's a genuinely smaller architecture. Further speedup needs a
+  re-export at smaller imgsz or int8 quantization, both requiring
+  `ultralytics` on a PC — not doable from the Pi. As of this writing
+  `perception_node` is running standalone on this baseline model (started
+  via the CLI override above, outside the `robot.launch.py` tree) — it is
+  **not** wired into `robot.launch.py` as the default; that launch file's
+  `perception` Node still has no `parameters=` block, so a full
+  `pixi run -e pi robot` relaunch would revert to `best_ncnn_model`.
+- **rosidl stale-build gotcha**: after the CV teammate's agent added
+  `TrackedTarget.msg`/`TrackingControl.msg`/`BullseyeOrbit.srv` to
+  `mdp_interfaces`, an incremental `colcon build` left the C typesupport
+  `.so` out of sync (`undefined symbol:
+  mdp_interfaces__srv__execute_moves__event__convert_to_py`) even after the
+  Python-level `ImportError` for the new message types had already cleared
+  via a prior rebuild. A full `pixi run -e pi clean && pixi run -e pi build`
+  was required — incremental colcon builds are not reliable after adding new
+  interfaces to an already-built `mdp_interfaces`.
 
 ## Android Remote Control & Real-Time Dashboards (`android/`)
 
