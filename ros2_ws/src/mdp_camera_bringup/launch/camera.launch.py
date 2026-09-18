@@ -1,9 +1,8 @@
 """Launch the Pi camera driver.
 
-v4l2_camera running against Raspberry Pi's libcamera-V4L2 adaptation layer
-(LD_PRELOAD of v4l2-compat.so, which runs the SYSTEM libcamera 0.7.x under
-the hood). See pixi.toml [feature.pi.dependencies] for why camera_ros was
-rejected. Run on the Pi only:
+Spawns the system Picamera2 daemon and bridges its shared-memory frames
+(see mdp_camera_bringup/pi_camera_node.py) into ROS 2 topics. Run on the
+Pi only:
 
     pixi run -e pi camera
 
@@ -17,8 +16,6 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-
-V4L2_COMPAT_SO = "/usr/libexec/aarch64-linux-gnu/libcamera/v4l2-compat.so"
 
 
 def generate_launch_description():

@@ -60,7 +60,6 @@ pyserial = ">=3.5,<4"
 # odom -> base_link, and which node that is is still an open decision
 # (planner on the PC vs serial_bridge_node on the Pi), so both get tf2.
 ros-jazzy-tf2-ros = ">=0.36.20,<0.37"
-ros-jazzy-tf2-geometry-msgs = ">=0.36.20,<0.37"
 
 # Image transport plugins must exist on BOTH ends of a compressed topic: the
 # Pi's camera driver publishes, mdp_perception on the PC subscribes.
@@ -114,15 +113,15 @@ ZENOH_ROUTER_CHECK_ATTEMPTS = "10"
 platforms = ["linux-aarch64"]
 
 [feature.pi.dependencies]
-# Camera driver: v4l2_camera running against Raspberry Pi's official
-# libcamera-V4L2 adaptation layer (LD_PRELOAD of
-# /usr/libexec/aarch64-linux-gnu/libcamera/v4l2-compat.so, set in
-# mdp_camera_bringup's launch file).
-ros-jazzy-v4l2-camera = "*"
-
 # Foxglove Studio websocket bridge (default ws://<pi>:8765) for live
 # visualization/debugging from a laptop.
 ros-jazzy-foxglove-bridge = "*"
+
+[feature.pi.pypi-dependencies]
+# NCNN inference for mdp_perception's edge target -- ARM-NEON-tuned, no
+# torch pulled in (unlike ultralytics, which stays pc-only; see the
+# [feature.pc] comment below).
+ncnn = "*"
 
 [feature.pi.tasks]
 # Explicit list of what runs on the robot.
@@ -135,7 +134,7 @@ hardware = { cmd = "ros2 launch mdp_bringup hardware.launch.py", description = "
 teleop = { cmd = "ros2 launch mdp_bringup teleop.launch.py", description = "Start manual teleop stack (Zenoh, STM32 UART, Android Bluetooth)" }
 planner = { cmd = "ros2 run mdp_bringup planner_node", description = "Start the autonomous path planner on the Pi" }
 fastest-car = { cmd = "ros2 run mdp_bringup fastest_car_node", description = "Start Task 2 fastest car sprint node on the Pi" }
-perception = { cmd = "ros2 run mdp_perception perception_node", description = "Start local ONNX target detection on the Pi" }
+perception = { cmd = "ros2 run mdp_perception perception_node", description = "Start local NCNN/ONNX target detection on the Pi" }
 camera = { cmd = "ros2 launch mdp_camera_bringup camera.launch.py", description = "Start the Pi camera driver" }
 foxglove = { cmd = "ros2 launch foxglove_bridge foxglove_bridge_launch.xml", description = "Start the Foxglove websocket bridge (ws://mdp.local:8765)" }
 
@@ -156,7 +155,6 @@ scripts = ["scripts/activate_zenoh_pc.sh"]
 [feature.pc.dependencies]
 ros-jazzy-rviz2 = ">=14.1.20,<15"
 ros-jazzy-cv-bridge = ">=4.1.0,<5"
-ros-jazzy-vision-msgs = ">=4.1.1,<5"
 ros-jazzy-xacro = ">=2.1.1,<3"
 ros-jazzy-robot-state-publisher = ">=3.3.3,<4"
 ros-jazzy-joint-state-publisher = ">=2.4.1,<3"

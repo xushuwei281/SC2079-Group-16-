@@ -19,7 +19,7 @@ setup(
     zip_safe=True,
     maintainer="Ray Shao",
     maintainer_email="frieddeli@gmail.com",
-    description="Launch and configuration for the Pi camera driver (v4l2_camera over the libcamera-V4L2 compat layer)",
+    description="Launch and configuration for the Pi camera driver (Picamera2 shared-memory bridge)",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [

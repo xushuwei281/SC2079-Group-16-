@@ -3,11 +3,10 @@
 <package format="3">
   <name>mdp_camera_bringup</name>
   <version>0.0.1</version>
-  <description>Launch and configuration for the Pi camera driver (v4l2_camera over the libcamera-V4L2 compat layer)</description>
+  <description>Launch and configuration for the Pi camera driver (Picamera2 shared-memory bridge)</description>
   <maintainer email="frieddeli@gmail.com">Ray Shao</maintainer>
   <license>Apache-2.0</license>
 
-  <exec_depend>v4l2_camera</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
