@@ -88,7 +88,7 @@ def generate_launch_description():
     )
     turning_radius_arg = DeclareLaunchArgument(
         "turning_radius_cm",
-        default_value="21.0",
+        default_value="28.0",
         description="Turning radius in cm for Reeds-Shepp path planner",
     )
     run_perception_arg = DeclareLaunchArgument(
@@ -158,6 +158,16 @@ def generate_launch_description():
         output="screen",
     )
 
+    # 6b. Closed-loop bullseye heatseek + orbit-recovery node (meaningless
+    # without perception running, so gated on the same run_perception arg).
+    bullseye_orbit = Node(
+        package="mdp_bringup",
+        executable="bullseye_orbit_node",
+        name="bullseye_orbit_node",
+        condition=IfCondition(LaunchConfiguration("run_perception")),
+        output="screen",
+    )
+
     # 7. Static Sensor Transforms (TF base_link -> ultrasonic_link, ir_left_link, ir_right_link)
     tf_ultrasonic = Node(
         package="tf2_ros",
@@ -205,6 +215,7 @@ def generate_launch_description():
             camera_launch,
             planner,
             perception,
+            bullseye_orbit,
             tf_ultrasonic,
             tf_ir_left,
             tf_ir_right,

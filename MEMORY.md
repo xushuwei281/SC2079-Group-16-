@@ -52,6 +52,44 @@ Persistent notes about work done in this repo so later agents don't re-derive it
   and [migration/bench guide](docs/cmd-vel-migration.md). Older discrete-batch
   notes below are historical where they conflict with this section.
 
+## Planner turning radius 21 cm -> 28 cm (2026-09-18)
+
+- **Why:** Task 1 vantage poses were ~10 cm off (S-face obstacle: car ended too
+  far right in x after right turns). Team re-measured the physical full-lock
+  radius on the current (reverted, `SERVOLEFT=101`) firmware as **28 cm**, while
+  the planner was drawing 21 cm Reeds-Shepp arcs. Turns terminate on gyro yaw,
+  so every 90° turn landed ~7 cm off in x and y versus the plan.
+- **Changed (planner prediction only, 3 values):**
+  - `algorithm/arena.py:24` `TURNING_RADIUS_CM` 21.0 -> 28.0
+  - `ros2_ws/src/mdp_bringup/mdp_bringup/planner_node.py:90` param `turning_radius_cm` 21.0 -> 28.0
+  - `ros2_ws/src/mdp_bringup/launch/robot.launch.py:91` launch arg `turning_radius_cm` "21.0" -> "28.0"
+- **Deliberately NOT changed:** `motion_controller_node`/`serial_bridge_node`
+  `velocity_turn_radius_m` (0.21), firmware `VELOCITY_MIN_RADIUS_MM` (210) and
+  servo endpoints, Android `JOYSTICK_TURN_RADIUS_M` / `teleop_min_turn_radius_m`
+  (0.21), sim launch files (`sim_robot.launch.py:80` still 21.0). In those
+  layers "21 cm" just means "command full lock", which physically is 28 cm, so
+  planner and robot now agree. Only side effect: the firmware's rear-wheel
+  differential speeds are still sized for a 21 cm arc (a little tyre scrub).
+  Never change the controller to 0.28 alone — firmware would then give only
+  ~80% lock (radius > 28 cm). An all-layers 28 cm change needs controller +
+  serial bridge + firmware 280 (reflash) + teleop radius together.
+- **Verified:** `algorithm/test` 13/13 pass (run with
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ros2_ws/.pixi/envs/pi/bin/python -m pytest test`
+  from `algorithm/`; the ROS `launch_testing` pytest plugin breaks plain
+  collection). Default arena: 448.9 cm / 33 cmds at 28 vs 419.4 cm / 34 cmds
+  at 21, same per-leg methods (legs 1, 2, 5 use A* fallback at both radii).
+  Not yet verified on hardware.
+- **Revert:** from repo root, `git apply -R docs/revert-patches/turning-radius-28cm.patch`
+  (patch contains only these 3 lines; other uncommitted edits in the same files
+  are untouched), then `pixi run -e pi build`. Or at runtime without editing
+  code: `pixi run -e pi robot turning_radius_cm:=21.0` (pixi appends the arg
+  to `ros2 launch mdp_bringup robot.launch.py`) — but note `algorithm/arena.py`'s constant is also the default for any code path
+  that doesn't receive the radius explicitly.
+- Unrelated open issue found during the same investigation (not fixed):
+  planner treats pose as body centre while STM32 odometry tracks the rear-axle
+  midpoint (~7 cm behind centre per the sim URDF, unmeasured on hardware) —
+  expected to leave ~7 cm (E/W faces) to ~14 cm (N face) error.
+
 ## Algorithm package (`algorithm/`)
 
 Pure-Python pathfinding + arena simulator (runs on a laptop/PC, no ROS2 dep).

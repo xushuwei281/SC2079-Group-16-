@@ -1,0 +1,16 @@
+# Closed-loop bullseye heatseek + orbit-recovery. Owned by bullseye_orbit_node.
+# Blocks the caller (planner_node) for the duration of the maneuver, mirroring
+# ExecuteMoves's blocking-service pattern; the node drives /cmd_vel/teleop
+# internally on its own timer while this call is outstanding.
+int32 obstacle_id
+float32 obstacle_x_cm
+float32 obstacle_y_cm
+string nominal_face           # cardinal face (N/S/E/W) the bullseye was seen on
+float32 target_clearance_cm   # desired standoff distance, default 25.0
+---
+bool success
+int32 symbol_id
+string symbol_name
+float32 confidence
+string found_face             # cardinal face where the target was confirmed
+string status                 # OK | TIMEOUT | LOST_TARGET | SAFETY_ABORT | NO_VALID_FACE

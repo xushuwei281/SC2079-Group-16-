@@ -1,0 +1,33 @@
+--- a/algorithm/arena.py
++++ b/algorithm/arena.py
+@@ -21,7 +21,7 @@
+ START_ZONE_CM = 40           # 40cm x 40cm at the bottom-left corner
+ ROBOT_W_CM = 19              # 19cm width (transverse)
+ ROBOT_H_CM = 23              # 23cm length (longitudinal)
+-TURNING_RADIUS_CM = 21.0     # calibrated 21.0cm physical turning radius (42cm diameter)
++TURNING_RADIUS_CM = 28.0     # measured 28.0cm physical full-lock turning radius (was 21.0, see MEMORY.md 2026-09-18)
+ OBSTACLE_SIZE_CM = 10        # 10cm x 10cm footprint
+ IMAGE_RECOG_DIST_CM = 20     # ideal camera distance to an obstacle
+ 
+--- a/ros2_ws/src/mdp_bringup/mdp_bringup/planner_node.py
++++ b/ros2_ws/src/mdp_bringup/mdp_bringup/planner_node.py
+@@ -87,7 +87,7 @@
+     def __init__(self) -> None:
+         super().__init__("planner_node")
+ 
+-        self.declare_parameter("turning_radius_cm", 21.0)
++        self.declare_parameter("turning_radius_cm", 28.0)
+         self.declare_parameter("camera_view_dist_cm", 25.0)
+         self.declare_parameter("auto_start", True)
+         self.declare_parameter("enable_collision_avoidance", True)
+--- a/ros2_ws/src/mdp_bringup/launch/robot.launch.py
++++ b/ros2_ws/src/mdp_bringup/launch/robot.launch.py
+@@ -88,7 +88,7 @@
+     )
+     turning_radius_arg = DeclareLaunchArgument(
+         "turning_radius_cm",
+-        default_value="21.0",
++        default_value="28.0",
+         description="Turning radius in cm for Reeds-Shepp path planner",
+     )
+     run_perception_arg = DeclareLaunchArgument(

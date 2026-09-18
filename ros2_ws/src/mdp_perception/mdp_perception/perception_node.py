@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
+from mdp_interfaces.msg import TrackedTarget, TrackingControl
 from mdp_interfaces.srv import SampleTarget
 from mdp_perception.detector import TargetDetector
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -58,6 +59,13 @@ class PerceptionNode(Node):
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_header = None
 
+        # Closed-loop visual-servo tracking (bullseye_orbit_node), gated
+        # independently of continuous_inference so it only costs Pi cycles
+        # during an active approach/orbit maneuver.
+        self._tracking_enabled = False
+        self._tracking_rate_hz = 10.0
+        self._last_track_time = 0.0
+
         # Live rolling detection buffer for zero-wait consensus sampling
         # Stores tuples: (timestamp, detections, raw_frame_copy)
         self._buffer_lock = threading.Lock()
@@ -87,6 +95,11 @@ class PerceptionNode(Node):
             CompressedImage, "/perception/image_annotated", qos_profile_sensor_data
         )
         self._status_pub = self.create_publisher(String, "/android/status", 10)
+        # Continuous visual-servo error signal for bullseye_orbit_node --
+        # only populated while tracking is enabled, see _on_tracking_control.
+        self._track_pub = self.create_publisher(
+            TrackedTarget, "/perception/tracked_target", qos_profile_sensor_data
+        )
 
         # Subscribers
         self._image_sub = self.create_subscription(
@@ -94,6 +107,10 @@ class PerceptionNode(Node):
         )
         self._status_sub = self.create_subscription(
             String, "/android/status", self._on_status, 10, callback_group=status_callback_group
+        )
+        self._tracking_ctrl_sub = self.create_subscription(
+            TrackingControl, "/perception/tracking_control", self._on_tracking_control, 1,
+            callback_group=status_callback_group
         )
 
         # Service Server for fast consensus sampling
@@ -116,6 +133,54 @@ class PerceptionNode(Node):
                     except ValueError:
                         pass
 
+    def _on_tracking_control(self, msg: TrackingControl) -> None:
+        """Enable/disable the continuous TrackedTarget stream for bullseye_orbit_node."""
+        self._tracking_enabled = bool(msg.enable)
+        self._tracking_rate_hz = float(msg.rate_hz) if msg.rate_hz > 0.0 else 10.0
+        if not self._tracking_enabled:
+            # Publish one final "nothing to see" frame so a consumer mid-loop
+            # doesn't act on a stale last-known detection after disabling.
+            stale = TrackedTarget()
+            stale.valid = False
+            self._track_pub.publish(stale)
+
+    def _best_tracked_detection(self, detections) -> TrackedTarget:
+        """Pick the same-priority detection _evaluate_consensus would (real
+        symbol > high-confidence > marker) from a single frame's detections
+        and normalize its bbox for visual-servo use."""
+        track = TrackedTarget()
+        track.valid = False
+        if not detections:
+            return track
+
+        real_symbols = [d for d in detections if 11 <= d[1] <= 40]
+        markers = [d for d in detections if str(d[0]).lower() in ("target", "marker", "bullseye")]
+
+        if real_symbols:
+            name, sid, conf, box = max(real_symbols, key=lambda d: d[2])
+            is_marker = False
+        elif markers:
+            name, sid, conf, box = max(markers, key=lambda d: d[2])
+            is_marker = True
+        else:
+            return track
+
+        x1, y1, x2, y2 = box
+        with self._buffer_lock:
+            frame = self._latest_frame
+        h, w = (frame.shape[0], frame.shape[1]) if frame is not None else (1, 1)
+
+        track.valid = True
+        track.is_marker = is_marker
+        track.symbol_id = int(sid)
+        track.symbol_name = str(name)
+        track.confidence = float(conf)
+        track.cx_norm = (((x1 + x2) / 2.0) / w - 0.5) * 2.0
+        track.cy_norm = (((y1 + y2) / 2.0) / h - 0.5) * 2.0
+        track.width_norm = (x2 - x1) / w
+        track.height_norm = (y2 - y1) / h
+        return track
+
     def _on_image(self, msg: Image) -> None:
         """Process incoming frame from the Raspberry Pi camera with duty-cycling."""
         if self._shutdown_event.is_set() or not rclpy.ok():
@@ -133,6 +198,7 @@ class PerceptionNode(Node):
 
         now = time.time()
         should_infer = False
+        should_track = False
         if self._continuous_inference:
             should_infer = True
         elif (
@@ -141,12 +207,19 @@ class PerceptionNode(Node):
             and (now - self._last_preview_time) >= (1.0 / self._preview_fps)
         ):
             should_infer = True
+        elif self._tracking_enabled and (now - self._last_track_time) >= (1.0 / self._tracking_rate_hz):
+            should_infer = True
+            should_track = True
 
         if should_infer:
             self._last_preview_time = now
+            if should_track:
+                self._last_track_time = now
             detections = self._detector.predict(frame)
             with self._buffer_lock:
                 self._detection_history.append((now, detections, frame.copy()))
+            if self._tracking_enabled:
+                self._track_pub.publish(self._best_tracked_detection(detections))
             annotated = self._detector.draw_detections(frame, detections)
         elif self._annotated_pub.get_subscription_count() > 0:
             # Low-overhead preview passthrough without running heavy YOLO
