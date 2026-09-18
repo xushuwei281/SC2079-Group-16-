@@ -47,6 +47,22 @@ pixi run -e pc build      # colcon build (whole workspace)
 pixi shell -e pc
 ```
 
+## Simulation (Gazebo) instead of hardware
+
+```bash
+pixi install -e sim
+pixi run -e sim build              # colcon build (same as -e pc, plus mdp_gazebo)
+pixi run -e sim gazebo             # world + simulated robot + cmd_vel/odom bridge
+pixi run -e sim gazebo-autonomous  # ...plus motion_controller_node + planner_node, unmodified
+```
+
+`sim` layers Gazebo Harmonic (`ros-jazzy-ros-gz-sim`/`ros-jazzy-ros-gz-bridge`)
+on top of `pc`, so it's only pulled in when you actually want to simulate —
+`pixi install -e pc` stays Gazebo-free. See `ros2_ws/src/mdp_gazebo/` and the
+"Gazebo Simulation" section of `MEMORY.md` for how the sim reproduces
+`serial_bridge_node`'s topic/TF contract so the real planner and motion
+controller run against it unmodified.
+
 ## Other tasks
 
 ```bash
@@ -107,6 +123,26 @@ Unused source on the Pi costs ~200KB of Python that never executes, since a
 ROS node only runs if something launches it.
 
 ## Common issues
+
+### `colcon build` fails on `mdp_interfaces` with "unknown architecture" / "malformed file"
+
+macOS-only, and specific to your machine's Xcode Command Line Tools install,
+not this project — Apple occasionally ships a preview SDK as the CLT
+default that the linker can't fully parse yet. Check
+`xcode-select -p`/`ls /Library/Developer/CommandLineTools/SDKs/`: if the
+default `MacOSX.sdk` symlink points at a newer preview SDK than the linker
+supports, pin `SDKROOT` to the last known-good one in your own `~/.zshrc`
+(not this repo — it's a personal machine fix, not a project one):
+`export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`
+(adjust the version to whatever's installed and stable on your machine).
+
+### Gazebo GUI (`gz sim -g`) shows nothing / "Unable to load Ogre Plugin"
+
+A packaging bug in robostack-jazzy's macOS `gz-rendering8-ogre2` build, not
+fixable from here — see `~/.gz/rendering/ogre2.log` for the underlying
+corrupted-path error. Use `pixi run -e sim gazebo headless:=true` and
+visualize through Foxglove or RViz instead; physics and all ROS topics work
+fine headless.
 
 ### `environment 'pi' is not available on platform osx-arm64`
 

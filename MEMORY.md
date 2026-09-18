@@ -159,6 +159,94 @@ drift apart.
   - **Task 2 Mode**: `pixi run -e pi task2` (fastest car reactive sprint).
   - **Runtime Switching**: `android_bridge_node` routes `ALG:START` to `planner_node` and `STM:sp`/`SP` to `fastest_car_node` without node restarts.
 
+## Gazebo Simulation (`ros2_ws/src/mdp_gazebo/`, pixi `-e sim`)
+
+- New pixi environment `sim = [common, pc, sim]` (`ros2_ws/pixi.toml`) layers
+  `ros-jazzy-ros-gz-sim`/`ros-jazzy-ros-gz-bridge` (Gazebo Harmonic) on top of
+  `pc`, so plain `pc` installs (perception dev) don't pay for Gazebo. Tasks:
+  `pixi run -e sim gazebo` (world + robot + bridges) and
+  `pixi run -e sim gazebo-autonomous` (adds `motion_controller_node` +
+  `planner_node`, unmodified, driving the simulated robot).
+- **Design: `sim_bridge_node` reproduces `serial_bridge_node`'s ROS contract**,
+  not the hardware. It subscribes the DiffDrive plugin's bridged odometry
+  (`/sim/odom`) and republishes `/robot_pose(/raw)` (PoseStamped, `odom`
+  frame) plus the `odom->base_link` TF and the ultrasonic/IR `Range` topics —
+  same topics, frames, and message shapes `serial_bridge_node` provides on
+  the Pi. This is why `motion_controller_node`/`planner_node` need zero
+  changes to run against sim (see `gazebo-autonomous` above).
+- The Range topics are a **stub** (always max-range/"clear", fresh
+  timestamp) — no obstacle-sensing beams are simulated. It exists solely so
+  `motion_controller_node`'s `SENSOR_STALE`/`PROXIMITY` interlock doesn't
+  block forward motion in sim. Real collision-triggered stopping isn't
+  testable in sim yet.
+- Arena world (`worlds/mdp_arena.sdf`) is a flat 200x200cm plane with its
+  **bottom-left corner at the Gazebo world origin**, matching
+  `algorithm/arena.py`'s `ARENA_SIZE_CM=200` coordinate convention exactly —
+  a spawned pose in metres times 100 equals the arena/planner pose in cm, no
+  transform needed (confirmed from `planner_node.py:_on_pose`, which already
+  does `x_cm = msg.pose.position.x * 100.0`). Robot spawns at (0.2, 0.2),
+  the real 40x40cm start zone's centre.
+- Robot description (`description/mdp_robot.urdf.xacro`) visuals come from
+  Wheeltec's `mini_diff_robot_meshes` STLs (user-supplied, from a local
+  `wheeltec_robot_urdf` copy — no license file ships with them, check terms
+  before distributing this repo further). **Only the wheel radius/width
+  (33.2mm / 28.6mm) came from measuring those meshes' own bounding boxes**
+  (no wheel-diameter constant exists anywhere else in the repo); wheel
+  separation (0.15m) is `docs/stm32-uart-protocol-spec.md`'s 150mm track,
+  independently confirmed by the base mesh's own 153.6mm footprint width.
+  The chassis **collision** box uses the real footprint instead
+  (`algorithm/arena.py` `ROBOT_W_CM`/`ROBOT_H_CM` = 19/23cm) since that's
+  what should govern physics/clearance, not the stand-in visual mesh.
+  Chassis height and caster placement are unmeasured visual estimates.
+- **Two unrelated macOS-toolchain bugs surfaced while getting the sim to
+  actually run**, both pre-existing (confirmed identical on plain `-e pc`,
+  nothing to do with this package):
+  - **Colcon build failure** (`libSystem.tbd: ... unknown architecture
+    arm64e.x1-macos`): this Mac's Xcode CLT had updated to a `27.0` preview
+    SDK whose `libSystem.tbd` lists an `arm64e.x1-macos` target the linker
+    can't parse. Fix lives in `~/.zshrc` (personal, not the repo — it's
+    this-machine-specific, not project-specific):
+    `export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`.
+  - **Every node importing an `mdp_interfaces` type crashed at runtime**
+    (`Library not loaded: @rpath/libmdp_interfaces__rosidl_generator_py.dylib`,
+    then separately `rmw_cyclonedds_cpp`/`rmw_zenoh_cpp` failing to
+    `dlopen()` `libmdp_interfaces__rosidl_typesupport_introspection_c.dylib`
+    by bare name when creating any service/client of an mdp_interfaces
+    type — e.g. `motion_controller_node`'s `/execute_moves` or
+    `planner_node`'s client of it). Two different bugs needing two
+    different fixes:
+    1. mdp_interfaces' 3 Python typesupport `.so`s are missing an rpath
+       back to their own package's `lib/`. `pixi run -e pc build` now runs
+       `scripts/fix_macos_mdp_interfaces_rpath.sh` afterward to patch it
+       (must use the conda env's own `install_name_tool`, not the system
+       one — only conda's re-signs after modifying rpaths; skipping that
+       gets the binary SIGKILLed on load). No-op on Linux; wiped by every
+       rebuild, hence reapplied automatically rather than done once.
+    2. `rmw_cyclonedds_cpp`'s dlopen()-by-name needs
+       `DYLD_LIBRARY_PATH=install/mdp_interfaces/lib`, which rpath can't
+       provide (different loading path entirely). Confirmed pixi's own
+       `env = {...}` task field **silently drops any `DYLD_`-prefixed
+       variable** — a deliberate filter, not a bug in this repo — so it has
+       to be a literal shell-level prefix inside the task's `cmd` string
+       instead (see the `gazebo`/`gazebo-autonomous` task definitions).
+       Same applies to any *other* task added later that runs a node using
+       mdp_interfaces types under cyclonedds/zenoh on macOS.
+- **GUI rendering (`gz sim -g`) initially appeared broken on this Mac**, with
+  the OGRE2 log (`~/.gz/rendering/ogre2.log`) showing the
+  `gz-rendering8-ogre2` package's baked-in plugin directory string
+  corrupted, so every `dlopen()` of a render-system plugin failed on a
+  bogus path. **This was not an ogre2 packaging bug** — it was the same
+  stale-prefix issue as the rpath/dlopen fixes above: `.pixi/envs/{pc,sim}`
+  had been installed while this repo lived at a different absolute path
+  (it was moved/renamed since), so every conda package with a baked-in
+  absolute path — including ogre2's plugin dir string, not just
+  `colcon`/Python shebangs — pointed at a path that no longer existed.
+  `rm -rf .pixi/envs/{pc,sim} && pixi install -e sim` (relinking from the
+  local package cache, no re-download) fixed it: the GUI opens and renders
+  correctly. If it breaks again, suspect a stale prefix before assuming a
+  real ogre2 bug. `headless:=true` (physics/topics/services all still work)
+  plus Foxglove or RViz remains a valid fallback if needed.
+
 ## Android Remote Control & Real-Time Dashboards (`android/`)
 
 - **Manual Turn Speed**: The Android joystick full-deflection speed is 0.35 m/s.
