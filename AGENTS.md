@@ -269,6 +269,9 @@ pixi run -e pi task2
 
 # 4. Low-Level Hardware Base (Zenoh, UART bridge, Bluetooth bridge, Camera):
 pixi run -e pi hardware
+
+# 5. Checklist A.5 (Approach obstacle via ultrasonic, read face, orbit right if unconfirmed):
+pixi run -e pi checklist-a5
 ```
 
 ### 5.4 STM32 Firmware Operations (PlatformIO)

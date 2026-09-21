@@ -81,6 +81,23 @@ class MissionState(str, Enum):
     ESTOP = "ESTOP"
 
 
+# Fixed calibrated relative macro to orbit around an obstacle to the adjacent right face:
+# [BC 30, FR 90, FC 15, FL 180]
+ORBIT_RIGHT_MACRO: List[Tuple[str, int]] = [
+    ("BC", 30),
+    ("FR", 90),
+    ("FC", 15),
+    ("FL", 180),
+]
+
+RIGHT_FACE_MAP: Dict[str, str] = {
+    "N": "W",
+    "W": "S",
+    "S": "E",
+    "E": "N",
+}
+
+
 class PlannerNode(Node):
     """Autonomous Mission Planner & Execution Orchestrator Node."""
 
@@ -98,7 +115,7 @@ class PlannerNode(Node):
         # Sub-flag under enable_orbit_recovery: try the closed-loop visual-servo
         # heatseek+orbit service first, falling back to the existing discrete
         # candidate-face hop below on failure/timeout/service-unavailable.
-        self.declare_parameter("enable_closed_loop_orbit", True)
+        self.declare_parameter("enable_closed_loop_orbit", False)
         self.declare_parameter("closed_loop_orbit_timeout_s", 30.0)
 
         self._radius = float(self.get_parameter("turning_radius_cm").value)
@@ -687,21 +704,14 @@ class PlannerNode(Node):
     def _inspect_adjacent_faces(
         self, leg: PlanLeg, target_ob: Obstacle, arena: Dict
     ) -> Optional[Tuple[int, str, float]]:
-        """Algorithms Briefing §2.3: Orbit around obstacle to inspect adjacent faces.
+        """Algorithms Briefing §2.3: Orbit around obstacle to inspect adjacent right face.
 
-        If a Bull's Eye marker is detected on the nominal face, the target image is located
-        on one of the other faces. This method orbits to adjacent faces in sequence until a
-        valid target symbol (11-39) is confirmed.
+        If a Bull's Eye marker is detected on the nominal face, executes the hardcoded
+        Orbit Right macro: [BC 30, FR 90, FC 15, FL 180] to transition directly to the
+        adjacent right-hand face (clockwise relative to obstacle) and confirm the target symbol.
         """
         nominal_face = (leg.target_face or "N").upper()
-        if nominal_face == "N":
-            candidates = ["E", "W", "S"]
-        elif nominal_face == "S":
-            candidates = ["W", "E", "N"]
-        elif nominal_face == "E":
-            candidates = ["S", "N", "W"]
-        else:  # W
-            candidates = ["N", "S", "E"]
+        target_face = RIGHT_FACE_MAP.get(nominal_face, "W")
 
         self._transition_state(
             MissionState.ORBIT_RECOVERY,
@@ -711,74 +721,60 @@ class PlannerNode(Node):
         closed_loop_result = self._try_closed_loop_orbit(leg, target_ob, nominal_face)
         if closed_loop_result is not None:
             return closed_loop_result
-        # Falls through to the discrete candidate-face hop below on failure,
-        # timeout, or if the service is unavailable -- this proven path is
-        # kept as the safety net, not replaced.
 
-        for cand_face in candidates:
-            if not self._is_executing:
-                return None
+        if not self._is_executing:
+            return None
 
-            alt_ob = Obstacle(id=leg.obstacle_id, x=target_ob.x, y=target_ob.y, face=cand_face)
-            alt_vantage = compute_vantage_pose(alt_ob, d_view=self._view_dist, arena=arena)
+        alt_ob = Obstacle(id=leg.obstacle_id, x=target_ob.x, y=target_ob.y, face=target_face)
+        alt_vantage = compute_vantage_pose(alt_ob, d_view=self._view_dist, arena=arena)
 
-            # Safety check: boundary and collision
-            if not (15.0 <= alt_vantage.x <= 185.0 and 15.0 <= alt_vantage.y <= 185.0):
-                self.get_logger().info(f"Skipping {cand_face} face for Obs {leg.obstacle_id}: Vantage pose out of bounds.")
-                continue
-
-            if robot_collides_any(alt_vantage.x, alt_vantage.y, alt_vantage.theta, arena, safety_margin=2.0) is not None:
-                self.get_logger().info(f"Skipping {cand_face} face for Obs {leg.obstacle_id}: Vantage pose collides.")
-                continue
-
-            # Plan trajectory from current pose to candidate vantage pose
-            length, wps, sampled_poses, method = sample_reeds_shepp_path(
-                self._current_pose, alt_vantage, radius=self._radius, arena=arena
+        # Safety check: boundary and collision for the candidate vantage pose
+        if not (15.0 <= alt_vantage.x <= 185.0 and 15.0 <= alt_vantage.y <= 185.0):
+            self.get_logger().warn(
+                f"Skipping Orbit Right to {target_face} face for Obs {leg.obstacle_id}: "
+                f"Vantage pose ({alt_vantage.x:.1f}, {alt_vantage.y:.1f}) out of bounds."
             )
-            if math.isinf(length) or length > 160.0 or not wps:
+            return None
+
+        if robot_collides_any(alt_vantage.x, alt_vantage.y, alt_vantage.theta, arena, safety_margin=2.0) is not None:
+            self.get_logger().warn(
+                f"Skipping Orbit Right to {target_face} face for Obs {leg.obstacle_id}: "
+                f"Vantage pose collides with another obstacle."
+            )
+            return None
+
+        raw_macro = [f"{c}{v:03d}" for c, v in ORBIT_RIGHT_MACRO]
+        self.get_logger().info(
+            f"🔄 Orbiting Right around Obs {leg.obstacle_id} ({nominal_face} -> {target_face} face) "
+            f"via hardcoded macro: {' -> '.join(raw_macro)}"
+        )
+        self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: Orbit Right to {target_face}"))
+
+        move_ok = self._execute_commands_sync(ORBIT_RIGHT_MACRO, label=f"Orbit Right to {target_face}")
+        if not move_ok or not self._is_executing:
+            self.get_logger().warn(f"Orbit Right move to {target_face} face failed or was interrupted.")
+            return None
+
+        # Re-sample perception at the adjacent vantage pose
+        sample_result = self._query_perception_sampler(leg.obstacle_id)
+        if sample_result:
+            sid, sname, conf, is_marker = sample_result
+            if not is_marker and 11 <= sid <= 40:
                 self.get_logger().info(
-                    f"Skipping {cand_face} face for Obs {leg.obstacle_id}: Trajectory unreachable or too long ({length:.1f}cm)."
+                    f"🎉 Success! Target confirmed on {target_face} face: Symbol {sid} ({sname}) [conf={conf:.2f}]"
                 )
-                continue
+                self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: ID {sid} ({sname}) on {target_face}"))
+                self._target_pub.publish(String(data=f"{leg.obstacle_id},{sid}"))
+                self._telemetry_pub.publish(
+                    String(data=f"T1_TARGET,{leg.obstacle_id},{sid},{sname},{conf:.2f},{target_face}")
+                )
+                return (sid, sname, conf)
+            elif is_marker:
+                self.get_logger().warn(f"Adjacent {target_face} face also produced a marker (ID {sid}).")
+            else:
+                self.get_logger().warn(f"Adjacent {target_face} face produced uncertain symbol ID {sid}.")
 
-            cmds, raw_cmds = discretize_waypoints(wps)
-            if not cmds:
-                continue
-
-            self.get_logger().info(
-                f"🔄 Orbiting Obs {leg.obstacle_id} to inspect adjacent {cand_face} face "
-                f"({length:.1f}cm, {len(cmds)} cmds): {' -> '.join(raw_cmds)}"
-            )
-            self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: Orbiting to {cand_face} face"))
-
-            sub_plan = FullMissionPlan(start_pose=self._current_pose, legs=[], total_distance_cm=length, all_commands=cmds, all_poses=sampled_poses)
-            self._publish_ros_path(sub_plan)
-
-            move_ok = self._execute_commands_sync(cmds, label=f"Orbit to {cand_face}")
-            if not move_ok or not self._is_executing:
-                self.get_logger().warn(f"Orbit move to {cand_face} face failed or was interrupted.")
-                continue
-
-            # Re-sample perception at the adjacent vantage pose
-            sample_result = self._query_perception_sampler(leg.obstacle_id)
-            if sample_result:
-                sid, sname, conf, is_marker = sample_result
-                if not is_marker and 11 <= sid <= 40:
-                    self.get_logger().info(
-                        f"🎉 Success! Target confirmed on {cand_face} face: Symbol {sid} ({sname}) [conf={conf:.2f}]"
-                    )
-                    self._status_pub.publish(String(data=f"Obs {leg.obstacle_id}: ID {sid} ({sname}) on {cand_face}"))
-                    self._target_pub.publish(String(data=f"{leg.obstacle_id},{sid}"))
-                    self._telemetry_pub.publish(
-                        String(data=f"T1_TARGET,{leg.obstacle_id},{sid},{sname},{conf:.2f},{cand_face}")
-                    )
-                    return (sid, sname, conf)
-                elif is_marker:
-                    self.get_logger().info(f"Adjacent face {cand_face} also has a marker. Checking next face...")
-                else:
-                    self.get_logger().warn(f"Adjacent face {cand_face} produced uncertain symbol ID {sid}.")
-
-        self.get_logger().warn(f"Exhausted candidate adjacent faces for Obs {leg.obstacle_id}.")
+        self.get_logger().warn(f"Orbit recovery failed to confirm target on {target_face} face for Obs {leg.obstacle_id}.")
         return None
 
     def _execute_mission_loop(self) -> None:

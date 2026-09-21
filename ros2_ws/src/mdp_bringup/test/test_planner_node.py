@@ -146,6 +146,7 @@ class TestPlannerNode(unittest.TestCase):
             distance_cm=0.0,
         )
         self.node._is_executing = True
+        self.node._enable_closed_loop_orbit = True
         self.node._orbit_client.service_is_ready = MagicMock(return_value=True)
         done_future = MagicMock()
         done_future.done.return_value = True
@@ -191,6 +192,9 @@ class TestPlannerNode(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result[0], 15)
         self.assertEqual(result[1], "arrow_up")
+        self.node._execute_commands_sync.assert_called_once_with(
+            [("BC", 30), ("FR", 90), ("FC", 15), ("FL", 180)], label="Orbit Right to W"
+        )
 
     def test_unconfirmed_target_does_not_get_fabricated_id(self):
         """A failed CV sample must fail the mission, never publish a fake ID."""

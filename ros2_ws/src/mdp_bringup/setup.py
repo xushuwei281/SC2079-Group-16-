@@ -25,6 +25,7 @@ setup(
             "planner_node = mdp_bringup.planner_node:main",
             "fastest_car_node = mdp_bringup.fastest_car_node:main",
             "bullseye_orbit_node = mdp_bringup.bullseye_orbit_node:main",
+            "checklist_a5 = mdp_bringup.checklist_a5:main",
         ],
     },
 )

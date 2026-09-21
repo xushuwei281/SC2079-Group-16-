@@ -200,15 +200,19 @@ def robot_collides_any(px: float, py: float, theta: float,
                        arena: Optional[Dict] = None,
                        robot_w: Optional[float] = None,
                        robot_h: Optional[float] = None,
-                       safety_margin: float = 4.0
+                       safety_margin: float = 4.0,
+                       boundary_margin: Optional[float] = None
                        ) -> Optional[Obstacle]:
     """First obstacle or wall boundary the robot's oriented body collides with (or None)."""
     a = arena or default_arena()
+    bm = boundary_margin if boundary_margin is not None else safety_margin
     rw = (robot_w if robot_w is not None else a.get("robot_w", ROBOT_W_CM)) + 2.0 * safety_margin
     rh = (robot_h if robot_h is not None else a.get("robot_h", ROBOT_H_CM)) + 2.0 * safety_margin
+    rw_b = (robot_w if robot_w is not None else a.get("robot_w", ROBOT_W_CM)) + 2.0 * bm
+    rh_b = (robot_h if robot_h is not None else a.get("robot_h", ROBOT_H_CM)) + 2.0 * bm
 
     # 1. Check arena boundaries
-    if not robot_in_bounds(px, py, theta, a, rw, rh, margin=0.0):
+    if not robot_in_bounds(px, py, theta, a, rw_b, rh_b, margin=0.0):
         return Obstacle(id=-1, x=int(px), y=int(py), label="wall")
 
     # 2. Check each obstacle

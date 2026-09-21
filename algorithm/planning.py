@@ -204,7 +204,8 @@ def hybrid_astar(start: Config, goal: Config,
                  arena: Dict,
                  radius: float = TURNING_RADIUS_CM,
                  max_nodes: int = 1500,
-                 step: float = 2.0
+                 step: float = 2.0,
+                 safety_margin: float = 4.0
                  ) -> Tuple[float, List[Tuple], List[Tuple[float, float, float]], str]:
     """Kinematic Hybrid A* search in SE(2) respecting Ackermann turning constraints (R = 25cm)."""
     # 1. Try direct collision-free Reeds-Shepp curve first
@@ -262,7 +263,7 @@ def hybrid_astar(start: Config, goal: Config,
             # Check collision along intermediate poses with safety margin
             collision = False
             for px, py, pth in step_poses[1:]:
-                if robot_collides_any(px, py, pth, arena, safety_margin=1.0) is not None:
+                if robot_collides_any(px, py, pth, arena, safety_margin=safety_margin, boundary_margin=1.0) is not None:
                     collision = True
                     break
             if collision:
@@ -292,7 +293,8 @@ def hybrid_astar(start: Config, goal: Config,
 def plan_drive(start: Config, goal: Config,
                radius: Optional[float] = None,
                arena: Optional[Dict] = None,
-               step: float = 2.0
+               step: float = 2.0,
+               safety_margin: float = 4.0
                ) -> Dict:
     """Plan the shortest drive from start to goal, avoiding obstacles and walls.
 
@@ -303,7 +305,7 @@ def plan_drive(start: Config, goal: Config,
     r = radius if radius is not None else _turning_radius()
     a = arena or default_arena()
 
-    length, wps, poses, method = hybrid_astar(start, goal, a, radius=r, step=step)
+    length, wps, poses, method = hybrid_astar(start, goal, a, radius=r, step=step, safety_margin=safety_margin)
     if not math.isinf(length) and wps:
         return {
             "method": method,
