@@ -947,6 +947,38 @@
                     android:fontFamily="monospace"
                     android:textSize="13sp" />
             </ScrollView>
+
+            <!-- Manual raw-string send: proves the Bluetooth link is
+                 bidirectional on demand. Whatever is typed here goes out
+                 as its own line (BluetoothLinkService#sendLine), and the "→"
+                 echo plus any reply "←" line both land in statusText above. -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="@dimen/spacing_1">
+
+                <EditText
+                    android:id="@+id/btSendInput"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="@string/bt_send_hint"
+                    android:inputType="text"
+                    android:imeOptions="actionSend"
+                    android:singleLine="true"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace" />
+
+                <Button
+                    android:id="@+id/btSendButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    style="@style/Widget.Button.Secondary"
+                    android:text="@string/bt_send_button"
+                    android:layout_marginStart="@dimen/spacing_1" />
+            </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 

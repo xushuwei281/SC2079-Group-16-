@@ -140,7 +140,7 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Actions Row: Delete and Close -->
+    <!-- Actions Row: Delete -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -148,22 +148,10 @@
 
         <Button
             android:id="@+id/btnDeleteObstacle"
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="38dp"
-            android:layout_weight="1"
-            android:layout_marginEnd="@dimen/spacing_1"
             style="@style/Widget.Button.Danger"
             android:text="Delete"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/btnClosePopover"
-            android:layout_width="0dp"
-            android:layout_height="38dp"
-            android:layout_weight="1"
-            android:layout_marginStart="@dimen/spacing_1"
-            style="@style/Widget.Button.Secondary"
-            android:text="Done"
             android:textSize="12sp" />
     </LinearLayout>
 

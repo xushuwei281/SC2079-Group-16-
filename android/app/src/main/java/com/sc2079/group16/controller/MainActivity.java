@@ -18,8 +18,10 @@ import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -66,6 +68,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     private View statusDot;
     private TextView linkStatusText;
     private TextView statusTextView;
+    private EditText btSendInput;
     private ScrollView statusScrollView;
     private View statusLogContainer;
     private View statusLogDragHandle;
@@ -188,6 +191,7 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         statusDot = findViewById(R.id.statusDot);
         linkStatusText = findViewById(R.id.linkStatusText);
         statusTextView = findViewById(R.id.statusText);
+        btSendInput = findViewById(R.id.btSendInput);
         statusScrollView = findViewById(R.id.statusScrollView);
         statusLogContainer = findViewById(R.id.statusLogContainer);
         statusLogDragHandle = findViewById(R.id.statusLogDragHandle);
@@ -309,6 +313,14 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         findViewById(R.id.clearObstaclesButton).setOnClickListener(v -> arenaView.clearObstacles());
         findViewById(R.id.sendArenaButton).setOnClickListener(v -> sendArenaLayout());
         findViewById(R.id.clearLogsButton).setOnClickListener(v -> statusTextView.setText(""));
+        findViewById(R.id.btSendButton).setOnClickListener(v -> sendManualLine());
+        btSendInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                sendManualLine();
+                return true;
+            }
+            return false;
+        });
         findViewById(R.id.testModeButton).setOnClickListener(v -> {
             // Grid cells 0..19 over the 200cm arena (10cm/cell), matching
             // the real ROBOT, wire format -- see BluetoothLinkService.
@@ -525,6 +537,22 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
     }
 
     /**
+     * Sends whatever raw text is typed into btSendInput as its own line.
+     * Demonstrates that the link is bidirectional on demand: the "→" echo
+     * from BluetoothLinkService#sendLine and any reply "←" line both land
+     * in statusText, regardless of whether the text matches a known
+     * protocol command.
+     */
+    private void sendManualLine() {
+        String text = btSendInput.getText().toString().trim();
+        if (text.isEmpty()) {
+            return;
+        }
+        linkService.sendLine(text);
+        btSendInput.setText("");
+    }
+
+    /**
      * Shows an anchored Astryx Core Layer popover with 12dp clearance offset
      * over the tapped obstacle for inspecting coordinates, selecting target
      * face chips, and deleting obstacles.
@@ -545,7 +573,6 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
         View targetRow = popoverView.findViewById(R.id.popoverTargetRow);
         TextView targetText = popoverView.findViewById(R.id.popoverTargetText);
         Button btnDelete = popoverView.findViewById(R.id.btnDeleteObstacle);
-        Button btnClose = popoverView.findViewById(R.id.btnClosePopover);
 
         title.setText(getString(R.string.obstacle_title, obstacle.id));
         faceBadge.setText("FACE: " + obstacle.face);
@@ -593,7 +620,6 @@ public class MainActivity extends Activity implements BluetoothLinkService.Liste
             arenaView.removeObstacle(obstacle.id);
             layer.dismiss();
         });
-        btnClose.setOnClickListener(v -> layer.dismiss());
 
         activeObstacleLayer = layer;
         layer.showAtCoordinates(arenaView, xPx, yPx, widthPx, heightPx);
