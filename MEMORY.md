@@ -52,6 +52,30 @@ Persistent notes about work done in this repo so later agents don't re-derive it
   and [migration/bench guide](docs/cmd-vel-migration.md). Older discrete-batch
   notes below are historical where they conflict with this section.
 
+## Closed-Loop Straight Heading Hold & Steering Trim (2026-09-21)
+
+- **Problem:** When running straight moves (e.g. `FC 200`), the robot accumulated a +10° rightward yaw drift over 200 cm.
+- **Root Causes:**
+  1. Open-loop straight driving in `motion_controller_node.py`: straight commands (`FC`, `BC`, `FU`, `BU`) and 180° turn runouts previously set `yaw_rate = 0.0`, leaving vehicle heading vulnerable to wheel slip, floor irregularities, and mechanical trim imbalance.
+  2. Steering servo center trim: `VELOCITY_SERVO_CENTER` in `stm32/include/velocity_control.h` was set to `146` (slight right bias; previously `144` had a ~3° left tilt; `145` is the true balanced mechanical center).
+- **Fixes Applied:**
+  1. **Closed-Loop Heading Hold in `motion_controller_node.py`:**
+     - Added dynamic parameters:
+       - `straight_heading_kp = 1.2` (range: `0.0`–`5.0`)
+       - `straight_heading_deadband_deg = 0.3` (deadband in degrees to avoid servo jitter on IMU noise; range: `0.0`–`5.0`)
+       - `straight_max_yaw_rps = 0.35` (maximum angular velocity cap for straight corrections; range: `0.05`–`1.0`)
+     - During straight moves and 180° turn runouts, the controller computes heading error relative to the initial move pose:
+       $e_\theta = \text{atan2}(\sin(\theta_{\text{target}} - \theta), \cos(\theta_{\text{target}} - \theta))$.
+     - If $|e_\theta| \ge \text{deadband}$, it computes corrective yaw rate:
+       $\omega = \text{clip}(K_p \cdot e_\theta, -\omega_{\max}, \omega_{\max})$
+       where $\omega_{\max} = \min(\text{straight\_max\_yaw}, |v| / R_{\min})$ to strictly respect the Ackermann curvature limit.
+     - Supports live tuning via `ros2 param set /motion_controller_node straight_heading_kp <val>`.
+  2. **Firmware Trim Adjustment in `stm32/include/velocity_control.h`:**
+     - Adjusted `VELOCITY_SERVO_CENTER` from `146` to `145` (dead center between 144 and 146).
+- **Testing & Verification:**
+  - Added unit test `test_straight_drive_corrects_heading_drift` in `ros2_ws/src/mdp_hardware_bridge/test/test_motion_controller.py` verifying both clockwise and counter-clockwise drift elicit opposing corrective yaw commands.
+  - All test suites (`test-algo`, `test-bridge`, `test-planner`) pass 100% (135/135 tests).
+
 ## Planner turning radius 28 cm -> 25 cm (2026-09-21)
 
 - **Why:** Team re-measured the physical full-lock radius on the arena surface as **25 cm** (down from the 2026-09-18 28 cm calibration).

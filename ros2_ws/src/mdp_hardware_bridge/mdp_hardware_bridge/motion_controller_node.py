@@ -49,7 +49,10 @@ class MotionControllerNode(Node):
                               ("front_stop_distance_m", 0.12),
                               ("ir_stop_distance_m", 0.10),
                               ("turn_180_runout_m", 0.02),
-                              ("turn_overshoot_deg", 2.2)):
+                              ("turn_overshoot_deg", 2.2),
+                              ("straight_heading_kp", 1.2),
+                              ("straight_heading_deadband_deg", 0.3),
+                              ("straight_max_yaw_rps", 0.35)):
             self.declare_parameter(name, default)
         self._speed = float(self.get_parameter("velocity_speed_mps").value)
         self._max_speed = float(self.get_parameter("velocity_max_speed_mps").value)
@@ -62,12 +65,18 @@ class MotionControllerNode(Node):
         self._ir_stop = float(self.get_parameter("ir_stop_distance_m").value)
         self._turn_180_runout = float(self.get_parameter("turn_180_runout_m").value)
         self._turn_overshoot_deg = float(self.get_parameter("turn_overshoot_deg").value)
+        self._straight_heading_kp = float(self.get_parameter("straight_heading_kp").value)
+        self._straight_deadband_deg = float(self.get_parameter("straight_heading_deadband_deg").value)
+        self._straight_max_yaw = float(self.get_parameter("straight_max_yaw_rps").value)
         if not (0 < self._speed <= self._max_speed <= 0.35 and self._radius >= 0.21
                 and 0 < self._max_yaw <= 1.75 and 0 < self._telemetry_timeout <= 0.4
                 and 0 < self._cmd_timeout <= 0.2 and self._batch_timeout_sec > 0
                 and self._front_stop >= 0.12 and self._ir_stop >= 0.10
                 and 0.0 <= self._turn_180_runout <= 0.20
-                and 0.0 <= self._turn_overshoot_deg <= 10.0):
+                and 0.0 <= self._turn_overshoot_deg <= 10.0
+                and 0.0 <= self._straight_heading_kp <= 5.0
+                and 0.0 <= self._straight_deadband_deg <= 5.0
+                and 0.05 <= self._straight_max_yaw <= 1.0):
             raise ValueError("Unsafe motion controller configuration")
         self.add_on_set_parameters_callback(self._on_set_parameters)
         self._control_lock = threading.RLock()
@@ -127,6 +136,18 @@ class MotionControllerNode(Node):
                     val = float(p.value)
                     if 0.0 < val <= self._max_speed:
                         self._speed = val
+                elif p.name == "straight_heading_kp":
+                    val = float(p.value)
+                    if 0.0 <= val <= 5.0:
+                        self._straight_heading_kp = val
+                elif p.name == "straight_heading_deadband_deg":
+                    val = float(p.value)
+                    if 0.0 <= val <= 5.0:
+                        self._straight_deadband_deg = val
+                elif p.name == "straight_max_yaw_rps":
+                    val = float(p.value)
+                    if 0.05 <= val <= 1.0:
+                        self._straight_max_yaw = val
         return SetParametersResult(successful=True)
 
     def _validate_command(self, mc: MoveCommand) -> None:
@@ -415,10 +436,19 @@ class MotionControllerNode(Node):
                     # Maintain turning cruise speed until within ~15 deg, then decelerate
                     # smoothly down to 0.10 m/s for a precise, cushioned stop without stalling.
                     speed = direction * min(self._speed, max(0.10, remaining * self._radius * 3.5))
+                    yaw_rate = turn_sign * abs(speed) / self._radius
                 else:
                     distance_left = remaining
                     speed = direction * min(self._speed, max(0.08, distance_left * 2.0))
-                yaw_rate = turn_sign * abs(speed) / self._radius if is_turn_curve else 0.0
+                    # Closed-loop heading hold for straight moves (FC/BC/FU/BU and turn runouts):
+                    target_heading = runout_start[2] if runout_active else start[2]
+                    heading_err = math.atan2(math.sin(target_heading - yaw), math.cos(target_heading - yaw))
+                    if abs(heading_err) >= math.radians(self._straight_deadband_deg):
+                        yaw_rate = self._straight_heading_kp * heading_err
+                        max_yaw = min(self._straight_max_yaw, abs(speed) / self._radius)
+                        yaw_rate = max(-max_yaw, min(max_yaw, yaw_rate))
+                    else:
+                        yaw_rate = 0.0
                 yaw_rate = max(-self._max_yaw, min(self._max_yaw, yaw_rate))
                 self._publish_velocity(speed, yaw_rate)
             time.sleep(0.05)

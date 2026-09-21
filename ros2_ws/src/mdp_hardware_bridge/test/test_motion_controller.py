@@ -62,6 +62,43 @@ class TestMotionController(unittest.TestCase):
             self.assertGreater(self.velocities()[0][0] * sign, 0)
             self.assertEqual(self.velocities()[-1], (0, 0))
 
+    def test_straight_drive_corrects_heading_drift(self):
+        # 1. Test drift to the right: yaw drops below start heading (clockwise) -> must steer left (yaw_rate > 0)
+        self.feedback(x=0.0, y=0.0, yaw=math.pi / 2)
+        self.node._velocity_pub.reset_mock()
+        steps_right = [
+            (0.05, math.pi / 2 - math.radians(4.0)),
+            (0.10, math.pi / 2 - math.radians(4.0)),
+        ]
+        def sim_drift_right(_):
+            y, yaw = steps_right.pop(0) if steps_right else (0.10, math.pi / 2 - math.radians(4.0))
+            self.feedback(x=0.0, y=y, yaw=yaw)
+
+        with patch("mdp_hardware_bridge.motion_controller_node.time.sleep", side_effect=sim_drift_right):
+            res = self.execute("FC", 10)
+            self.assertTrue(res.success)
+        vels = self.velocities()
+        self.assertGreater(len(vels), 2)
+        self.assertGreater(vels[1][1], 0.0, "Drift to right must produce positive yaw_rate to steer left")
+
+        # 2. Test drift to the left: yaw rises above start heading (counter-clockwise) -> must steer right (yaw_rate < 0)
+        self.feedback(x=0.0, y=0.0, yaw=math.pi / 2)
+        self.node._velocity_pub.reset_mock()
+        steps_left = [
+            (0.05, math.pi / 2 + math.radians(4.0)),
+            (0.10, math.pi / 2 + math.radians(4.0)),
+        ]
+        def sim_drift_left(_):
+            y, yaw = steps_left.pop(0) if steps_left else (0.10, math.pi / 2 + math.radians(4.0))
+            self.feedback(x=0.0, y=y, yaw=yaw)
+
+        with patch("mdp_hardware_bridge.motion_controller_node.time.sleep", side_effect=sim_drift_left):
+            res = self.execute("FC", 10)
+            self.assertTrue(res.success)
+        vels = self.velocities()
+        self.assertGreater(len(vels), 2)
+        self.assertLess(vels[1][1], 0.0, "Drift to left must produce negative yaw_rate to steer right")
+
     def test_all_turn_directions_use_measured_heading(self):
         for cmd, delta, sign in (("FL", 1, 1), ("FR", -1, 1),
                                  ("BL", -1, -1), ("BR", 1, -1)):
