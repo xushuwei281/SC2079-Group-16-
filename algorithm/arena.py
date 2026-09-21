@@ -21,7 +21,7 @@ ARENA_SIZE_CM = 200          # 2.0m x 2.0m
 START_ZONE_CM = 40           # 40cm x 40cm at the bottom-left corner
 ROBOT_W_CM = 19              # 19cm width (transverse)
 ROBOT_H_CM = 23              # 23cm length (longitudinal)
-TURNING_RADIUS_CM = 28.0     # measured 28.0cm physical full-lock turning radius (was 21.0, see MEMORY.md 2026-09-18)
+TURNING_RADIUS_CM = 25.0     # measured 25.0cm physical full-lock turning radius (was 28.0, see MEMORY.md 2026-09-21)
 OBSTACLE_SIZE_CM = 10        # 10cm x 10cm footprint
 IMAGE_RECOG_DIST_CM = 20     # ideal camera distance to an obstacle
 

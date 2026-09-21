@@ -52,6 +52,15 @@ Persistent notes about work done in this repo so later agents don't re-derive it
   and [migration/bench guide](docs/cmd-vel-migration.md). Older discrete-batch
   notes below are historical where they conflict with this section.
 
+## Planner turning radius 28 cm -> 25 cm (2026-09-21)
+
+- **Why:** Team re-measured the physical full-lock radius on the arena surface as **25 cm** (down from the 2026-09-18 28 cm calibration).
+- **Changed (planner prediction only, 3 values):**
+  - `algorithm/arena.py:24` `TURNING_RADIUS_CM` 28.0 -> 25.0
+  - `ros2_ws/src/mdp_bringup/mdp_bringup/planner_node.py:90` param `turning_radius_cm` 28.0 -> 25.0
+  - `ros2_ws/src/mdp_bringup/launch/robot.launch.py:91` launch arg `turning_radius_cm` "28.0" -> "25.0"
+- **Deliberately NOT changed:** `motion_controller_node`/`serial_bridge_node` `velocity_turn_radius_m` (0.21) and firmware `VELOCITY_MIN_RADIUS_MM` (210), where 21 cm represents the command scale for full servo lock.
+
 ## Planner turning radius 21 cm -> 28 cm (2026-09-18)
 
 - **Why:** Task 1 vantage poses were ~10 cm off (S-face obstacle: car ended too
