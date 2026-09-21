@@ -315,14 +315,8 @@ class ChecklistA5Node(Node):
                     self.get_logger().warn("Orbit macro execution was interrupted.")
                     break
 
-                # At the new face, verify distance and touch-up forward if needed
+                # Brief pause for chassis and camera to settle before inspecting adjacent face
                 time.sleep(0.2)
-                dist_cm = self.current_distance_cm
-                if dist_cm > (self._target_dist_cm + self._margin_cm + 3.0):
-                    self.get_logger().info(
-                        f"Post-orbit distance is {dist_cm:.1f} cm. Performing approach touch-up..."
-                    )
-                    self._approach_obstacle()
 
         if not target_found and self._is_running:
             self.get_logger().warn("============================================================")

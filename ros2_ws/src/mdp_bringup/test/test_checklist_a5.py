@@ -120,6 +120,23 @@ class TestChecklistA5Node(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(executed, DEFAULT_ORBIT_MACRO)
 
+    def test_loop_orbits_without_post_orbit_approach(self):
+        self.node._move_client.wait_for_service = MagicMock(return_value=True)
+        self.node._approach_obstacle = MagicMock(return_value=True)
+        self.node._execute_macro_sync = MagicMock(return_value=True)
+        # Face 1: no symbol (None), Face 2: symbol 15 found
+        self.node._sample_target = MagicMock(side_effect=[None, (15, "arrow_up", 0.95)])
+        self.node._us_range_m = 0.25
+
+        self.node._run_a5_loop()
+
+        # Approach obstacle called only once at the beginning (Phase 1)
+        self.assertEqual(self.node._approach_obstacle.call_count, 1)
+        # Executed orbit macro once to move from Face 1 to Face 2
+        self.assertEqual(self.node._execute_macro_sync.call_count, 1)
+        # Sampled Face 1 and Face 2
+        self.assertEqual(self.node._sample_target.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
