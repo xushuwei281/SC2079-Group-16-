@@ -32,8 +32,8 @@ class TestChecklistA5Node(unittest.TestCase):
         self.assertEqual(self.node._macro, DEFAULT_ORBIT_MACRO)
 
     def test_parse_macro_string(self):
-        res = parse_macro_string("BC:30,FR:90,FC:15,FL:180")
-        self.assertEqual(res, [("BC", 30), ("FR", 90), ("FC", 15), ("FL", 180)])
+        res = parse_macro_string("BC:30,FR:90,FC:18,FL:180")
+        self.assertEqual(res, [("BC", 30), ("FR", 90), ("FC", 18), ("FL", 180)])
 
     def test_ultrasonic_callback_updates_distance(self):
         msg = Range()

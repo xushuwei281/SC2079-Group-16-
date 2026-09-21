@@ -82,11 +82,11 @@ class MissionState(str, Enum):
 
 
 # Fixed calibrated relative macro to orbit around an obstacle to the adjacent right face:
-# [BC 30, FR 90, FC 15, FL 180]
+# [BC 30, FR 90, FC 18, FL 180]
 ORBIT_RIGHT_MACRO: List[Tuple[str, int]] = [
     ("BC", 30),
     ("FR", 90),
-    ("FC", 15),
+    ("FC", 18),
     ("FL", 180),
 ]
 
@@ -707,7 +707,7 @@ class PlannerNode(Node):
         """Algorithms Briefing §2.3: Orbit around obstacle to inspect adjacent right face.
 
         If a Bull's Eye marker is detected on the nominal face, executes the hardcoded
-        Orbit Right macro: [BC 30, FR 90, FC 15, FL 180] to transition directly to the
+        Orbit Right macro: [BC 30, FR 90, FC 18, FL 180] to transition directly to the
         adjacent right-hand face (clockwise relative to obstacle) and confirm the target symbol.
         """
         nominal_face = (leg.target_face or "N").upper()

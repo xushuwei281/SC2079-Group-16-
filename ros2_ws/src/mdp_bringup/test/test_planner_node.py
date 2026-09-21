@@ -193,7 +193,7 @@ class TestPlannerNode(unittest.TestCase):
         self.assertEqual(result[0], 15)
         self.assertEqual(result[1], "arrow_up")
         self.node._execute_commands_sync.assert_called_once_with(
-            [("BC", 30), ("FR", 90), ("FC", 15), ("FL", 180)], label="Orbit Right to W"
+            [("BC", 30), ("FR", 90), ("FC", 18), ("FL", 180)], label="Orbit Right to W"
         )
 
     def test_unconfirmed_target_does_not_get_fabricated_id(self):

@@ -6,7 +6,7 @@ Autonomous execution procedure for NTU SC2079 MDP Checklist Item A.5:
    until reaching a safe camera viewing distance (~25 cm).
 2. Attempts to sample and recognize the target image on the current obstacle face.
 3. If no target image is detected (or a Bull's Eye marker is detected), executes the calibrated
-   Orbit Right macro ([BC 30, FR 90, FC 15, FL 180]) to inspect adjacent faces until a valid
+   Orbit Right macro ([BC 30, FR 90, FC 18, FL 180]) to inspect adjacent faces until a valid
    target symbol (IDs 11-39) is identified.
 """
 
@@ -29,11 +29,11 @@ from rclpy.node import Node
 from sensor_msgs.msg import Range
 from std_msgs.msg import Empty, String
 
-# Default calibrated Orbit Right macro: [BC 30, FR 90, FC 15, FL 180]
+# Default calibrated Orbit Right macro: [BC 30, FR 90, FC 18, FL 180]
 DEFAULT_ORBIT_MACRO: List[Tuple[str, int]] = [
     ("BC", 30),
     ("FR", 90),
-    ("FC", 15),
+    ("FC", 18),
     ("FL", 180),
 ]
 
@@ -334,7 +334,7 @@ class ChecklistA5Node(Node):
 
 
 def parse_macro_string(macro_str: str) -> List[Tuple[str, int]]:
-    """Parse comma-separated macro string like 'BC:30,FR:90,FC:15,FL:180'."""
+    """Parse comma-separated macro string like 'BC:30,FR:90,FC:18,FL:180'."""
     items = []
     for token in macro_str.split(","):
         token = token.strip()
@@ -375,7 +375,7 @@ def main(args: Optional[List[str]] = None) -> None:
         "--macro",
         type=parse_macro_string,
         default=None,
-        help="Custom macro as 'CMD:VAL,CMD:VAL' (default: 'BC:30,FR:90,FC:15,FL:180')",
+        help="Custom macro as 'CMD:VAL,CMD:VAL' (default: 'BC:30,FR:90,FC:18,FL:180')",
     )
 
     parsed_args, ros_args = parser.parse_known_args(args=args or sys.argv[1:])
