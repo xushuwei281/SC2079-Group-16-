@@ -37,25 +37,25 @@ keeping a chat or Pi SSH terminal open is not part of its execution path.
 
 Dates are artifact dates; timestamps ending in `Z` are UTC.
 
-| Date | Action and reason | Recorded outcome |
-|---|---|---|
-| 8 September | Audit original source, label mapping and dataset before expensive training | Found class interpretation errors, duplicate leakage, conflicting polygons and unverified empty labels |
-| 8 September | Establish canonical class contract and diagnostic tests | Corrected official IDs; separated filled circle/Stop ID 40 from the marker |
-| 8 September | Quarantine problematic records for a short smoke run | 7,846 smoke image/label pairs; structural audit passed, session independence still unknown |
-| 8 September | Run two-epoch YOLOv8n smoke job | Initial submission failed before training; corrected submission completed in 229 running seconds |
-| 8–9 September | Train full nano baseline after explicit authorization to use the original split | Initial checkpoint guard failed; retry completed 129 epochs, selecting epoch 99 |
-| 9 September | Verify/export nano and stage a separate Pi candidate | Static FP32 ONNX contract and model identity recorded |
-| 9 September | Diagnose physical digit 1 failures | Original black-on-white frames failed; saved-image inversion identified a polarity mismatch |
-| 9 September | Repeat stationary camera checks with inversion | Digit 1 and F accepted; one background scene rejected |
-| 9 September | Add automatic live recognition | Three processed-frame confirmation, duplicate suppression, exact accepted-frame evidence and isolated output topic |
-| 9 September | Exercise live behavior on Pi | Saved-image replay passed seven checks; physical live F accepted automatically at about 1 FPS |
-| 11–14 September | Train full YOLOv8m baseline | 118 epochs, selected epoch 88; verified original nano backup before replacing the requested old output prefix |
-| 14 September | Benchmark medium on Pi and fix scheduling | Single inference worker avoids callback blocking/backlog; final saved-image ROS replay passed at about 0.20 FPS |
-| 14 September | Preserve medium runtime and validation artifacts | Configuration/model snapshot recorded; fresh physical medium camera test remained pending |
-| 17 September | Package medium ONNX with Git LFS | Historical model commit `841f090` retained exact model identity |
-| By 18 September | Build separate bullseye experiment and one-command launcher | Local image/simulation tests completed; final Pi installation and physical navigation unverified |
+| Action and reason | Recorded outcome |
+|---|---|
+| Audit original source, label mapping and dataset before expensive training | Found class interpretation errors, duplicate leakage, conflicting polygons and unverified empty labels |
+| Establish canonical class contract and diagnostic tests | Corrected official IDs; separated filled circle/Stop ID 40 from the marker |
+| Quarantine problematic records for a short smoke run | 7,846 smoke image/label pairs; structural audit passed, session independence still unknown |
+| Run two-epoch YOLOv8n smoke job | Initial submission failed before training; corrected submission completed in 229 running seconds |
+| Train full nano baseline after explicit authorization to use the original split | Initial checkpoint guard failed; retry completed 129 epochs, selecting epoch 99 |
+| Verify/export nano and stage a separate Pi candidate | Static FP32 ONNX contract and model identity recorded |
+| Diagnose physical digit 1 failures | Original black-on-white frames failed; saved-image inversion identified a polarity mismatch |
+| Repeat stationary camera checks with inversion | Digit 1 and F accepted; one background scene rejected |
+ Add automatic live recognition | Three processed-frame confirmation, duplicate suppression, exact accepted-frame evidence and isolated output topic |
+| Exercise live behavior on Pi | Saved-image replay passed seven checks; physical live F accepted automatically at about 1 FPS |
+| Train full YOLOv8m baseline | 118 epochs, selected epoch 88; verified original nano backup before replacing the requested old output prefix |
+| Benchmark medium on Pi and fix scheduling | Single inference worker avoids callback blocking/backlog; final saved-image ROS replay passed at about 0.20 FPS |
+| Preserve medium runtime and validation artifacts | Configuration/model snapshot recorded; fresh physical medium camera test remained pending |
+| Package medium ONNX with Git LFS | Historical model commit `841f090` retained exact model identity |
+| Build separate bullseye experiment and one-command launcher | Local image/simulation tests completed; final Pi installation and physical navigation unverified |
 | Later support work | Handle changed Pi endpoint, remote terminal and Codex sign-in | Access support did not establish restoration of the prior robot workspace |
-| 28 September | Reconcile report and original records | Separate physical evidence, replay evidence, simulation and proposed work |
+| Reconcile report and original records | Separate physical evidence, replay evidence, simulation and proposed work |
 
 The historical report inspected older development checkouts. It does not describe
 the latest integrated `main` branch as if no later changes occurred. In particular,
