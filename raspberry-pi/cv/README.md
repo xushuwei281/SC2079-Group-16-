@@ -1,5 +1,12 @@
 # CV pipeline — image recognition
 
+> **Workflow scope:** This page describes the original NSCC/NCNN/TensorRT track and its
+> originally quoted dataset export. For the separately executed Hugging Face ONNX
+> nano/medium baselines, the actual audited 8,082-pair snapshot, supporting scripts,
+> Pi test procedures and recorded results, use [docs/cv/README.md](../../docs/cv/README.md).
+> These are distinct workflow records. Do not apply the counts or deployment assumptions
+> below to the historical ONNX candidates without checking their manifests.
+
 Two inference targets, one training rig:
 
 - **Edge (Raspberry Pi)** — self-contained, no Wi-Fi dependency, slower. YOLOv8n, exported to

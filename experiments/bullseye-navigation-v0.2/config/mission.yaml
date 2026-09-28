@@ -1,0 +1,44 @@
+obstacle_id: 1
+# Use approach, then one_face for physical commissioning before full.
+mission_stage: full
+obstacle_size_m: 0.10
+mission_timeout_s: 180.0
+camera_calibration: camera_calibration.yaml
+vision:
+  reference: assets/bullseye-reference.png
+  image_topic: /camera/image_raw
+  max_fps: 8.0
+  max_frame_age_s: 0.5
+  acquisition_timeout_s: 30.0
+  lost_marker_timeout_s: 5.0
+  min_quality: 0.80
+recognition:
+  model: /home/mdp/mdp-cv/candidates/baseline-yolov8n-v61-full-20260908T142129Z-r2/best.onnx
+  sha256: 0207a7fb6ab117ce0a62fd683185da8d8ca065c92f1a0ee1d155e65f14e2c48a
+  threads: 2
+  confidence: 0.5
+  invert_colors: true
+  max_result_age_s: 8.0
+  face_timeout_s: 25.0
+motion:
+  # All verification flags default false; preview needs none of these.
+  cleared_area_verified: false
+  exclusive_control_confirmed: false
+  chassis_geometry_verified: false
+  # [xmin, ymin, xmax, ymax] metres in the actual /robot_pose/raw odometry frame.
+  bounds_m: null
+  other_obstacles: []
+  robot_width_m: 0.19
+  robot_length_m: 0.23
+  footprint_center_offset_m: [0.0, 0.0]
+  turning_radius_m: 0.21
+  clearance_m: 0.03
+  view_standoff_m: 0.30
+  max_controller_speed_mps: 0.10
+  allow_reverse: false
+  planning_timeout_s: 3.0
+  settle_s: 0.4
+  max_pose_age_s: 0.3
+  front_stop_m: 0.15
+  ir_stop_m: 0.12
+  result_topic: /bullseye/target

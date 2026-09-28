@@ -178,3 +178,12 @@ compile success.
 This refactor does not introduce `ros2_control`, `robot_localization`, or
 `twist_mux`. Continuous UART control now makes those possible future integrations,
 but this implementation uses a project-specific bridge and firmware controller.
+
+## Historical CV candidates and reproducibility
+
+The [CV workflow index](../docs/cv/README.md) describes the earlier nano/medium ONNX
+experiments, their scripts, model identities, Pi timings and field-evidence limits.
+The standalone packages in `deployment/cv-baselines` are kept outside this active
+ROS package tree. The archived bullseye v0.2 experiment is also separate from the
+current planner/checklist/orbit implementation. Adding these files changes no ROS
+interface, launch default, hardware ownership or active model selection.

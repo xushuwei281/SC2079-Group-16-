@@ -1,0 +1,16 @@
+# Never replace missing calibration with a guessed focal length.
+image_width: 640
+image_height: 480
+matrix: null
+distortion: [0, 0, 0, 0, 0]
+marker_size_m: 0.10
+max_range_m: 2.0
+max_reprojection_px: 2.0
+range_verified: false
+mount_verified: false
+# Measured rigid transform from OpenCV optical coordinates to robot base.
+# For an exactly level forward-facing camera, the ROTATION would be:
+# [0,0,1, -1,0,0, 0,-1,0]. Do not assume the physical mount is level.
+base_from_camera_rotation: null
+camera_origin_in_base_m: null
+marker_center_height_m: null

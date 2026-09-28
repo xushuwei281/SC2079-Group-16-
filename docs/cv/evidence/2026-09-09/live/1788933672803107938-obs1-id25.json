@@ -1,0 +1,15 @@
+{
+  "wall_time": 1788933672.802599,
+  "frame_sequence": 30,
+  "source_stamp_ns": 1788933671817317831,
+  "obstacle_id": 1,
+  "symbol_id": 25,
+  "confidence": 0.9240979552268982,
+  "confirmation_count": 3,
+  "published": "1,25",
+  "inference_ms": 937.8325380002934,
+  "frame_receipt_to_result_ms": 951.4084060001551,
+  "model_sha256": "0207a7fb6ab117ce0a62fd683185da8d8ca065c92f1a0ee1d155e65f14e2c48a",
+  "invert_colors": true,
+  "raw_frame": "1788933672803107938-obs1-id25-raw.png"
+}

@@ -1,0 +1,19 @@
+{
+  "case": "background-live-inverted",
+  "preprocessing": "invert",
+  "obstacle_id": 3,
+  "expected_id": null,
+  "camera_received_fps_estimate": 15.058916018997687,
+  "service_round_trip_ms": 1117.6817929999743,
+  "response": {
+    "success": false,
+    "symbol_id": 0,
+    "symbol_name": "UNCERTAIN",
+    "confidence": 0.0,
+    "is_marker": false
+  },
+  "target_messages": [],
+  "raw_frame": "background-live-inverted-raw.png",
+  "raw_frame_note": "A camera frame received immediately before requesting inference; not guaranteed to be the exact frame used by the service.",
+  "passed": true
+}

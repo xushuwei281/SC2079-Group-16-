@@ -1,0 +1,5 @@
+models/cv-baselines/nano/best.onnx filter=lfs diff=lfs merge=lfs -text
+models/cv-baselines/medium/best.onnx filter=lfs diff=lfs merge=lfs -text
+# Preserve the hashed historical detector files, including their original blank-line spacing.
+deployment/cv-baselines/runtime/nano/mdp_perception/detector.py whitespace=-blank-at-eol
+deployment/cv-baselines/runtime/medium/mdp_perception/detector.py whitespace=-blank-at-eol

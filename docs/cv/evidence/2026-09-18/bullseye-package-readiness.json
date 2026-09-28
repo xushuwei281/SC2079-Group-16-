@@ -1,0 +1,9 @@
+{
+  "archive": "${GUIDE_WORKSPACE}/BULLSEYE_NAVIGATION_v0.2.0.tar.gz",
+  "bytes": 50698,
+  "sha256": "60304179bd37ffc7ffa3e5124696b22a234a5b8752af8cc7ac28a25affbe7364",
+  "verified_source_files": 25,
+  "local_tests_passed": 29,
+  "pi_installation_verified": false,
+  "blocker": "New Tailscale mdp endpoint has a different SSH host key; fingerprint confirmation pending."
+}

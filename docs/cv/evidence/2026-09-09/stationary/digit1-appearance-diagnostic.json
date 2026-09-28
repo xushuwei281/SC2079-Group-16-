@@ -1,0 +1,15 @@
+{
+  "original": [],
+  "inverted_diagnostic": [
+    {
+      "label": "11",
+      "confidence": 0.9439873099327087
+    }
+  ],
+  "dataset_reference": [
+    {
+      "label": "11",
+      "confidence": 0.9384320974349976
+    }
+  ]
+}

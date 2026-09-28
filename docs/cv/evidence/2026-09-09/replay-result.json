@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "events": [
+    {
+      "message": "1,25",
+      "phase": "confirm_F",
+      "elapsed_seconds": 3.180414816000848
+    },
+    {
+      "message": "1,25",
+      "phase": "F_reappears",
+      "elapsed_seconds": 19.731540735000635
+    },
+    {
+      "message": "1,11",
+      "phase": "switch_to_digit1",
+      "elapsed_seconds": 23.859969213000113
+    },
+    {
+      "message": "2,11",
+      "phase": "change_obstacle",
+      "elapsed_seconds": 27.098178391000147
+    }
+  ],
+  "checks": [
+    "automatic publishing without sample service",
+    "three processed frame confirmation",
+    "held-symbol duplicate suppression",
+    "background rejection",
+    "rearm after absence",
+    "switch symbol",
+    "obstacle change resets confirmation"
+  ],
+  "input": "Previously captured Pi camera images replayed at 10 FPS; real ONNX inference on Pi"
+}

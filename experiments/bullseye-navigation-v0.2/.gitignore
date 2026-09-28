@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+reports/node.lock
+reports/events.jsonl
+reports/status.json
+reports/status.tmp
+reports/latest.jpg
+reports/calibration-frames/
+reports/task.lock
+reports/readiness.json
+reports/latest-session.txt
+reports/session-*/

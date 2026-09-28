@@ -1,0 +1,3 @@
+# Small CPU-only requirements; no ROS, GPU, PyTorch, or network required at runtime.
+PyYAML==6.0.3
+Pillow==12.3.0

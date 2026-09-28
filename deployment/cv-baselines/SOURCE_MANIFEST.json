@@ -1,0 +1,77 @@
+{
+  "purpose": "Exact historical runtime copies, independent of current ros2_ws source.",
+  "sources": {
+    "nano": "live-runtime/live-v1-20260909/package",
+    "medium": "live-runtime/medium-v1-final-20260914/package"
+  },
+  "files": [
+    {
+      "path": "runtime/medium/mdp_perception/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runtime/medium/mdp_perception/class_contract.py",
+      "sha256": "31624fa70e520527815884f33a5729ede39eb6c60a8a8da97b5c4fb4ef340486"
+    },
+    {
+      "path": "runtime/medium/mdp_perception/detector.py",
+      "sha256": "2576964b333f37e871a04b12cec54335b2e2d05edc34974e10e0b26f4756fb01"
+    },
+    {
+      "path": "runtime/medium/mdp_perception/live_confirmation.py",
+      "sha256": "213bf80256fa7fd895bd430f3043639b5e890b234221d1b2a4ab9b7e90045c92"
+    },
+    {
+      "path": "runtime/medium/mdp_perception/live_perception_node.py",
+      "sha256": "1443f695665e6cee14d5c1b3fe77e0bdde4f98a824165586caa6071f9362e47e"
+    },
+    {
+      "path": "runtime/medium/test/test_class_contract.py",
+      "sha256": "30854a0b72cfc2814f1620967f5cd9323810301211acad1c6a6ddd64ae7d4bef"
+    },
+    {
+      "path": "runtime/medium/test/test_detector_contract.py",
+      "sha256": "a1927b6a3b3b5449641669212db8a0cd6c0d8aa4bde60e79aaf54c31361de690"
+    },
+    {
+      "path": "runtime/medium/test/test_live_confirmation.py",
+      "sha256": "d052511f929ef676be7679dccc54bb79f79dbe175d2f4c2a2c70b81235c2c27e"
+    },
+    {
+      "path": "runtime/medium/test/test_live_worker.py",
+      "sha256": "da3794aa750021767fde637a551896bb07d41c3b8ab85c84a972ec68a0a75e8d"
+    },
+    {
+      "path": "runtime/nano/mdp_perception/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runtime/nano/mdp_perception/class_contract.py",
+      "sha256": "31624fa70e520527815884f33a5729ede39eb6c60a8a8da97b5c4fb4ef340486"
+    },
+    {
+      "path": "runtime/nano/mdp_perception/detector.py",
+      "sha256": "2576964b333f37e871a04b12cec54335b2e2d05edc34974e10e0b26f4756fb01"
+    },
+    {
+      "path": "runtime/nano/mdp_perception/live_confirmation.py",
+      "sha256": "213bf80256fa7fd895bd430f3043639b5e890b234221d1b2a4ab9b7e90045c92"
+    },
+    {
+      "path": "runtime/nano/mdp_perception/live_perception_node.py",
+      "sha256": "1851ebb83504da2a64efa55f3dd42dc6ef2c26cdd1ffa39f81e1ee65fa8620fb"
+    },
+    {
+      "path": "runtime/nano/test/test_class_contract.py",
+      "sha256": "30854a0b72cfc2814f1620967f5cd9323810301211acad1c6a6ddd64ae7d4bef"
+    },
+    {
+      "path": "runtime/nano/test/test_detector_contract.py",
+      "sha256": "a1927b6a3b3b5449641669212db8a0cd6c0d8aa4bde60e79aaf54c31361de690"
+    },
+    {
+      "path": "runtime/nano/test/test_live_confirmation.py",
+      "sha256": "d052511f929ef676be7679dccc54bb79f79dbe175d2f4c2a2c70b81235c2c27e"
+    }
+  ]
+}

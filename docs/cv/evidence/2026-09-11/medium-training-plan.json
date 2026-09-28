@@ -1,0 +1,10 @@
+{
+  "run_name": "baseline-yolov8m-v61-full-20260911T013018Z",
+  "flavor": "l4x1",
+  "epochs": 180,
+  "batch": 16,
+  "workers": 4,
+  "timeout": "24h",
+  "model": "yolov8m.pt",
+  "replace_after_validation": true
+}

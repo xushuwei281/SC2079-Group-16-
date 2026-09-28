@@ -1,0 +1,533 @@
+{
+  "host": "mdp",
+  "machine": "aarch64",
+  "input": "Saved Pi camera frames from September 9; not new physical observations",
+  "invert_colors": true,
+  "runs": [
+    {
+      "name": "baseline-yolov8n-v61-full-20260908T142129Z-r2",
+      "threads": 2,
+      "model_sha256": "0207a7fb6ab117ce0a62fd683185da8d8ca065c92f1a0ee1d155e65f14e2c48a",
+      "load_seconds": 1.0627601950000098,
+      "observations": [
+        {
+          "image": "digit1.png",
+          "repeat": 0,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9536584615707397,
+          "inference_ms": 861.7647599999145,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9536584615707397,
+              [
+                120,
+                102,
+                212,
+                301
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 0,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9240979552268982,
+          "inference_ms": 852.5631499999236,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9240979552268982,
+              [
+                126,
+                62,
+                287,
+                312
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 0,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 853.5099359999094,
+          "passed": true,
+          "detections": []
+        },
+        {
+          "image": "digit1.png",
+          "repeat": 1,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9536584615707397,
+          "inference_ms": 851.8738269999631,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9536584615707397,
+              [
+                120,
+                102,
+                212,
+                301
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 1,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9240979552268982,
+          "inference_ms": 849.6286690001398,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9240979552268982,
+              [
+                126,
+                62,
+                287,
+                312
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 1,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 856.4284199999292,
+          "passed": true,
+          "detections": []
+        },
+        {
+          "image": "digit1.png",
+          "repeat": 2,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9536584615707397,
+          "inference_ms": 849.0937139999915,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9536584615707397,
+              [
+                120,
+                102,
+                212,
+                301
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 2,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9240979552268982,
+          "inference_ms": 846.805852999978,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9240979552268982,
+              [
+                126,
+                62,
+                287,
+                312
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 2,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 848.5397770000418,
+          "passed": true,
+          "detections": []
+        }
+      ],
+      "median_ms": 851.8738269999631,
+      "min_ms": 846.805852999978,
+      "max_ms": 861.7647599999145,
+      "passed": true,
+      "process_peak_rss_native_units": 206180
+    },
+    {
+      "name": "baseline-yolov8m-v61-full-20260911T013018Z",
+      "threads": 2,
+      "model_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+      "load_seconds": 1.0602873979999003,
+      "observations": [
+        {
+          "image": "digit1.png",
+          "repeat": 0,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9560471773147583,
+          "inference_ms": 4878.548784000031,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9560471773147583,
+              [
+                121,
+                100,
+                213,
+                300
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 0,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9908500909805298,
+          "inference_ms": 4844.819117000043,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9908500909805298,
+              [
+                127,
+                63,
+                287,
+                314
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 0,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 5076.6250649999165,
+          "passed": true,
+          "detections": []
+        },
+        {
+          "image": "digit1.png",
+          "repeat": 1,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9560471773147583,
+          "inference_ms": 5551.647292000098,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9560471773147583,
+              [
+                121,
+                100,
+                213,
+                300
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 1,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9908500909805298,
+          "inference_ms": 4838.863991999915,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9908500909805298,
+              [
+                127,
+                63,
+                287,
+                314
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 1,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 4834.096507999902,
+          "passed": true,
+          "detections": []
+        },
+        {
+          "image": "digit1.png",
+          "repeat": 2,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9560471773147583,
+          "inference_ms": 4841.272007000043,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9560471773147583,
+              [
+                121,
+                100,
+                213,
+                300
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 2,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9908500909805298,
+          "inference_ms": 4843.538307000017,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9908500909805298,
+              [
+                127,
+                63,
+                287,
+                314
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 2,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 4837.205360000098,
+          "passed": true,
+          "detections": []
+        }
+      ],
+      "median_ms": 4843.538307000017,
+      "min_ms": 4834.096507999902,
+      "max_ms": 5551.647292000098,
+      "passed": true,
+      "process_peak_rss_native_units": 405464
+    },
+    {
+      "name": "baseline-yolov8m-v61-full-20260911T013018Z",
+      "threads": 4,
+      "model_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+      "load_seconds": 1.002392577999899,
+      "observations": [
+        {
+          "image": "digit1.png",
+          "repeat": 0,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9560471773147583,
+          "inference_ms": 3895.0296990001334,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9560471773147583,
+              [
+                121,
+                100,
+                213,
+                300
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 0,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9908500909805298,
+          "inference_ms": 3859.1106989999844,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9908500909805298,
+              [
+                127,
+                63,
+                287,
+                314
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 0,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 3766.1420590000034,
+          "passed": true,
+          "detections": []
+        },
+        {
+          "image": "digit1.png",
+          "repeat": 1,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9560471773147583,
+          "inference_ms": 3817.230036999945,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9560471773147583,
+              [
+                121,
+                100,
+                213,
+                300
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 1,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9908500909805298,
+          "inference_ms": 3758.237020000024,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9908500909805298,
+              [
+                127,
+                63,
+                287,
+                314
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 1,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 3624.735390000069,
+          "passed": true,
+          "detections": []
+        },
+        {
+          "image": "digit1.png",
+          "repeat": 2,
+          "expected": 11,
+          "actual": 11,
+          "confidence": 0.9560471773147583,
+          "inference_ms": 3827.846224000041,
+          "passed": true,
+          "detections": [
+            [
+              "11",
+              11,
+              0.9560471773147583,
+              [
+                121,
+                100,
+                213,
+                300
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "letter-f.png",
+          "repeat": 2,
+          "expected": 25,
+          "actual": 25,
+          "confidence": 0.9908500909805298,
+          "inference_ms": 3756.6515959999833,
+          "passed": true,
+          "detections": [
+            [
+              "25",
+              25,
+              0.9908500909805298,
+              [
+                127,
+                63,
+                287,
+                314
+              ]
+            ]
+          ]
+        },
+        {
+          "image": "background.png",
+          "repeat": 2,
+          "expected": null,
+          "actual": null,
+          "confidence": null,
+          "inference_ms": 3655.906881999954,
+          "passed": true,
+          "detections": []
+        }
+      ],
+      "median_ms": 3766.1420590000034,
+      "min_ms": 3624.735390000069,
+      "max_ms": 3895.0296990001334,
+      "passed": true,
+      "process_peak_rss_native_units": 407856
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "case": "letter-f-live-inverted",
+  "preprocessing": "invert",
+  "obstacle_id": 2,
+  "expected_id": 25,
+  "camera_received_fps_estimate": 15.469733633005339,
+  "service_round_trip_ms": 1180.4634240002088,
+  "response": {
+    "success": true,
+    "symbol_id": 25,
+    "symbol_name": "25",
+    "confidence": 0.9361312389373779,
+    "is_marker": false
+  },
+  "target_messages": [
+    {
+      "data": "2,25",
+      "received_monotonic": 4018.720424957
+    }
+  ],
+  "raw_frame": "letter-f-live-inverted-raw.png",
+  "raw_frame_note": "A camera frame received immediately before requesting inference; not guaranteed to be the exact frame used by the service.",
+  "passed": true
+}

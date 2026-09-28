@@ -1,0 +1,44 @@
+{
+  "nano": {
+    "model_repository_path": "models/cv-baselines/nano/best.onnx",
+    "model_sha256": "0207a7fb6ab117ce0a62fd683185da8d8ca065c92f1a0ee1d155e65f14e2c48a",
+    "model_bytes": 12288971,
+    "node_name": "perception_live_candidate",
+    "parameters": {
+      "camera_topic": "/camera/image_raw",
+      "conf_threshold": 0.5,
+      "confirmation_frames": 3,
+      "absence_reset_seconds": 2.0,
+      "max_frame_age_seconds": 1.0,
+      "invert_colors": true,
+      "obstacle_id": 1,
+      "inference_fps": 4.0,
+      "onnx_threads": 2,
+      "max_confirmation_gap_seconds": 3.0,
+      "max_result_age_seconds": 2.5,
+      "target_topic": "/test/android/target",
+      "annotated_topic": "/test/perception/image_annotated"
+    }
+  },
+  "medium": {
+    "model_repository_path": "models/cv-baselines/medium/best.onnx",
+    "model_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+    "model_bytes": 103694827,
+    "node_name": "perception_medium_candidate",
+    "parameters": {
+      "camera_topic": "/camera/image_raw",
+      "conf_threshold": 0.5,
+      "confirmation_frames": 3,
+      "absence_reset_seconds": 2.0,
+      "max_frame_age_seconds": 1.0,
+      "invert_colors": true,
+      "obstacle_id": 1,
+      "inference_fps": 1.0,
+      "onnx_threads": 4,
+      "max_confirmation_gap_seconds": 8.0,
+      "max_result_age_seconds": 8.0,
+      "target_topic": "/test/medium/android/target",
+      "annotated_topic": "/test/medium/perception/image_annotated"
+    }
+  }
+}
