@@ -18,6 +18,18 @@ PC-side algorithm module handles pathfinding and simulation.
 
 Each component folder has its own README with setup/build instructions.
 
+## CV training, deployment and work evidence
+
+Start with the [complete CV documentation index](docs/cv/README.md) for the documented
+Hugging Face nano/medium baselines, dataset audit, training/export tools, verified ONNX
+files, Raspberry Pi testing and evidence of completed work. Each tool family includes
+usage, dependencies, inputs, outputs and validation limits.
+
+The exact models are available through [Git LFS](models/cv-baselines/README.md).
+Historical live-test runtimes and the bullseye experiment are kept separate from the
+current robot stack. The recorded physical nano tests and medium saved-image replay
+are distinguished from unverified full-field or moving-robot performance.
+
 `ros2_ws/` sits at the top level rather than under `raspberry-pi/` because
 its ROS 2 graph is split across two hosts — hardware-bound nodes on the Pi,
 perception and planning on a laptop. It is one source tree with two pixi

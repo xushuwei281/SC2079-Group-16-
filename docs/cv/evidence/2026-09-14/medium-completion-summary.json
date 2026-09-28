@@ -1,0 +1,86 @@
+{
+  "job_id": "6aa3621921047bf1b03747ec",
+  "name": "baseline-yolov8m-v61-full-20260911T013018Z",
+  "status": "COMPLETED",
+  "completed_epochs": 118,
+  "best_epoch": 88,
+  "running_seconds": 16835,
+  "estimated_compute_usd_at_submission_rate": 3.74,
+  "cloud_replacement_verified": true,
+  "cloud_files": 73,
+  "local_files_downloaded": 61,
+  "periodic_checkpoints_retained_on_hf": 12,
+  "metrics": {
+    "val": {
+      "metrics/precision(B)": 0.9888787428505083,
+      "metrics/recall(B)": 0.9899577916297666,
+      "metrics/mAP50(B)": 0.9923262694399492,
+      "metrics/mAP50-95(B)": 0.9841807317952687,
+      "fitness": 0.9841807317952687
+    },
+    "test": {
+      "metrics/precision(B)": 0.9881386306613349,
+      "metrics/recall(B)": 0.9909494072800781,
+      "metrics/mAP50(B)": 0.9935451819685691,
+      "metrics/mAP50-95(B)": 0.9859338593753918,
+      "fitness": 0.9859338593753918
+    }
+  },
+  "onnx_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+  "pi_transfer_verified": true,
+  "pi_path": "${PI_HOME}/mdp-cv/candidates/baseline-yolov8m-v61-full-20260911T013018Z/best.onnx",
+  "pi_benchmark": [
+    {
+      "name": "baseline-yolov8n-v61-full-20260908T142129Z-r2",
+      "threads": 2,
+      "model_sha256": "0207a7fb6ab117ce0a62fd683185da8d8ca065c92f1a0ee1d155e65f14e2c48a",
+      "load_seconds": 1.0627601950000098,
+      "median_ms": 851.8738269999631,
+      "min_ms": 846.805852999978,
+      "max_ms": 861.7647599999145,
+      "passed": true,
+      "process_peak_rss_native_units": 206180
+    },
+    {
+      "name": "baseline-yolov8m-v61-full-20260911T013018Z",
+      "threads": 2,
+      "model_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+      "load_seconds": 1.0602873979999003,
+      "median_ms": 4843.538307000017,
+      "min_ms": 4834.096507999902,
+      "max_ms": 5551.647292000098,
+      "passed": true,
+      "process_peak_rss_native_units": 405464
+    },
+    {
+      "name": "baseline-yolov8m-v61-full-20260911T013018Z",
+      "threads": 4,
+      "model_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+      "load_seconds": 1.002392577999899,
+      "median_ms": 3766.1420590000034,
+      "min_ms": 3624.735390000069,
+      "max_ms": 3895.0296990001334,
+      "passed": true,
+      "process_peak_rss_native_units": 407856
+    }
+  ],
+  "physical_camera_test": "Pending fresh setup confirmation",
+  "deployment_recommendation": "Retain nano for responsive live use; medium is a separate stationary candidate",
+  "limitations": [
+    "Original v61 split retained for comparison; 25 exact-duplicate cross-split groups were found.",
+    "Conflicting annotations and unverified empty labels remain; original/session provenance unavailable.",
+    "Validation and test metrics are diagnostic, not an independent clean holdout estimate.",
+    "Printed Pi cards are black-on-white; nano testing used frame inversion. Medium requires separate physical and latency testing."
+  ],
+  "replay_passed": true,
+  "replay_first_accept_seconds": 16.654588805000003,
+  "replay_inference_ms": {
+    "median": 4377.771424999992,
+    "min": 4168.231469000148,
+    "max": 5328.964976999941
+  },
+  "replay_observed_fps": 0.19854586346847644,
+  "worker_concurrency_test_passed": true,
+  "local_contract_loader_confirmation_tests_passed": 29,
+  "medium_node_state": "Not running; physical profile staged. Pi rebooted after successful replay."
+}

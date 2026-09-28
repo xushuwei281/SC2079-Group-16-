@@ -1,0 +1,18 @@
+{
+  "case": "digit1",
+  "obstacle_id": 1,
+  "expected_id": 11,
+  "camera_received_fps_estimate": 15.016972971247066,
+  "service_round_trip_ms": 892.611565000152,
+  "response": {
+    "success": false,
+    "symbol_id": 0,
+    "symbol_name": "UNCERTAIN",
+    "confidence": 0.0,
+    "is_marker": false
+  },
+  "target_messages": [],
+  "raw_frame": "digit1-raw.png",
+  "raw_frame_note": "A camera frame received immediately before requesting inference; not guaranteed to be the exact frame used by the service.",
+  "passed": false
+}

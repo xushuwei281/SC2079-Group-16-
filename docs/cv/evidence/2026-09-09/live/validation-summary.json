@@ -1,0 +1,40 @@
+{
+  "status": "live candidate running",
+  "unit_tests_passed": 29,
+  "fixture_replay_passed": true,
+  "node": "/perception_live_candidate",
+  "input": "/camera/image_raw",
+  "output": "/test/android/target",
+  "invert_colors": true,
+  "requested_fps_limit": 4.0,
+  "measured_recent_fps": 1.0411508531817664,
+  "median_recent_inference_ms": 913.7383244997181,
+  "processed_frames": 142,
+  "accepted_events": [
+    {
+      "wall_time": 1788933672.802599,
+      "frame_sequence": 30,
+      "source_stamp_ns": 1788933671817317831,
+      "obstacle_id": 1,
+      "symbol_id": 25,
+      "confidence": 0.9240979552268982,
+      "confirmation_count": 3,
+      "published": "1,25",
+      "inference_ms": 937.8325380002934,
+      "frame_receipt_to_result_ms": 951.4084060001551
+    }
+  ],
+  "last_observation": {
+    "wall_time": 1788933804.0570488,
+    "frame_sequence": 1984,
+    "source_stamp_ns": 1788933803084588401,
+    "obstacle_id": 1,
+    "symbol_id": 25,
+    "confidence": 0.9362801313400269,
+    "confirmation_count": 142,
+    "published": null,
+    "inference_ms": 904.2308349999075,
+    "frame_receipt_to_result_ms": 941.4982559992495
+  },
+  "mission_release_ready": false
+}

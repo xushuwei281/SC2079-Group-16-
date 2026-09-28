@@ -1,0 +1,19 @@
+{
+  "model_path": "${PI_HOME}/mdp-cv/candidates/baseline-yolov8n-v61-full-20260908T142129Z-r2/best.onnx",
+  "output_dir": "${PI_HOME}/mdp-cv/reports/live-v1-20260909",
+  "camera_topic": "/camera/image_raw",
+  "target_topic": "/test/android/target",
+  "annotated_topic": "/test/perception/image_annotated",
+  "conf_threshold": 0.5,
+  "inference_fps": 4.0,
+  "confirmation_frames": 3,
+  "absence_reset_seconds": 2.0,
+  "max_confirmation_gap_seconds": 3.0,
+  "max_frame_age_seconds": 1.0,
+  "max_result_age_seconds": 2.5,
+  "invert_colors": true,
+  "onnx_threads": 2,
+  "initial_obstacle_id": 1,
+  "model_sha256": "0207a7fb6ab117ce0a62fd683185da8d8ca065c92f1a0ee1d155e65f14e2c48a",
+  "note": "Stationary test candidate; no mission-ready claim. Frame age uses receipt and ROS publication timestamps."
+}

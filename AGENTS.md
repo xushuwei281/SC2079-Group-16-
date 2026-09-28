@@ -437,3 +437,14 @@ The current checklist audit is maintained in [`docs/checklist-compliance-audit.m
 | ROS 2 topic discovery fails between Pi and PC | Domain mismatch or Zenoh router inactive. | Confirm both machines set `ROS_DOMAIN_ID=16` and Zenoh is running (`pixi run -e pi zenoh`). |
 | Ultrasonic reads constant 19 cm floor | FreeRTOS task preemption during echo pulse timing. | Ensure `TIM6` hardware timer is used with `vTaskSuspendAll()` during echo measurement. |
 | E-STOP immediately returns after RESET and joystick input | A pre-migration Pi build is still running, or fresh `TLM` has not arrived. | Rebuild/restart the stack; current controllers hold zero while awaiting the first post-reset telemetry frame. |
+
+## CV workflow documentation and historical reproduction (28 September 2026)
+
+The [CV index](docs/cv/README.md) documents the executed nano/medium training and Pi
+tests with supporting tools, Git LFS models and evidence. Files under
+`deployment/cv-baselines` and `experiments/bullseye-navigation-v0.2` preserve separate
+historical candidates; they are not selected by current robot launch files. Do not
+copy them over the current perception or motion stack. Consult
+[the compatibility/status record](docs/cv/bullseye-status.md) before interpreting
+older marker/ID-40 descriptions or historical turning-radius values as current.
+New physical tests must be recorded separately from the retained September evidence.

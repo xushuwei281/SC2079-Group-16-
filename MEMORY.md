@@ -486,3 +486,13 @@ drift apart.
 - Discretisation: waypoints are `(kind, param, radius)` primitives; the STM32
   protocol wants `FC<dist>` / `FL<deg>` / etc. — a converter from waypoints
   to the 5-byte UART packets is needed (see `docs/stm32-uart-protocol-spec.md`).
+
+## 2026-09-28 — CV documentation, scripts and experiment evidence
+
+Added a portable [CV documentation set](docs/cv/README.md), audited training/export
+tools, isolated historical Pi runtime bundles, exact nano/medium ONNX files through
+Git LFS, and the separate historical bullseye v0.2 sources. The physical nano
+examples, medium saved-image replay and local navigation simulation are labelled
+separately. Existing robot runtime, model defaults, firmware and calibrations are
+unchanged. No new physical outcome is claimed. Validation and platform limitations
+are recorded in [docs/cv/validation.md](docs/cv/validation.md).

@@ -1,0 +1,10 @@
+{
+  "status": "complete",
+  "run_name": "baseline-yolov8m-v61-full-20260911T013018Z",
+  "job_id": "6aa3621921047bf1b03747ec",
+  "verified_file_count": 72,
+  "best_sha256": "32224e5c6bf789784be1b8d34c7be6b84698d945c6b2f0d73d604218b290d08e",
+  "onnx_sha256": "37329aa47f45f324e97945a8e85dea23b59e41c29ab1594aec894daf62aef031",
+  "backup_prefix": "archives/baseline-yolov8n-v61-full-20260908T142129Z-r2-4506d3d3-before-medium-20260911T013018Z",
+  "completed_at_unix": 1789109210.27867
+}

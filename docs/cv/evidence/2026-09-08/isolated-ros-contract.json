@@ -1,0 +1,42 @@
+{
+  "domain": "116",
+  "middleware": "rmw_fastrtps_cpp",
+  "scope": "Local synthetic publication test after scene settling; not a mission test",
+  "cases": [
+    {
+      "case": "marker",
+      "expected": null,
+      "observed": [],
+      "annotated_frames": 12,
+      "pass": true
+    },
+    {
+      "case": "target_11_obs_1",
+      "expected": "1,11",
+      "observed": [
+        "1,11",
+        "1,11"
+      ],
+      "annotated_frames": 11,
+      "pass": true
+    },
+    {
+      "case": "target_39_obs_2",
+      "expected": "2,39",
+      "observed": [
+        "2,39",
+        "2,39"
+      ],
+      "annotated_frames": 11,
+      "pass": true
+    },
+    {
+      "case": "synthetic_blank",
+      "expected": null,
+      "observed": [],
+      "annotated_frames": 12,
+      "pass": true
+    }
+  ],
+  "pass": true
+}
